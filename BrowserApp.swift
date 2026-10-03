@@ -1099,6 +1099,7 @@ private final class TabRow: NSView {
         scroll.borderType = .noBorder
         widgetCanvas = WidgetCanvas(frame: NSRect(x: 0, y: 0, width: 900, height: 680))
         widgetCanvas.activate = { [weak self] kind in self?.activateWidget(kind) }
+        widgetCanvas.submitCodex = { [weak self] prompt in self?.launchCodexWidget(prompt: prompt) }
         widgetCanvas.add = { [weak self] in self?.showAddWidget() }
         scroll.documentView = widgetCanvas
         homeView.addSubview(scroll)
@@ -1192,9 +1193,6 @@ private final class TabRow: NSView {
             let note = UserDefaults.standard.string(forKey: "webbyNote.\(profile.uuidString)") ?? ""
             widgetCanvas.set(.note, subtitle: "Saved in this profile", lines: note.isEmpty ? ["Click Open to write a note"] : [note])
         }
-        if widgetCanvas.has(.codex) {
-            widgetCanvas.set(.codex, subtitle: "Webby terminal", lines: ["Click Open to run Codex", "Your existing Codex login is used"])
-        }
         if widgetCanvas.has(.weather) {
             let city = UserDefaults.standard.string(forKey: "webbyWeatherCity.\(profile.uuidString)") ?? "San Francisco"
             widgetCanvas.set(.weather, subtitle: city, lines: ["Loading forecast…"], busy: true)
@@ -1202,7 +1200,7 @@ private final class TabRow: NSView {
                 do {
                     let feed = try await WidgetFeeds.weather(city: city)
                     guard let self, self.activeSpace.saved.id == profile else { return }
-                    self.widgetCanvas.set(.weather, subtitle: feed.subtitle, lines: feed.lines)
+                    if let snapshot = feed.weather { self.widgetCanvas.setWeather(snapshot) }
                 } catch {
                     guard let self, self.activeSpace.saved.id == profile else { return }
                     self.widgetCanvas.set(.weather, subtitle: city, lines: [error.localizedDescription])
@@ -1216,7 +1214,7 @@ private final class TabRow: NSView {
                 do {
                     let feed = try await WidgetFeeds.stock(symbol: symbol)
                     guard let self, self.activeSpace.saved.id == profile else { return }
-                    self.widgetCanvas.set(.stocks, subtitle: feed.subtitle, lines: feed.lines, chart: feed.chart)
+                    if let snapshot = feed.stock { self.widgetCanvas.setStock(snapshot) }
                 } catch {
                     guard let self, self.activeSpace.saved.id == profile else { return }
                     self.widgetCanvas.set(.stocks, subtitle: symbol, lines: [error.localizedDescription])
@@ -1248,14 +1246,17 @@ private final class TabRow: NSView {
                 refreshLocalWidgets(profile: activeSpace.saved.id)
             }
         case .codex:
-            guard let prompt = widgetTextPrompt(title: "Ask Codex in a terminal", value: "") else { return }
-            addTab(select: true)
-            guard let tab = activeTab else { return }
-            let quoted = "'" + prompt.replacingOccurrences(of: "'", with: "'\\''") + "'"
-            terminalCommandOnOpen[tab.id] = prompt.isEmpty ? "codex" : "codex \(quoted)"
-            toggleTerminal()
+            launchCodexWidget(prompt: "")
         default: break
         }
+    }
+
+    private func launchCodexWidget(prompt: String) {
+        addTab(select: true)
+        guard let tab = activeTab else { return }
+        let quoted = "'" + prompt.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        terminalCommandOnOpen[tab.id] = prompt.isEmpty ? "codex" : "codex \(quoted)"
+        toggleTerminal()
     }
 
     private func widgetTextPrompt(title: String, value: String) -> String? {
@@ -1288,7 +1289,7 @@ private final class TabRow: NSView {
     }
 
     private func showAddWidget() {
-        let missing = WebbyWidget.allCases.filter { !widgetCanvas.has($0) }
+        let missing = WebbyWidget.allCases.filter { $0.googleService == nil && !widgetCanvas.has($0) }
         guard !missing.isEmpty else { return }
         let alert = NSAlert()
         alert.messageText = "Add a widget"

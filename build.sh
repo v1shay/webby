@@ -26,6 +26,8 @@ cp "$script_dir/VideoControls.js" "$app/Contents/Resources/VideoControls.js"
 cp "$script_dir/LinkPreview.js" "$app/Contents/Resources/LinkPreview.js"
 cp "$script_dir/glass-page.js" "$app/Contents/Resources/glass-page.js"
 cp "$script_dir/SkyBackground.png" "$app/Contents/Resources/SkyBackground.png"
+cp "$script_dir/CodexWhiteIcon.svg" "$app/Contents/Resources/CodexWhiteIcon.svg"
+cp "$script_dir/CodexWhiteIcon.png" "$app/Contents/Resources/CodexWhiteIcon.png"
 cp "$script_dir/Pets/"*.png "$app/Contents/Resources/Pets/"
 cp -R "$script_dir/PetsWorking/." "$app/Contents/Resources/PetsWorking/"
 
@@ -72,8 +74,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>Webby</string>
   <key>CFBundleIconFile</key><string>Webby</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>54</string>
-  <key>CFBundleShortVersionString</key><string>3.8.0</string>
+  <key>CFBundleVersion</key><string>56</string>
+  <key>CFBundleShortVersionString</key><string>3.8.2</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

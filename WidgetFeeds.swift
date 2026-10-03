@@ -4,6 +4,47 @@ struct WidgetFeed {
     let subtitle: String
     let lines: [String]
     var chart: [Double] = []
+    var weather: WeatherSnapshot? = nil
+    var stock: StockSnapshot? = nil
+}
+
+struct WeatherHour {
+    let label: String
+    let temperature: Int
+    let code: Int
+}
+
+struct WeatherSnapshot {
+    let city: String
+    let temperature: Int
+    let high: Int?
+    let low: Int?
+    let humidity: Int?
+    let code: Int
+    let isDay: Bool
+    let hours: [WeatherHour]
+
+    var condition: String {
+        switch code {
+        case 0: "Clear"
+        case 1, 2: "Partly cloudy"
+        case 3: "Cloudy"
+        case 45, 48: "Foggy"
+        case 51...57: "Drizzle"
+        case 61...67, 80...82: "Rainy"
+        case 71...77, 85, 86: "Snowy"
+        case 95...99: "Thunderstorms"
+        default: "Current weather"
+        }
+    }
+}
+
+struct StockSnapshot {
+    let symbol: String
+    let price: String
+    let changePercent: Double
+    let asOf: String
+    let chart: [Double]
 }
 
 enum WidgetFeedError: LocalizedError {
@@ -32,7 +73,9 @@ enum WidgetFeeds {
         query.queryItems = [
             URLQueryItem(name: "latitude", value: String(latitude)),
             URLQueryItem(name: "longitude", value: String(longitude)),
-            URLQueryItem(name: "current", value: "temperature_2m,relative_humidity_2m,weather_code"),
+            URLQueryItem(name: "current", value: "temperature_2m,relative_humidity_2m,weather_code,is_day"),
+            URLQueryItem(name: "hourly", value: "temperature_2m,weather_code"),
+            URLQueryItem(name: "forecast_hours", value: "6"),
             URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min"),
             URLQueryItem(name: "temperature_unit", value: "fahrenheit"),
             URLQueryItem(name: "timezone", value: "auto")
@@ -45,10 +88,26 @@ enum WidgetFeeds {
         let highs = daily["temperature_2m_max"] as? [Double] ?? []
         let lows = daily["temperature_2m_min"] as? [Double] ?? []
         let name = place["name"] as? String ?? city
+        let hourly = forecast["hourly"] as? [String: Any] ?? [:]
+        let times = hourly["time"] as? [String] ?? []
+        let temperatures = hourly["temperature_2m"] as? [Double] ?? []
+        let codes = hourly["weather_code"] as? [Int] ?? []
+        let hours = (0..<min(5, times.count, temperatures.count, codes.count)).map { index in
+            let hour = Int(times[index].suffix(5).prefix(2)) ?? 0
+            let clock = hour == 0 ? "12a" : hour < 12 ? "\(hour)a" : hour == 12 ? "12p" : "\(hour - 12)p"
+            return WeatherHour(label: index == 0 ? "Now" : clock,
+                               temperature: Int(temperatures[index].rounded()), code: codes[index])
+        }
         return WidgetFeed(subtitle: name,
                           lines: [temperature.map { "Now  \(Int($0.rounded()))°F" } ?? "Current temperature unavailable",
                                   highs.first.map { "Today  H: \(Int($0.rounded()))°  L: \(Int((lows.first ?? 0).rounded()))°" } ?? "",
-                                  humidity.map { "Humidity  \($0)%" } ?? ""].filter { !$0.isEmpty })
+                                  humidity.map { "Humidity  \($0)%" } ?? ""].filter { !$0.isEmpty },
+                          weather: WeatherSnapshot(city: name, temperature: Int((temperature ?? 0).rounded()),
+                                                   high: highs.first.map { Int($0.rounded()) },
+                                                   low: lows.first.map { Int($0.rounded()) },
+                                                   humidity: humidity, code: current["weather_code"] as? Int ?? 0,
+                                                   isDay: (current["is_day"] as? Int ?? 1) == 1,
+                                                   hours: hours))
     }
 
     static func stock(symbol: String) async throws -> WidgetFeed {
@@ -63,8 +122,13 @@ enum WidgetFeeds {
         let samples = (data["chart"] as? [[String: Any]] ?? []).compactMap { $0["y"] as? Double }
         let strideSize = max(1, samples.count / 80)
         let reduced = Swift.stride(from: 0, to: samples.count, by: strideSize).map { samples[$0] }
+        let parsedChange = Double(change.replacingOccurrences(of: "%", with: "")
+                                        .replacingOccurrences(of: "+", with: "")
+                                        .replacingOccurrences(of: ",", with: "")) ?? 0
         return WidgetFeed(subtitle: "\(safe) · \(asOf)",
-                          lines: ["\(price)  \(change)", "Quote from Nasdaq · may be delayed"], chart: reduced)
+                          lines: ["\(price)  \(change)", "Quote from Nasdaq · may be delayed"], chart: reduced,
+                          stock: StockSnapshot(symbol: safe, price: price,
+                                               changePercent: parsedChange, asOf: asOf, chart: reduced))
     }
 
     private static func json(_ url: URL, browserHeader: Bool = false) async throws -> [String: Any] {
