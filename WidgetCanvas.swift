@@ -12,6 +12,7 @@ import AppKit
 
 enum WebbyWidget: String, CaseIterable, Codable {
     case calendar, gmail, drive, weather, stocks, codex, note
+    case music, systemMonitor, downloads, clipboard, calculator, battery
 
     var title: String {
         switch self {
@@ -22,6 +23,12 @@ enum WebbyWidget: String, CaseIterable, Codable {
         case .stocks: "Stocks"
         case .codex: "Codex"
         case .note: "Quick Note"
+        case .music: "Music"
+        case .systemMonitor: "System Monitor"
+        case .downloads: "Downloads"
+        case .clipboard: "Clipboard"
+        case .calculator: "Calculator"
+        case .battery: "Battery"
         }
     }
 
@@ -34,6 +41,12 @@ enum WebbyWidget: String, CaseIterable, Codable {
         case .stocks: "chart.line.uptrend.xyaxis"
         case .codex: "chevron.left.forwardslash.chevron.right"
         case .note: "square.and.pencil"
+        case .music: "music.note"
+        case .systemMonitor: "waveform.path.ecg"
+        case .downloads: "arrow.down.to.line.compact"
+        case .clipboard: "clipboard"
+        case .calculator: "function"
+        case .battery: "battery.100percent"
         }
     }
 
@@ -60,6 +73,8 @@ private struct WidgetPlacement: Codable {
     var activate: ((WebbyWidget) -> Void)?
     var remove: ((WebbyWidget) -> Void)?
     var submitCodex: ((String) -> Void)?
+    var calculatorCalculated: ((String) -> Void)?
+    var musicCommand: ((MusicCommand) -> Void)?
     private var profile = UUID()
     private var placements: [WidgetPlacement] = []
     private var cards: [WebbyWidget: GlassWidgetCard] = [:]
@@ -107,16 +122,44 @@ private struct WidgetPlacement: Codable {
 
     func addWidget(_ kind: WebbyWidget) {
         guard !has(kind) else { return }
-        let next = CGFloat(placements.count)
-        placements.append(WidgetPlacement(kind: kind, x: 12 + (next.truncatingRemainder(dividingBy: 3)) * 28,
-                                          y: 50 + next * 28, width: 260, height: 190))
+        let width: CGFloat = 260
+        let height: CGFloat = 190
+        let maxX = max(12, bounds.width - horizontalInset - width - 12)
+        let maxY = max(12, bounds.height - height - 12)
+        var chosen = NSPoint(x: 12, y: 12)
+        var found = false
+        var y: CGFloat = 12
+        while y <= maxY && !found {
+            var x: CGFloat = 12
+            while x <= maxX {
+                let candidate = NSRect(x: x + horizontalInset, y: y, width: width, height: height)
+                if !placements.contains(where: { candidate.intersects(reachableFrame(for: $0).insetBy(dx: -8, dy: -8)) }) {
+                    chosen = NSPoint(x: x, y: y); found = true; break
+                }
+                x += 24
+            }
+            y += 24
+        }
+        placements.append(WidgetPlacement(kind: kind, x: chosen.x, y: chosen.y, width: width, height: height))
         save()
         rebuild()
     }
 
     func resetPositions() {
-        let standard = Dictionary(uniqueKeysWithValues: Self.defaults().map { ($0.kind, $0) })
-        placements = placements.map { standard[$0.kind] ?? $0 }
+        let count = placements.count
+        guard count > 0 else { return }
+        let columns = min(count, max(1, Int(ceil(sqrt(Double(count) * Double(max(1, bounds.width)) / Double(max(1, bounds.height)))))))
+        let rows = Int(ceil(Double(count) / Double(columns)))
+        let cellWidth = max(72, (bounds.width - 24) / CGFloat(columns))
+        let cellHeight = max(72, (bounds.height - 24) / CGFloat(rows))
+        for index in placements.indices {
+            let column = index % columns
+            let row = index / columns
+            placements[index].width = min(placements[index].width, cellWidth - 12)
+            placements[index].height = min(placements[index].height, cellHeight - 12)
+            placements[index].x = 12 + CGFloat(column) * cellWidth - horizontalInset
+            placements[index].y = 12 + CGFloat(row) * cellHeight
+        }
         save()
         rebuild()
         enclosingScrollView?.contentView.scroll(to: .zero)
@@ -136,6 +179,9 @@ private struct WidgetPlacement: Codable {
 
     func setWeather(_ snapshot: WeatherSnapshot) { cards[.weather]?.setWeather(snapshot) }
     func setStock(_ snapshot: StockSnapshot) { cards[.stocks]?.setStock(snapshot) }
+    func setMusic(_ snapshot: SpotifySnapshot?) { cards[.music]?.setMusic(snapshot) }
+    func setBattery(_ snapshot: BatterySnapshot) { cards[.battery]?.setBattery(snapshot) }
+    func setCalculatorHistory(_ entries: [String]) { cards[.calculator]?.setCalculatorHistory(entries) }
 
     func applyTheme(_ profile: PetGradientProfile) {
         for card in cards.values { card.applyTheme(profile) }
@@ -165,6 +211,8 @@ private struct WidgetPlacement: Codable {
                                                      width: placement.width, height: placement.height))
             card.activate = { [weak self] in self?.activate?(placement.kind) }
             card.submitCodex = { [weak self] prompt in self?.submitCodex?(prompt) }
+            card.musicCommand = { [weak self] command in self?.musicCommand?(command) }
+            card.calculatorCalculated = { [weak self] line in self?.calculatorCalculated?(line) }
             card.remove = { [weak self] in self?.removeWidget(placement.kind) }
             card.didMoveOrResize = { [weak self] frame in
                 guard let self, let index = self.placements.firstIndex(where: { $0.kind == placement.kind }) else { return }
@@ -228,12 +276,14 @@ private struct WidgetPlacement: Codable {
 
 }
 
-@MainActor private final class GlassWidgetCard: NSVisualEffectView {
+@MainActor private final class GlassWidgetCard: NSVisualEffectView, NSTextFieldDelegate {
     override var mouseDownCanMoveWindow: Bool { false }
     let kind: WebbyWidget
     var activate: (() -> Void)?
     var remove: (() -> Void)?
     var submitCodex: ((String) -> Void)?
+    var musicCommand: ((MusicCommand) -> Void)?
+    var calculatorCalculated: ((String) -> Void)?
     var didMoveOrResize: ((NSRect) -> Void)?
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
@@ -253,8 +303,21 @@ private struct WidgetPlacement: Codable {
     private let promptField = NSTextField(string: "")
     private let promptButton = NSButton(title: "↗", target: nil, action: nil)
     private let promptGlass = NSVisualEffectView()
+    private let albumArt = NSImageView()
+    private let trackTitle = NSTextField(labelWithString: "")
+    private let trackArtist = NSTextField(labelWithString: "")
+    private let musicPrevious = NSButton(title: "", target: nil, action: nil)
+    private let musicToggle = NSButton(title: "", target: nil, action: nil)
+    private let musicNext = NSButton(title: "", target: nil, action: nil)
+    private let musicProgress = NSProgressIndicator()
+    private let calculatorField = NSTextField(string: "")
+    private let calculatorAnswer = NSTextField(labelWithString: "")
+    private let calculatorHistory = NSTextField(labelWithString: "")
     private var weather: WeatherSnapshot?
     private var stock: StockSnapshot?
+    private var music: SpotifySnapshot?
+    private var battery: BatterySnapshot?
+    private var loadedArtworkURL = ""
     private let gradientTint = CAGradientLayer()
     private let topSheen = CAGradientLayer()
     private let gradientRim = CAGradientLayer()
@@ -353,8 +416,48 @@ private struct WidgetPlacement: Codable {
         promptGlass.layer?.cornerRadius = 12
         promptGlass.layer?.borderColor = NSColor.white.withAlphaComponent(0.23).cgColor
         promptGlass.layer?.borderWidth = 0.7
+        albumArt.imageScaling = .scaleProportionallyUpOrDown
+        albumArt.wantsLayer = true
+        albumArt.layer?.cornerRadius = 10
+        albumArt.layer?.masksToBounds = true
+        trackTitle.font = .systemFont(ofSize: 14, weight: .semibold)
+        trackTitle.lineBreakMode = .byTruncatingTail
+        trackArtist.font = .systemFont(ofSize: 11)
+        trackArtist.textColor = .secondaryLabelColor
+        trackArtist.lineBreakMode = .byTruncatingTail
+        for (button, symbol, selector) in [(musicPrevious, "backward.fill", #selector(previousTrack)),
+                                           (musicToggle, "play.fill", #selector(togglePlayback)),
+                                           (musicNext, "forward.fill", #selector(nextTrack))] {
+            button.isBordered = false
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            button.contentTintColor = .labelColor
+            button.target = self
+            button.action = selector
+        }
+        musicProgress.isIndeterminate = false
+        musicProgress.style = .bar
+        musicProgress.minValue = 0
+        musicProgress.maxValue = 1
+        calculatorField.cell = VerticallyCenteredPromptCell(textCell: "")
+        calculatorField.placeholderString = "Type an equation…"
+        calculatorField.font = .systemFont(ofSize: 17, weight: .medium)
+        calculatorField.alignment = .center
+        calculatorField.isBordered = false
+        calculatorField.drawsBackground = false
+        calculatorField.focusRingType = .none
+        calculatorField.target = self
+        calculatorField.action = #selector(calculatePressed)
+        calculatorField.delegate = self
+        calculatorAnswer.font = .systemFont(ofSize: 26, weight: .light)
+        calculatorAnswer.alignment = .center
+        calculatorHistory.font = .systemFont(ofSize: 11)
+        calculatorHistory.textColor = .secondaryLabelColor
+        calculatorHistory.alignment = .center
+        calculatorHistory.maximumNumberOfLines = 4
         for view in [icon, title, subtitle, body, action, close, sparkline,
-                     weatherIcon, weatherMeta, value, detail, hourly, promptGlass, promptField, promptButton] { addSubview(view) }
+                     weatherIcon, weatherMeta, value, detail, hourly, promptGlass, promptField, promptButton,
+                     albumArt, trackTitle, trackArtist, musicPrevious, musicToggle, musicNext, musicProgress,
+                     calculatorField, calculatorAnswer, calculatorHistory] { addSubview(view) }
         for view in hourSymbols { addSubview(view) }
         for view in hourLabels { addSubview(view) }
         set(subtitle: "", lines: [])
@@ -386,7 +489,16 @@ private struct WidgetPlacement: Codable {
         if kind == .stocks { stock = nil }
         subtitle.stringValue = text
         body.stringValue = lines.prefix(7).joined(separator: "\n")
-        action.title = busy ? "Loading…" : kind.googleService == nil ? "Open" : connected ? "Open ↗" : "Connect"
+        if busy { action.title = "Loading…" }
+        else if kind.googleService != nil { action.title = connected ? "Open ↗" : "Connect" }
+        else {
+            switch kind {
+            case .downloads: action.title = "Show in Finder"
+            case .clipboard: action.title = "Choose…"
+            case .systemMonitor: action.title = "Activity Monitor"
+            default: action.title = "Open"
+            }
+        }
         sparkline.values = chart
         needsLayout = true
     }
@@ -471,6 +583,45 @@ private struct WidgetPlacement: Codable {
         needsLayout = true
     }
 
+    func setMusic(_ snapshot: SpotifySnapshot?) {
+        music = snapshot
+        trackTitle.stringValue = snapshot?.title ?? "Open Spotify"
+        trackArtist.stringValue = snapshot.map { "\($0.artist) · \($0.album)" } ?? "Your last played song appears here"
+        musicToggle.image = NSImage(systemSymbolName: snapshot?.isPlaying == true ? "pause.fill" : "play.fill", accessibilityDescription: nil)
+        musicProgress.doubleValue = snapshot.map { $0.duration > 0 ? min(1, $0.position / $0.duration) : 0 } ?? 0
+        let artworkURL = snapshot?.artworkURL ?? ""
+        if artworkURL != loadedArtworkURL, let url = URL(string: artworkURL), url.scheme == "https" {
+            loadedArtworkURL = artworkURL
+            albumArt.image = nil
+            Task { [weak self] in
+                guard let (data, _) = try? await URLSession.shared.data(from: url),
+                      let image = NSImage(data: data) else {
+                    self?.loadedArtworkURL = ""
+                    return
+                }
+                guard self?.music?.artworkURL == artworkURL else { return }
+                self?.albumArt.image = image
+            }
+        } else if artworkURL.isEmpty { loadedArtworkURL = ""; albumArt.image = nil }
+        needsLayout = true
+    }
+
+    func setBattery(_ snapshot: BatterySnapshot) {
+        battery = snapshot
+        weatherMeta.stringValue = snapshot.name
+        value.stringValue = "\(snapshot.percentage)%"
+        detail.stringValue = snapshot.charging ? "Charging" : "On battery"
+        if let minutes = snapshot.timeRemaining, minutes > 0 {
+            detail.stringValue += " · \(minutes / 60)h \(minutes % 60)m"
+        }
+        needsLayout = true
+    }
+
+    func setCalculatorHistory(_ entries: [String]) {
+        calculatorHistory.stringValue = entries.prefix(4).joined(separator: "\n")
+        needsLayout = true
+    }
+
     func applyTheme(_ profile: PetGradientProfile) {
         BrowserTheme.apply(profile.gradients.ambient, to: gradientTint, alpha: 0.08)
         BrowserTheme.apply(profile.gradients.ambient, to: gradientRim, alpha: 0.58)
@@ -506,8 +657,79 @@ private struct WidgetPlacement: Codable {
         promptField.isHidden = true
         promptButton.isHidden = true
         promptGlass.isHidden = true
+        for view in [albumArt, trackTitle, trackArtist, musicPrevious, musicToggle, musicNext,
+                     musicProgress, calculatorField, calculatorAnswer, calculatorHistory] { view.isHidden = true }
         close.isHidden = compact
         close.frame = NSRect(x: width - 27, y: height - 29, width: 21, height: 21)
+        if kind == .music {
+            icon.isHidden = true; subtitle.isHidden = true; body.isHidden = true
+            action.isHidden = true; sparkline.isHidden = true
+            albumArt.isHidden = music == nil
+            if compact {
+                albumArt.frame = bounds.insetBy(dx: 8, dy: 8)
+                if music == nil { icon.isHidden = false; icon.frame = bounds.insetBy(dx: width * 0.28, dy: height * 0.28) }
+            } else {
+                let artSide = min(height - 26, medium ? 62 : 104)
+                albumArt.frame = NSRect(x: 14, y: 14, width: artSide, height: artSide)
+                trackTitle.isHidden = false; trackArtist.isHidden = false
+                trackTitle.frame = NSRect(x: artSide + 25, y: height - 41, width: width - artSide - 58, height: 22)
+                trackArtist.frame = NSRect(x: artSide + 25, y: height - 61, width: width - artSide - 58, height: 18)
+                for button in [musicPrevious, musicToggle, musicNext] { button.isHidden = music == nil }
+                let controlsX = artSide + 25
+                musicPrevious.frame = NSRect(x: controlsX, y: 17, width: 31, height: 28)
+                musicToggle.frame = NSRect(x: controlsX + 38, y: 17, width: 31, height: 28)
+                musicNext.frame = NSRect(x: controlsX + 76, y: 17, width: 31, height: 28)
+                musicProgress.isHidden = music == nil
+                musicProgress.frame = NSRect(x: controlsX, y: medium ? 48 : 62,
+                                             width: max(30, width - controlsX - 22), height: 7)
+                if !medium { albumArt.frame = NSRect(x: 17, y: height - 122, width: 105, height: 105) }
+            }
+            return
+        }
+        if kind == .calculator {
+            icon.isHidden = true; subtitle.isHidden = true; body.isHidden = true
+            action.isHidden = true; sparkline.isHidden = true
+            calculatorField.isHidden = false; calculatorAnswer.isHidden = false
+            promptGlass.isHidden = false
+            let fieldWidth = max(40, width - 30)
+            if compact {
+                calculatorField.font = .systemFont(ofSize: 15, weight: .medium)
+                calculatorField.frame = NSRect(x: 15, y: (height - 32) / 2, width: fieldWidth, height: 32)
+                calculatorAnswer.isHidden = true
+            } else {
+                calculatorField.font = .systemFont(ofSize: medium ? 16 : 20, weight: .medium)
+                calculatorField.frame = NSRect(x: 15, y: (height - 40) / 2,
+                                               width: fieldWidth, height: 40)
+                calculatorAnswer.frame = NSRect(x: 15, y: (height - 40) / 2 - 39,
+                                                width: fieldWidth, height: 32)
+                if height >= 300 {
+                    calculatorHistory.isHidden = calculatorHistory.stringValue.isEmpty
+                    calculatorHistory.frame = NSRect(x: 20, y: 18, width: width - 40, height: 45)
+                }
+            }
+            promptGlass.frame = calculatorField.frame.insetBy(dx: -2, dy: -2)
+            return
+        }
+        if kind == .battery, let battery {
+            icon.isHidden = false; subtitle.isHidden = true; body.isHidden = true
+            action.isHidden = true; sparkline.isHidden = true
+            icon.contentTintColor = battery.percentage <= 20 ? .systemRed : .systemGreen
+            if compact {
+                icon.frame = NSRect(x: (width - 35)/2, y: 13, width: 35, height: 28)
+                value.isHidden = false; value.font = .systemFont(ofSize: 19, weight: .medium)
+                value.alignment = .center
+                value.frame = NSRect(x: 4, y: height - 38, width: width - 8, height: 25)
+            } else {
+                icon.frame = NSRect(x: 20, y: height - 83, width: 50, height: 50)
+                value.isHidden = false; value.font = .systemFont(ofSize: medium ? 30 : 42, weight: .light)
+                value.alignment = .left
+                value.frame = NSRect(x: 83, y: height - 80, width: width - 105, height: 50)
+                detail.isHidden = false
+                detail.frame = NSRect(x: 85, y: height - 102, width: width - 105, height: 18)
+                if !medium { weatherMeta.isHidden = false; weatherMeta.frame = NSRect(x: 23, y: 19, width: width - 46, height: 18) }
+            }
+            return
+        }
         if kind == .weather, weather != nil {
             icon.isHidden = true; subtitle.isHidden = true; body.isHidden = true
             action.isHidden = true; sparkline.isHidden = true
@@ -595,7 +817,7 @@ private struct WidgetPlacement: Codable {
         body.isHidden = false
         action.isHidden = false
         close.isHidden = false
-        sparkline.isHidden = kind != .stocks || medium || sparkline.values.count < 2
+        sparkline.isHidden = (kind != .stocks && kind != .systemMonitor) || medium || sparkline.values.count < 2
         icon.frame = NSRect(x: 16, y: height - 43, width: 24, height: 24)
         subtitle.frame = NSRect(x: 48, y: height - 40, width: width - 85, height: 20)
         action.frame = NSRect(x: 10, y: 9, width: 72, height: 22)
@@ -621,16 +843,11 @@ private struct WidgetPlacement: Codable {
         didDrag = false
     }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let hit = super.hitTest(point)
-        if hit === action || hit === close || hit === promptField || hit === promptButton { return hit }
-        return hit == nil ? nil : self
-    }
-
     func canBeginDrag(at canvasPoint: NSPoint) -> Bool {
         let point = convert(canvasPoint, from: superview)
         guard bounds.contains(point) else { return false }
-        for control in [action, close, promptField, promptButton] where !control.isHidden {
+        for control in [action, close, promptField, promptButton, calculatorField,
+                        musicPrevious, musicToggle, musicNext] where !control.isHidden {
             if control.bounds.contains(control.convert(point, from: self)) { return false }
         }
         return true
@@ -667,6 +884,28 @@ private struct WidgetPlacement: Codable {
         let prompt = promptField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         promptField.stringValue = ""
         submitCodex?(prompt)
+    }
+    @objc private func previousTrack() { musicCommand?(.previous) }
+    @objc private func togglePlayback() { musicCommand?(.toggle) }
+    @objc private func nextTrack() { musicCommand?(.next) }
+    @objc private func calculatePressed() {
+        let expression = calculatorField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        var calculator = ExpressionCalculator(expression)
+        guard !expression.isEmpty, let answer = calculator.evaluate() else {
+            calculatorAnswer.stringValue = expression.isEmpty ? "" : "Check expression"
+            return
+        }
+        let result = answer.rounded() == answer && abs(answer) < 1e15 ? String(format: "%.0f", answer) : String(format: "%.10g", answer)
+        calculatorAnswer.stringValue = result
+        calculatorCalculated?("\(expression) = \(result)")
+    }
+    func controlTextDidChange(_ obj: Notification) {
+        guard obj.object as? NSTextField === calculatorField else { return }
+        let expression = calculatorField.stringValue
+        var calculator = ExpressionCalculator(expression)
+        calculatorAnswer.stringValue = calculator.evaluate().map {
+            $0.rounded() == $0 && abs($0) < 1e15 ? String(format: "%.0f", $0) : String(format: "%.10g", $0)
+        } ?? ""
     }
 }
 

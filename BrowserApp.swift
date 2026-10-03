@@ -542,6 +542,14 @@ private final class HomeSearchGroup: NSView {
     private var widgetCanvas: WidgetCanvas!
     private var terminalCommandOnOpen: [UUID: String] = [:]
     private var lastWidgetRefresh: [UUID: Date] = [:]
+    private var widgetTimer: Timer?
+    private var previousCPUTicks: [UInt64]?
+    private var cpuHistory: [Double] = []
+    private var previousNetworkBytes: (received: UInt64, sent: UInt64)?
+    private var previousNetworkTime: Date?
+    private var clipboardChangeCount = -1
+    private var clipboardHistory: [String] = []
+    private var spotifyPollInFlight = false
     private var globe: AnimatedGlobeView!
     private var homeSearchSurface: GlassAddressSurface!
     private var chromeToggle: GlassButton!
@@ -709,6 +717,9 @@ private final class HomeSearchGroup: NSView {
         makeSidebar()
         makeMainArea()
         makeHome()
+        widgetTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pollRealtimeWidgets() }
+        }
         NotificationCenter.default.addObserver(self, selector: #selector(themeChanged),
                                                name: .browserThemeChanged, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(glassChanged),
@@ -1113,7 +1124,7 @@ private final class HomeSearchGroup: NSView {
             loadErrorLabel.trailingAnchor.constraint(equalTo: center.trailingAnchor, constant: -12),
             loadErrorLabel.topAnchor.constraint(equalTo: searchSurface.bottomAnchor, constant: 12)
         ])
-        let scroll = NSScrollView()
+        let scroll = WidgetCanvasScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = false
@@ -1122,6 +1133,8 @@ private final class HomeSearchGroup: NSView {
         widgetCanvas = WidgetCanvas(frame: NSRect(x: 0, y: 0, width: 900, height: 680))
         widgetCanvas.activate = { [weak self] kind in self?.activateWidget(kind) }
         widgetCanvas.submitCodex = { [weak self] prompt in self?.launchCodexWidget(prompt: prompt) }
+        widgetCanvas.musicCommand = { [weak self] command in self?.controlSpotify(command) }
+        widgetCanvas.calculatorCalculated = { [weak self] line in self?.recordCalculation(line) }
         scroll.documentView = widgetCanvas
         homeView.addSubview(scroll, positioned: .below, relativeTo: center)
         NSLayoutConstraint.activate([
@@ -1308,6 +1321,92 @@ private final class HomeSearchGroup: NSView {
                 }
             }
         }
+        pollRealtimeWidgets()
+    }
+
+    private func pollRealtimeWidgets() {
+        guard widgetCanvas != nil, !homeView.isHidden else { return }
+        if widgetCanvas.has(.music), !spotifyPollInFlight {
+            spotifyPollInFlight = true
+            Task.detached(priority: .utility) { [weak self] in
+                let track = SpotifyBridge.read()
+                await self?.updateSpotifyWidget(track)
+            }
+        }
+        if widgetCanvas.has(.battery), let battery = WidgetSystemData.battery() {
+            widgetCanvas.setBattery(battery)
+        }
+        if widgetCanvas.has(.systemMonitor) {
+            var cpu = 0.0
+            if let ticks = WidgetSystemData.cpuTicks() {
+                if let previousCPUTicks, ticks.count == previousCPUTicks.count {
+                    let changes = zip(ticks, previousCPUTicks).map { Double($0 >= $1 ? $0 - $1 : 0) }
+                    let total = changes.reduce(0, +)
+                    if total > 0 { cpu = 100 * (total - changes[2]) / total }
+                }
+                previousCPUTicks = ticks
+            }
+            cpuHistory.append(cpu)
+            if cpuHistory.count > 40 { cpuHistory.removeFirst() }
+            let network = WidgetSystemData.networkBytes()
+            let now = Date()
+            var networkLine = "Network  —"
+            if let previousNetworkBytes, let previousNetworkTime {
+                let interval = max(0.1, now.timeIntervalSince(previousNetworkTime))
+                let down = Double(network.received >= previousNetworkBytes.received ? network.received - previousNetworkBytes.received : 0) / interval / 1_000_000
+                let up = Double(network.sent >= previousNetworkBytes.sent ? network.sent - previousNetworkBytes.sent : 0) / interval / 1_000_000
+                networkLine = String(format: "Network  ↓ %.1f  ↑ %.1f MB/s", down, up)
+            }
+            previousNetworkBytes = network
+            previousNetworkTime = now
+            widgetCanvas.set(.systemMonitor, subtitle: "CPU  \(Int(cpu))%",
+                             lines: ["Memory   \(WidgetSystemData.memory())", networkLine,
+                                     "Disk        \(WidgetSystemData.disk())"],
+                             chart: cpuHistory)
+        }
+        if widgetCanvas.has(.downloads) {
+            let recent = WidgetSystemData.recentDownloads().map { "↓ \($0.lastPathComponent)" }
+            widgetCanvas.set(.downloads, subtitle: "Recent Downloads",
+                             lines: downloads.widgetLines.isEmpty ? recent : downloads.widgetLines)
+        }
+        if widgetCanvas.has(.clipboard) {
+            let pasteboard = NSPasteboard.general
+            if pasteboard.changeCount != clipboardChangeCount {
+                clipboardChangeCount = pasteboard.changeCount
+                if let content = pasteboard.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !content.isEmpty, clipboardHistory.first != content {
+                    clipboardHistory.insert(content, at: 0)
+                    clipboardHistory = Array(clipboardHistory.prefix(12))
+                }
+            }
+            widgetCanvas.set(.clipboard, subtitle: "Recent Copies",
+                             lines: clipboardHistory.prefix(4).map { String($0.prefix(80)).replacingOccurrences(of: "\n", with: " ") })
+        }
+        if widgetCanvas.has(.calculator) {
+            widgetCanvas.setCalculatorHistory(UserDefaults.standard.stringArray(forKey: "webbyCalculations.\(activeSpace.saved.id.uuidString)") ?? [])
+        }
+    }
+
+    private func updateSpotifyWidget(_ track: SpotifySnapshot?) {
+        spotifyPollInFlight = false
+        widgetCanvas.setMusic(track)
+    }
+
+    private func controlSpotify(_ command: MusicCommand) {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            SpotifyBridge.send(command)
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            await self?.pollRealtimeWidgets()
+        }
+    }
+
+    private func recordCalculation(_ line: String) {
+        let key = "webbyCalculations.\(activeSpace.saved.id.uuidString)"
+        var history = UserDefaults.standard.stringArray(forKey: key) ?? []
+        history.insert(line, at: 0)
+        history = Array(history.prefix(12))
+        UserDefaults.standard.set(history, forKey: key)
+        widgetCanvas.setCalculatorHistory(history)
     }
 
     private func activateWidget(_ kind: WebbyWidget) {
@@ -1334,6 +1433,30 @@ private final class HomeSearchGroup: NSView {
             }
         case .codex:
             launchCodexWidget(prompt: "")
+        case .music:
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Spotify.app"))
+        case .downloads:
+            if let folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+                NSWorkspace.shared.open(folder)
+            }
+        case .clipboard:
+            guard !clipboardHistory.isEmpty else { break }
+            let alert = NSAlert()
+            alert.messageText = "Clipboard History"
+            alert.addButton(withTitle: "Copy")
+            alert.addButton(withTitle: "Cancel")
+            let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 400, height: 28))
+            picker.addItems(withTitles: clipboardHistory.map { String($0.prefix(90)).replacingOccurrences(of: "\n", with: " ") })
+            alert.accessoryView = picker
+            if alert.runModal() == .alertFirstButtonReturn {
+                let selected = clipboardHistory[picker.indexOfSelectedItem]
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(selected, forType: .string)
+            }
+        case .systemMonitor:
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
+        case .battery, .calculator:
+            break
         default: break
         }
     }

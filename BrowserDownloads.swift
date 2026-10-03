@@ -78,6 +78,15 @@ import WebKit
 
     func applyTheme(_ profile: PetGradientProfile) { button.applyTheme(profile) }
 
+    var widgetLines: [String] {
+        entries.suffix(5).reversed().map { entry in
+            let progress = entry.progress?.fractionCompleted ?? 0
+            return entry.status == "Downloading" && progress.isFinite
+                ? "↓ \(entry.name)  ·  \(Int(max(0, min(1, progress)) * 100))%"
+                : "✓ \(entry.name)"
+        }
+    }
+
     func attach(_ download: WKDownload) {
         download.delegate = self
         let index = entries.count

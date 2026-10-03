@@ -38,7 +38,7 @@ swiftc -O -module-cache-path "$module_cache" -framework WebKit \
 
 clang -O2 -target arm64-apple-macos13.0 -c "$script_dir/PTYLauncher.c" -o "$module_cache/PTYLauncher.o"
 
-swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$module_cache" -framework AppKit -framework WebKit -framework AVFoundation -framework Security -framework CryptoKit \
+swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$module_cache" -framework AppKit -framework WebKit -framework AVFoundation -framework Security -framework CryptoKit -framework IOKit \
   "$script_dir/PlainWebKitBrowser.swift" \
   "$script_dir/BrowserGlass.swift" \
   "$script_dir/GlassPageInjector.swift" \
@@ -51,6 +51,7 @@ swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$m
   "$script_dir/BrowserMenuBar.swift" \
   "$script_dir/GoogleWorkspace.swift" \
   "$script_dir/WidgetCanvas.swift" \
+  "$script_dir/WidgetExtras.swift" \
   "$script_dir/WidgetFeeds.swift" \
   "$script_dir/BrowserDownloads.swift" \
   "$script_dir/ChromeImport.swift" \
@@ -74,8 +75,9 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>Webby</string>
   <key>CFBundleIconFile</key><string>Webby</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>63</string>
-  <key>CFBundleShortVersionString</key><string>3.8.9</string>
+  <key>CFBundleVersion</key><string>65</string>
+  <key>CFBundleShortVersionString</key><string>3.9.1</string>
+  <key>NSAppleEventsUsageDescription</key><string>Webby reads and controls Spotify for its music widget.</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
