@@ -23,6 +23,9 @@ final class BrowserTab {
     var pageConstraints: [NSLayoutConstraint] = []
     var terminalConstraints: [NSLayoutConstraint] = []
     var favicon: NSImage?
+    var previewImage: NSImage?
+    var previewCapturedAt: TimeInterval = 0
+    var previewGeneration = 0
     var faviconGeneration = 0
     var faviconTask: URLSessionDataTask?
     var prefersDarkGlass = true
@@ -112,7 +115,7 @@ private final class TabActionButton: NSButton, NSDraggingSource {
 
     private func startTabDrag(with event: NSEvent) {
         guard let row = superview as? TabRow else { return }
-        row.cancelHoverSelection()
+        row.cancelHoverPreview()
         let item = NSDraggingItem(pasteboardWriter: tabID.uuidString as NSString)
         let image = NSImage(size: row.bounds.size)
         image.lockFocus()
@@ -166,7 +169,7 @@ private final class TabRow: NSView {
     private var hovered = false
     private var selected = false
     private var hoverArea: NSTrackingArea?
-    private var hoverSelectWork: DispatchWorkItem?
+    private var hoverPreviewWork: DispatchWorkItem?
     private var hoverGeneration = 0
     private weak var owner: BrowserApp?
     private var pinned = false
@@ -190,7 +193,7 @@ private final class TabRow: NSView {
         selectionGradient.cornerRadius = 8
         layer?.addSublayer(selectionGradient)
         translatesAutoresizingMaskIntoConstraints = false
-        selectButton.toolTip = "Select tab • Double-click for Floating or profile options • Drag to an edge to reorder, center to split"
+        selectButton.toolTip = "Hover to preview • Click to select • Double-click for Floating or profile options"
         selectButton.focusRingType = .none
         titleButton.alignment = .left
         titleButton.cell?.lineBreakMode = .byTruncatingTail
@@ -286,30 +289,32 @@ private final class TabRow: NSView {
         hoverGeneration += 1
         let generation = hoverGeneration
         updateBackground()
-        hoverSelectWork?.cancel()
+        hoverPreviewWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.hovered, self.hoverGeneration == generation,
                   let window = self.window, window.isKeyWindow else { return }
             let point = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
             guard self.bounds.contains(point), !self.closeButton.frame.contains(point) else { return }
-            self.selectButton.performClick(nil)
+            self.owner?.showTabPreview(for: self.tabID, from: self)
         }
-        hoverSelectWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24, execute: work)
+        hoverPreviewWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34, execute: work)
     }
 
     override func mouseExited(with event: NSEvent) {
         hovered = false
         hoverGeneration += 1
-        hoverSelectWork?.cancel()
-        hoverSelectWork = nil
+        hoverPreviewWork?.cancel()
+        hoverPreviewWork = nil
+        owner?.hideTabPreview(for: tabID)
         updateBackground()
     }
 
-    func cancelHoverSelection() {
+    func cancelHoverPreview() {
         hoverGeneration += 1
-        hoverSelectWork?.cancel()
-        hoverSelectWork = nil
+        hoverPreviewWork?.cancel()
+        hoverPreviewWork = nil
+        owner?.hideTabPreview(for: tabID)
     }
 
     override func resetCursorRects() {
@@ -595,6 +600,7 @@ private final class TabRow: NSView {
     private var fastModeItem: NSMenuItem?
     private var menuBar: BrowserMenuBar?
     private let suggestions = BrowserSuggestionPopup()
+    private let tabPreview = TabPreviewPopover()
     private var linkPreview: NSPopover?
     private var linkPreviewWebView: WKWebView?
     private var linkPreviewOwnerID: UUID?
@@ -623,6 +629,7 @@ private final class TabRow: NSView {
     }
 
     private func experimentalModeChanged() {
+        tabPreview.hide()
         linkPreview?.close()
         let enabled = BrowserExperiment.cyclesNewTabProfiles
         let selectedID = enabled ? activeSpace.activeTabID : fusedActiveTabID
@@ -769,6 +776,7 @@ private final class TabRow: NSView {
         NotificationCenter.default.removeObserver(self, name: .browserThemeChanged, object: nil)
         NotificationCenter.default.removeObserver(self, name: .browserGlassChanged, object: nil)
         suggestions.close()
+        tabPreview.hide()
         if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
         for space in spaces { for tab in space.tabs { tab.terminalView?.stop() } }
         pendingSpaceSave?.cancel()
@@ -1492,6 +1500,7 @@ private final class TabRow: NSView {
             updateSpaceLabel()
             return
         }
+        tabPreview.hide()
         linkPreview?.close()
         if Motion.enabled {
             let transition = CATransition()
@@ -1502,6 +1511,7 @@ private final class TabRow: NSView {
             pageArea.layer?.add(transition, forKey: "spaceSwitch")
         }
         for tab in tabs where tab.id == activeTabID {
+            captureTabPreview(tab)
             tab.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
                                             in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
         }
@@ -2027,6 +2037,7 @@ private final class TabRow: NSView {
     }
 
     private func selectTab(_ tab: BrowserTab) {
+        tabPreview.hide()
         if tab.isFloating {
             floatingWindows[tab.id]?.makeKeyAndOrderFront(nil)
             return
@@ -2035,6 +2046,7 @@ private final class TabRow: NSView {
         suggestions.close()
         linkPreview?.close()
         if let previous = activeTab, previous.id != tab.id {
+            captureTabPreview(previous)
             previous.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
                                                  in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
         }
@@ -2097,6 +2109,50 @@ private final class TabRow: NSView {
             pane.open()
         }
         else { window.makeFirstResponder(homeSearchField) }
+        if tab.webView != nil && !tab.navigationInProgress {
+            let id = tab.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self, self.activeTabID == id, let current = self.tab(id: id) else { return }
+                self.captureTabPreview(current)
+            }
+        }
+    }
+
+    fileprivate func showTabPreview(for id: UUID, from row: NSView) {
+        guard let tab = tab(id: id), row.window === window else { return }
+        let address = tab.isTerminal ? "Terminal" :
+            (tab.webView?.url.map(displayAddress) ?? (tab.searchDraft.isEmpty ? "New Tab" : tab.searchDraft))
+        tabPreview.show(tabID: id, title: tab.title, address: address,
+                        image: tab.previewImage, from: row)
+        if tab.id == activeTabID { captureTabPreview(tab) }
+    }
+
+    fileprivate func hideTabPreview(for id: UUID) { tabPreview.hide(for: id) }
+
+    private func captureTabPreview(_ tab: BrowserTab) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - tab.previewCapturedAt > 2,
+              !tab.showsSearchView, !tab.navigationInProgress,
+              let webView = tab.webView, !webView.isHidden, webView.alphaValue > 0.5,
+              webView.bounds.width >= 100, webView.bounds.height >= 80 else { return }
+        tab.previewCapturedAt = now
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = NSRect(x: 0, y: 0,
+                                    width: min(webView.bounds.width, 850),
+                                    height: min(webView.bounds.height, 500))
+        let capturedURL = webView.url
+        let tabID = tab.id
+        let generation = tab.previewGeneration
+        webView.takeSnapshot(with: configuration) { [weak self, weak webView] image, _ in
+            DispatchQueue.main.async {
+                guard let self, let image, let webView,
+                      let current = self.tab(id: tabID), current.webView === webView,
+                      current.previewGeneration == generation,
+                      webView.url == capturedURL else { return }
+                current.previewImage = image
+                self.tabPreview.updateImage(image, for: tabID)
+            }
+        }
     }
 
     private func refreshTabs() {
@@ -2106,7 +2162,7 @@ private final class TabRow: NSView {
         tabStack.layer?.removeAnimation(forKey: "pinTab")
         for id in tabRows.keys.filter({ !validIDs.contains($0) }) {
             guard let row = tabRows[id] else { continue }
-            row.cancelHoverSelection()
+            row.cancelHoverPreview()
             row.layer?.removeAllAnimations()
             row.isHidden = true
             tabWidthConstraints.removeValue(forKey: id)?.isActive = false
@@ -2153,6 +2209,7 @@ private final class TabRow: NSView {
     }
 
     @objc fileprivate func selectTabAction(_ sender: TabActionButton) {
+        tabPreview.hide()
         guard let tab = tabs.first(where: { $0.id == sender.tabID }) else { return }
         if sender.physicalDoubleClick {
             let id = tab.id
@@ -2451,6 +2508,7 @@ private final class TabRow: NSView {
 
     private func closeTab(id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabPreview.hide(for: id)
         linkPreview?.close()
         if let splitTabIDs, splitTabIDs.0 == id || splitTabIDs.1 == id { endSplit() }
         let wasActive = activeTabID == id
@@ -2869,6 +2927,9 @@ private final class TabRow: NSView {
         if let tab = tab(for: webView) {
             tab.loadError = nil
             tab.navigationInProgress = true
+            tab.previewImage = nil
+            tab.previewCapturedAt = 0
+            tab.previewGeneration += 1
             tab.faviconGeneration += 1
             tab.faviconTask?.cancel()
             tab.faviconTask = nil
@@ -2965,6 +3026,13 @@ private final class TabRow: NSView {
         }
         refreshTabs()
         loadFavicon(for: tab, webView: webView)
+        if tab.id == activeTabID || tab.isFloating {
+            let tabID = tab.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, let current = self.tab(id: tabID) else { return }
+                self.captureTabPreview(current)
+            }
+        }
     }
 
     private func loadFavicon(for tab: BrowserTab, webView: WKWebView) {

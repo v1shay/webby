@@ -43,6 +43,7 @@ swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$m
   "$script_dir/BrowserSuggestions.swift" \
   "$script_dir/BrowserTheme.swift" \
   "$script_dir/FloatingTabWindow.swift" \
+  "$script_dir/TabPreviewPopover.swift" \
   "$script_dir/FusedProfileLabel.swift" \
   "$script_dir/WebbyIcon.swift" \
   "$script_dir/BrowserMenuBar.swift" \
@@ -68,8 +69,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>Webby</string>
   <key>CFBundleIconFile</key><string>Webby</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>50</string>
-  <key>CFBundleShortVersionString</key><string>3.7.1</string>
+  <key>CFBundleVersion</key><string>51</string>
+  <key>CFBundleShortVersionString</key><string>3.7.2</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
