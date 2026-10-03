@@ -1,0 +1,25 @@
+# Webby
+
+A macOS browser built with Apple's AppKit and `WKWebView`. It opens to a frosted glass start page. Google is used for searches typed into the address field; it is not the start page.
+
+The start page has a centered animated globe and glass search field. A full-height glass sidebar holds real tabs, including a New Tab button and individual close buttons. The sidebar closes with a short width animation. The toolbar and search fields have boxier corners. The macOS traffic-light buttons are hidden; use Command-W to close a tab or Command-Q to quit.
+
+The globe uses the supplied notch indicator Core Animation engine. Click it to transition into a full-tab terminal. The terminal runs an interactive login zsh through a native pseudo-terminal, so commands and keyboard-driven terminal apps can use the full tab. Use the small globe button in the terminal's upper-right corner to return to search. Other controls use brief springs and light sweeps. There is no full-window gradient or Metal shader. The interface respects the macOS Reduce Motion setting.
+
+The window appears before WebKit finishes starting. WebKit's normal persistent cache is kept for repeat visits. A compiled WebKit rule list blocks a small set of common third-party ad and analytics requests. Use **View → Block Common Ads and Trackers** to turn it off or on; changing it reloads the current page.
+
+The folder icon across from **+** animates open when clicked and shows recent downloads. Website downloads are saved to your Downloads folder; repeated names receive a number instead of overwriting an existing file. The menu bar icon from the supplied artwork opens browser settings, including all 30 supplied gradient profiles and a custom three-color gradient editor.
+
+Use **Import Chrome Profiles…** in the menu bar icon to select one or more Chrome profiles. The import copies bookmarks, history, readable saved passwords, and website cookies into separate browser spaces. Chrome's extensions and existing sessions remain in Chrome, and some sites may require a fresh sign-in. Open a space's bookmarks, history, or saved passwords from its menu. Swipe horizontally with two fingers over the tabs sidebar to change spaces, or click the profile name between **+** and the folder icon. Open tabs stay loaded while you switch spaces. Each imported space uses its own persistent WebKit website data store on macOS 14 or newer.
+
+On an Apple Silicon Mac with Xcode command line tools, run `./build.sh` in this folder, then open the generated **Webby.app**. Enter a web address or search terms and press Return. Google is the search engine, while the address field displays your search words instead of the generated Google search URL. The website address bar starts hidden. Scroll upward over a website or click the search button at the upper right to reveal it; it disappears after you move away. Command-L also reveals and focuses it. The upper-left button toggles the sidebar. Future builds replace this same app bundle in place.
+
+Hover over a web link briefly to preview it in a glass popover. Command-click a link to open it in a background tab. Double-click or right-click a tab and choose **Floating** to move the same live page or terminal into a movable, resizable window that stays visible across browser profiles. Closing that window docks the tab back in Webby. The floating window has its own address field, including for a new blank tab. Double-click or right-click a tab and choose **Show in Profile** to display it beside another profile's tabs; it retains its original profile's cookies, history, and saved passwords. A moved tab shows its owner profile after its title. Drag a tab to the upper or lower edge of another tab to reorder it. Drop in the middle to make a resizable split tab. Right-click the joined tab and choose **Unsplit Tabs** to separate them.
+
+The menu bar has **Experimental: Fuse All Profile Tabs**. When enabled, tabs from every profile appear in one sidebar and the two-finger profile swipe is disabled. Each tab keeps its original cookies and sign-in state; selecting it applies its profile's gradient and notch animation. Clicking the globe on an empty tab cycles that tab's profile before it loads a page. Use **Open Terminal in This Tab** from the same menu to enter Terminal. **Notch Indicators by Profile** lets you choose each profile's animation scene. Turning the experiment off puts the same tabs back in their original profile groups and restores two-finger profile switching.
+
+Each browser profile keeps its own gradient choice and custom colors. The Dock icon uses an inset grainy sky background and the selected gradient profile's pet in its working animation. The Finder icon shows the first working frame. A custom gradient can use a chosen pet or a custom pet image from the menu bar settings. The Dock animation respects Reduce Motion.
+
+To rebuild, run `./build.sh` from this folder. Xcode command line tools are required.
+
+If a page is still slow, choose **View → Copy Performance Report** after it loads and paste the result into the chat. The report includes timings and the last site's hostname, not the full URL.
