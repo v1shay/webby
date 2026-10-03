@@ -5,7 +5,7 @@ import AppKit
         super.layout()
         guard let canvas = documentView as? WidgetCanvas else { return }
         let wanted = NSSize(width: max(1010, contentView.bounds.width),
-                            height: max(680, contentView.bounds.height))
+                            height: max(680, contentView.bounds.height, canvas.contentHeight))
         if canvas.frame.size != wanted { canvas.setFrameSize(wanted) }
     }
 }
@@ -59,26 +59,18 @@ private struct WidgetPlacement: Codable {
     override var mouseDownCanMoveWindow: Bool { false }
     var activate: ((WebbyWidget) -> Void)?
     var remove: ((WebbyWidget) -> Void)?
-    var add: (() -> Void)?
     var submitCodex: ((String) -> Void)?
     private var profile = UUID()
     private var placements: [WidgetPlacement] = []
     private var cards: [WebbyWidget: GlassWidgetCard] = [:]
-    private let addButton = NSButton(title: "+ Add Widget", target: nil, action: nil)
     private var horizontalInset: CGFloat { max(0, (bounds.width - 1010) / 2) }
+    var contentHeight: CGFloat { placements.map { $0.y + $0.height + 24 }.max() ?? 680 }
 
     override var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        addButton.bezelStyle = .rounded
-        addButton.isBordered = false
-        addButton.font = .systemFont(ofSize: 12, weight: .medium)
-        addButton.contentTintColor = .secondaryLabelColor
-        addButton.target = self
-        addButton.action = #selector(addPressed)
-        addSubview(addButton)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -99,6 +91,14 @@ private struct WidgetPlacement: Codable {
             }
         } else {
             placements = Self.defaults()
+        }
+        let fullCanvasKey = "webbyWidgetFullCanvas.v1.\(profile.uuidString)"
+        if !UserDefaults.standard.bool(forKey: fullCanvasKey) {
+            if UserDefaults.standard.data(forKey: key) != nil {
+                for index in placements.indices { placements[index].y += 224 }
+                save()
+            }
+            UserDefaults.standard.set(true, forKey: fullCanvasKey)
         }
         rebuild()
     }
@@ -141,10 +141,10 @@ private struct WidgetPlacement: Codable {
 
     private static func defaults() -> [WidgetPlacement] {
         [
-            .init(kind: .weather, x: 12, y: 52, width: 320, height: 208),
-            .init(kind: .stocks, x: 345, y: 52, width: 320, height: 208),
-            .init(kind: .codex, x: 678, y: 52, width: 320, height: 208),
-            .init(kind: .note, x: 12, y: 276, width: 320, height: 170)
+            .init(kind: .weather, x: 12, y: 276, width: 320, height: 208),
+            .init(kind: .stocks, x: 345, y: 276, width: 320, height: 208),
+            .init(kind: .codex, x: 678, y: 276, width: 320, height: 208),
+            .init(kind: .note, x: 12, y: 500, width: 320, height: 170)
         ]
     }
 
@@ -165,6 +165,7 @@ private struct WidgetPlacement: Codable {
                 self.placements[index].width = frame.width
                 self.placements[index].height = frame.height
                 self.save()
+                self.enclosingScrollView?.needsLayout = true
             }
             cards[placement.kind] = card
             addSubview(card)
@@ -175,7 +176,6 @@ private struct WidgetPlacement: Codable {
 
     override func layout() {
         super.layout()
-        addButton.frame = NSRect(x: horizontalInset + 8, y: 4, width: 102, height: 30)
         // Preserve user positions on resize. Keep each card reachable even when
         // the window becomes narrower than the original canvas.
         for (kind, card) in cards {
@@ -188,7 +188,6 @@ private struct WidgetPlacement: Codable {
         }
     }
 
-    @objc private func addPressed() { add?() }
 }
 
 @MainActor private final class GlassWidgetCard: NSVisualEffectView {

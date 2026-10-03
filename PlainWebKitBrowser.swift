@@ -344,6 +344,7 @@ final class GlassButton: NSButton {
 }
 
 final class GlassAddressSurface: NSView, NSTextFieldDelegate {
+    override var mouseDownCanMoveWindow: Bool { false }
     var onBeginEditing: ((NSTextField) -> Void)?
     var onChange: ((NSTextField) -> Void)?
     var onEndEditing: ((NSTextField) -> Void)?

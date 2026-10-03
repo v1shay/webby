@@ -509,6 +509,14 @@ private final class TabRow: NSView {
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }
 
+private final class HomeSearchGroup: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        return hit === self ? nil : hit
+    }
+}
+
 @MainActor final class BrowserApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     private var window: NSWindow!
     private var content: NSView!
@@ -524,6 +532,12 @@ private final class TabRow: NSView {
     private var homeSearchField: NSTextField!
     private var loadErrorLabel: NSTextField!
     private var homeView: NSView!
+    private var homeCenter: NSView!
+    private var homeCenterTop: NSLayoutConstraint!
+    private var homeSearchDragMonitor: Any?
+    private var homeSearchDragOrigin: NSPoint?
+    private var homeSearchDragTop: CGFloat = 10
+    private var homeSearchIsDragging = false
     private var widgetCanvas: WidgetCanvas!
     private var terminalCommandOnOpen: [UUID: String] = [:]
     private var lastWidgetRefresh: [UUID: Date] = [:]
@@ -712,6 +726,7 @@ private final class TabRow: NSView {
         window.makeKeyAndOrderFront(nil)
         DispatchQueue.main.async { [weak self] in self?.sizeWidgetCanvas() }
         menuBar = BrowserMenuBar(showBrowser: { [weak self] in self?.showBrowserWindow() },
+                                 addWidget: { [weak self] in self?.showAddWidget() },
                                  currentSpaceName: { [weak self] in self?.activeSpace.saved.name ?? "Profile" },
                                  importChrome: { [weak self] in self?.showChromeImport() },
                                  deleteProfile: { [weak self] in self?.showDeleteProfile() },
@@ -777,7 +792,10 @@ private final class TabRow: NSView {
 
     func windowDidEnterFullScreen(_ notification: Notification) { hideTrafficLights() }
     func windowDidExitFullScreen(_ notification: Notification) { hideTrafficLights() }
-    func windowDidResize(_ notification: Notification) { sizeWidgetCanvas() }
+    func windowDidResize(_ notification: Notification) {
+        sizeWidgetCanvas()
+        restoreHomeSearchPosition()
+    }
 
     private func sizeWidgetCanvas() {
         guard widgetCanvas != nil, pageArea != nil else { return }
@@ -792,6 +810,7 @@ private final class TabRow: NSView {
         suggestions.close()
         tabPreview.hide()
         if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+        if let homeSearchDragMonitor { NSEvent.removeMonitor(homeSearchDragMonitor) }
         for space in spaces { for tab in space.tabs { tab.terminalView?.stop() } }
         pendingSpaceSave?.cancel()
         let snapshot = spaces.map(\.saved)
@@ -1056,7 +1075,8 @@ private final class TabRow: NSView {
         searchSurface.translatesAutoresizingMaskIntoConstraints = false
         searchSurface.wantsLayer = true
         searchSurface.layer?.cornerRadius = 33
-        let center = NSView()
+        let center = HomeSearchGroup()
+        homeCenter = center
         center.translatesAutoresizingMaskIntoConstraints = false
         homeView.addSubview(center)
         center.addSubview(globe)
@@ -1072,9 +1092,10 @@ private final class TabRow: NSView {
         center.addSubview(loadErrorLabel)
         let preferredWidth = center.widthAnchor.constraint(equalToConstant: 660)
         preferredWidth.priority = .defaultHigh
+        homeCenterTop = center.topAnchor.constraint(equalTo: homeView.topAnchor, constant: 10)
         NSLayoutConstraint.activate([
             center.centerXAnchor.constraint(equalTo: homeView.centerXAnchor),
-            center.topAnchor.constraint(equalTo: homeView.topAnchor, constant: 10),
+            homeCenterTop,
             preferredWidth,
             center.widthAnchor.constraint(lessThanOrEqualTo: homeView.widthAnchor, constant: -44),
             center.heightAnchor.constraint(equalToConstant: 208),
@@ -1100,17 +1121,78 @@ private final class TabRow: NSView {
         widgetCanvas = WidgetCanvas(frame: NSRect(x: 0, y: 0, width: 900, height: 680))
         widgetCanvas.activate = { [weak self] kind in self?.activateWidget(kind) }
         widgetCanvas.submitCodex = { [weak self] prompt in self?.launchCodexWidget(prompt: prompt) }
-        widgetCanvas.add = { [weak self] in self?.showAddWidget() }
         scroll.documentView = widgetCanvas
-        homeView.addSubview(scroll)
+        homeView.addSubview(scroll, positioned: .below, relativeTo: center)
         NSLayoutConstraint.activate([
             scroll.leadingAnchor.constraint(equalTo: homeView.leadingAnchor, constant: 16),
             scroll.trailingAnchor.constraint(equalTo: homeView.trailingAnchor, constant: -16),
-            scroll.topAnchor.constraint(equalTo: center.bottomAnchor, constant: 6),
+            scroll.topAnchor.constraint(equalTo: homeView.topAnchor),
             scroll.bottomAnchor.constraint(equalTo: homeView.bottomAnchor, constant: -8)
         ])
         widgetCanvas.show(profile: activeSpace.saved.id)
+        installHomeSearchDragMonitor()
+        DispatchQueue.main.async { [weak self] in self?.restoreHomeSearchPosition() }
         refreshGoogleWidgets()
+    }
+
+    private var homeSearchPositionKey: String {
+        "webbyHomeSearchPosition.\(activeSpace.saved.id.uuidString)"
+    }
+
+    private var homeSearchMaximumTop: CGFloat {
+        guard homeView != nil, homeCenter != nil else { return 10 }
+        return max(10, homeView.bounds.height - max(208, homeCenter.bounds.height) - 12)
+    }
+
+    private func restoreHomeSearchPosition() {
+        guard homeCenterTop != nil, !homeSearchIsDragging else { return }
+        let fraction = min(1, max(0, UserDefaults.standard.double(forKey: homeSearchPositionKey)))
+        homeCenterTop.constant = 10 + CGFloat(fraction) * (homeSearchMaximumTop - 10)
+    }
+
+    private func installHomeSearchDragMonitor() {
+        homeSearchDragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            guard let self, event.window === self.window, self.homeSearchSurface != nil else { return event }
+            switch event.type {
+            case .leftMouseDown:
+                let point = self.homeSearchSurface.convert(event.locationInWindow, from: nil)
+                if !self.homeView.isHidden && self.homeSearchSurface.bounds.contains(point) {
+                    self.homeSearchDragOrigin = event.locationInWindow
+                    self.homeSearchDragTop = self.homeCenterTop.constant
+                } else { self.homeSearchDragOrigin = nil }
+                self.homeSearchIsDragging = false
+            case .leftMouseDragged:
+                guard let origin = self.homeSearchDragOrigin else { return event }
+                let dx = event.locationInWindow.x - origin.x
+                let dy = event.locationInWindow.y - origin.y
+                if !self.homeSearchIsDragging {
+                    guard abs(dy) > 6, abs(dy) > abs(dx) * 1.15 else { return event }
+                    self.homeSearchIsDragging = true
+                    self.suggestions.close()
+                    let draft = self.homeSearchField.currentEditor()?.string ?? self.homeSearchField.stringValue
+                    self.homeSearchField.abortEditing()
+                    self.homeSearchField.stringValue = draft
+                    self.window.makeFirstResponder(nil)
+                }
+                // AppKit window coordinates increase upward; the top constraint increases downward.
+                self.homeCenterTop.constant = min(self.homeSearchMaximumTop,
+                                                  max(10, self.homeSearchDragTop - dy))
+                self.homeView.layoutSubtreeIfNeeded()
+                return nil
+            case .leftMouseUp:
+                defer {
+                    self.homeSearchDragOrigin = nil
+                    self.homeSearchIsDragging = false
+                }
+                guard self.homeSearchIsDragging else { return event }
+                let travel = max(1, self.homeSearchMaximumTop - 10)
+                let fraction = (self.homeCenterTop.constant - 10) / travel
+                UserDefaults.standard.set(Double(fraction), forKey: self.homeSearchPositionKey)
+                return nil
+            default: break
+            }
+            return event
+        }
     }
 
     private func chooseGoogleClient() {
@@ -1289,6 +1371,7 @@ private final class TabRow: NSView {
     }
 
     private func showAddWidget() {
+        showBrowserWindow()
         let missing = WebbyWidget.allCases.filter { $0.googleService == nil && !widgetCanvas.has($0) }
         guard !missing.isEmpty else { return }
         let alert = NSAlert()
@@ -1465,6 +1548,7 @@ private final class TabRow: NSView {
         activeSpaceIndex = next
         BrowserTheme.activate(activeSpace.saved.id)
         widgetCanvas?.show(profile: activeSpace.saved.id)
+        restoreHomeSearchPosition()
         lastWidgetRefresh.removeValue(forKey: activeSpace.saved.id)
         updateSpaceLabel()
         showCurrentIndicator()
@@ -1766,6 +1850,7 @@ private final class TabRow: NSView {
         activeSpaceIndex = index
         BrowserTheme.activate(activeSpace.saved.id)
         widgetCanvas?.show(profile: activeSpace.saved.id)
+        restoreHomeSearchPosition()
         lastWidgetRefresh.removeValue(forKey: activeSpace.saved.id)
         if tabs.isEmpty { _ = restorePinnedTabs() }
         for tab in tabs { tab.terminalView?.applyTheme(BrowserTheme.profile) }
@@ -2315,6 +2400,7 @@ private final class TabRow: NSView {
                 BrowserTheme.activate(activeSpace.saved.id)
                 if changedProfile {
                     widgetCanvas?.show(profile: activeSpace.saved.id)
+                    restoreHomeSearchPosition()
                     lastWidgetRefresh.removeValue(forKey: activeSpace.saved.id)
                 }
             }

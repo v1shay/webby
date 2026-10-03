@@ -22,6 +22,7 @@ import UniformTypeIdentifiers
 @MainActor final class BrowserMenuBar: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let showBrowser: () -> Void
+    private let addWidget: () -> Void
     private let currentSpaceName: () -> String
     private let importChrome: () -> Void
     private let deleteProfile: () -> Void
@@ -42,7 +43,8 @@ import UniformTypeIdentifiers
     private var colorWells: [NSColorWell] = []
     private var preview = CAGradientLayer()
 
-    init(showBrowser: @escaping () -> Void, currentSpaceName: @escaping () -> String,
+    init(showBrowser: @escaping () -> Void, addWidget: @escaping () -> Void,
+         currentSpaceName: @escaping () -> String,
          importChrome: @escaping () -> Void,
          deleteProfile: @escaping () -> Void,
          openBookmarks: @escaping () -> Void, openHistory: @escaping () -> Void,
@@ -55,6 +57,7 @@ import UniformTypeIdentifiers
          disconnectGoogle: @escaping (GoogleService) -> Void,
          googleConnected: @escaping (GoogleService) -> Bool) {
         self.showBrowser = showBrowser
+        self.addWidget = addWidget
         self.currentSpaceName = currentSpaceName
         self.importChrome = importChrome
         self.deleteProfile = deleteProfile
@@ -88,6 +91,8 @@ import UniformTypeIdentifiers
         menu.removeAllItems()
         let show = menu.addItem(withTitle: "Show Browser", action: #selector(showBrowserAction), keyEquivalent: "")
         show.target = self
+        let widget = menu.addItem(withTitle: "Add Widget…", action: #selector(addWidgetAction), keyEquivalent: "")
+        widget.target = self
         menu.addItem(.separator())
 
         let profileItem = NSMenuItem(title: "Gradient for \(currentSpaceName())", action: nil, keyEquivalent: "")
@@ -198,6 +203,7 @@ import UniformTypeIdentifiers
     }
 
     @objc private func showBrowserAction() { showBrowser() }
+    @objc private func addWidgetAction() { addWidget() }
     @objc private func chooseGoogleClientAction() { chooseGoogleClient() }
     @objc private func connectGoogleAction(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let service = GoogleService(rawValue: raw) else { return }
