@@ -69,8 +69,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>Webby</string>
   <key>CFBundleIconFile</key><string>Webby</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>51</string>
-  <key>CFBundleShortVersionString</key><string>3.7.2</string>
+  <key>CFBundleVersion</key><string>52</string>
+  <key>CFBundleShortVersionString</key><string>3.7.3</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

@@ -298,7 +298,7 @@ private final class TabRow: NSView {
             self.owner?.showTabPreview(for: self.tabID, from: self)
         }
         hoverPreviewWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.85, execute: work)
     }
 
     override func mouseExited(with event: NSEvent) {

@@ -8,7 +8,6 @@ struct BrowserSuggestion {
 }
 
 private final class SuggestionRow: NSView {
-    private let iconBackground = NSView()
     private let icon = NSImageView()
     private let headline = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
@@ -41,8 +40,6 @@ private final class SuggestionRow: NSView {
         layer?.addSublayer(selectionGlow)
         separator.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
         layer?.addSublayer(separator)
-        iconBackground.wantsLayer = true
-        iconBackground.layer?.cornerRadius = 10
         icon.image = NSImage(systemSymbolName: Self.symbol(for: item.kind), accessibilityDescription: nil)
         icon.contentTintColor = accent
         icon.imageScaling = .scaleProportionallyDown
@@ -57,8 +54,7 @@ private final class SuggestionRow: NSView {
         arrow.image = NSImage(systemSymbolName: "arrow.turn.down.left", accessibilityDescription: nil)
         arrow.contentTintColor = .tertiaryLabelColor
         arrow.imageScaling = .scaleProportionallyDown
-        addSubview(iconBackground)
-        iconBackground.addSubview(icon)
+        addSubview(icon)
         addSubview(headline)
         addSubview(detail)
         addSubview(arrow)
@@ -71,8 +67,9 @@ private final class SuggestionRow: NSView {
         super.layout()
         selectionGlow.frame = bounds
         separator.frame = NSRect(x: 69, y: 0, width: max(0, bounds.width - 87), height: 0.5)
-        iconBackground.frame = NSRect(x: 13, y: 10, width: 40, height: 40)
-        icon.frame = iconBackground.bounds.insetBy(dx: hasFavicon ? 5 : 7, dy: hasFavicon ? 5 : 7)
+        icon.frame = hasFavicon
+            ? NSRect(x: 17, y: 13, width: 34, height: 34)
+            : NSRect(x: 21, y: 17, width: 26, height: 26)
         let textWidth = max(0, bounds.width - 126)
         detail.frame = NSRect(x: 69, y: 34, width: textWidth, height: 14)
         headline.frame = NSRect(x: 69, y: 13, width: textWidth, height: 20)
@@ -108,7 +105,7 @@ private final class SuggestionRow: NSView {
         hasFavicon = true
         icon.image = image
         icon.contentTintColor = nil
-        icon.frame = iconBackground.bounds.insetBy(dx: 5, dy: 5)
+        needsLayout = true
     }
 
     private func restyle() {
@@ -120,7 +117,6 @@ private final class SuggestionRow: NSView {
         layer?.borderColor = (active ? accent.withAlphaComponent(0.72)
                               : NSColor.white.withAlphaComponent(0.29)).cgColor
         separator.isHidden = emphasized
-        iconBackground.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.15).cgColor
         arrow.contentTintColor = active ? accent : .tertiaryLabelColor
     }
 
