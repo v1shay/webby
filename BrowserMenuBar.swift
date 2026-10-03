@@ -23,6 +23,7 @@ import UniformTypeIdentifiers
     private let statusItem: NSStatusItem
     private let showBrowser: () -> Void
     private let addWidget: () -> Void
+    private let resetWidgets: () -> Void
     private let currentSpaceName: () -> String
     private let importChrome: () -> Void
     private let deleteProfile: () -> Void
@@ -44,6 +45,7 @@ import UniformTypeIdentifiers
     private var preview = CAGradientLayer()
 
     init(showBrowser: @escaping () -> Void, addWidget: @escaping () -> Void,
+         resetWidgets: @escaping () -> Void,
          currentSpaceName: @escaping () -> String,
          importChrome: @escaping () -> Void,
          deleteProfile: @escaping () -> Void,
@@ -58,6 +60,7 @@ import UniformTypeIdentifiers
          googleConnected: @escaping (GoogleService) -> Bool) {
         self.showBrowser = showBrowser
         self.addWidget = addWidget
+        self.resetWidgets = resetWidgets
         self.currentSpaceName = currentSpaceName
         self.importChrome = importChrome
         self.deleteProfile = deleteProfile
@@ -93,6 +96,8 @@ import UniformTypeIdentifiers
         show.target = self
         let widget = menu.addItem(withTitle: "Add Widget…", action: #selector(addWidgetAction), keyEquivalent: "")
         widget.target = self
+        let reset = menu.addItem(withTitle: "Reset Widget Positions", action: #selector(resetWidgetsAction), keyEquivalent: "")
+        reset.target = self
         menu.addItem(.separator())
 
         let profileItem = NSMenuItem(title: "Gradient for \(currentSpaceName())", action: nil, keyEquivalent: "")
@@ -204,6 +209,7 @@ import UniformTypeIdentifiers
 
     @objc private func showBrowserAction() { showBrowser() }
     @objc private func addWidgetAction() { addWidget() }
+    @objc private func resetWidgetsAction() { resetWidgets() }
     @objc private func chooseGoogleClientAction() { chooseGoogleClient() }
     @objc private func connectGoogleAction(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let service = GoogleService(rawValue: raw) else { return }

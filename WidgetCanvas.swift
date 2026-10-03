@@ -4,8 +4,8 @@ import AppKit
     override func layout() {
         super.layout()
         guard let canvas = documentView as? WidgetCanvas else { return }
-        let wanted = NSSize(width: max(1010, contentView.bounds.width),
-                            height: max(680, contentView.bounds.height, canvas.contentHeight))
+        let wanted = contentView.bounds.size
+        guard wanted.width > 80, wanted.height > 80 else { return }
         if canvas.frame.size != wanted { canvas.setFrameSize(wanted) }
     }
 }
@@ -63,8 +63,8 @@ private struct WidgetPlacement: Codable {
     private var profile = UUID()
     private var placements: [WidgetPlacement] = []
     private var cards: [WebbyWidget: GlassWidgetCard] = [:]
+    private var draggingCard: GlassWidgetCard?
     private var horizontalInset: CGFloat { max(0, (bounds.width - 1010) / 2) }
-    var contentHeight: CGFloat { placements.map { $0.y + $0.height + 24 }.max() ?? 680 }
 
     override var isFlipped: Bool { true }
 
@@ -112,6 +112,14 @@ private struct WidgetPlacement: Codable {
                                           y: 50 + next * 28, width: 260, height: 190))
         save()
         rebuild()
+    }
+
+    func resetPositions() {
+        let standard = Dictionary(uniqueKeysWithValues: Self.defaults().map { ($0.kind, $0) })
+        placements = placements.map { standard[$0.kind] ?? $0 }
+        save()
+        rebuild()
+        enclosingScrollView?.contentView.scroll(to: .zero)
     }
 
     func removeWidget(_ kind: WebbyWidget) {
@@ -174,17 +182,47 @@ private struct WidgetPlacement: Codable {
         needsLayout = true
     }
 
+    private func reachableFrame(for placement: WidgetPlacement) -> NSRect {
+        let width = placement.width
+        let height = placement.height
+        let visibleX = min(32, width)
+        let visibleY = min(32, height)
+        let x = min(max(visibleX - width, placement.x + horizontalInset), bounds.width - visibleX)
+        let y = min(max(visibleY - height, placement.y), bounds.height - visibleY)
+        return NSRect(x: x, y: y, width: width, height: height)
+    }
+
     override func layout() {
         super.layout()
-        // Preserve user positions on resize. Keep each card reachable even when
-        // the window becomes narrower than the original canvas.
+        // Saved positions may come from a larger window. Keep a grab area
+        // visible without confining the whole widget to the viewport.
         for (kind, card) in cards {
             if card.isInteracting { continue }
-            var f = card.frame
             if let placement = placements.first(where: { $0.kind == kind }) {
-                f.origin.x = placement.x + horizontalInset
+                card.frame = reachableFrame(for: placement)
             }
-            card.frame = f
+        }
+    }
+
+    func handleDragEvent(_ event: NSEvent) -> Bool {
+        switch event.type {
+        case .leftMouseDown:
+            let point = convert(event.locationInWindow, from: nil)
+            guard let card = subviews.reversed().compactMap({ $0 as? GlassWidgetCard })
+                .first(where: { $0.canBeginDrag(at: point) }) else { return false }
+            draggingCard = card
+            card.mouseDown(with: event)
+            return true
+        case .leftMouseDragged:
+            guard let draggingCard else { return false }
+            draggingCard.mouseDragged(with: event)
+            return true
+        case .leftMouseUp:
+            guard let draggingCard else { return false }
+            self.draggingCard = nil
+            draggingCard.mouseUp(with: event)
+            return true
+        default: return false
         }
     }
 
@@ -224,6 +262,7 @@ private struct WidgetPlacement: Codable {
     private var dragStart = NSPoint.zero
     private var originalFrame = NSRect.zero
     private var resizing = false
+    private var didDrag = false
     var isInteracting: Bool { originalFrame != .zero }
 
     init(kind: WebbyWidget, frame: NSRect) {
@@ -572,16 +611,14 @@ private struct WidgetPlacement: Codable {
     override func mouseDown(with event: NSEvent) {
         guard let canvas = superview else { return }
         let point = convert(event.locationInWindow, from: nil)
-        if kind == .codex && event.clickCount == 1 && point.y < bounds.height - 44 &&
-            !(point.x >= bounds.width - 32 && point.y <= 32) {
-            submitCodex?("")
+        if event.clickCount > 1 {
+            if kind != .codex { activate?() }
             return
         }
-        if event.clickCount == 2 { activate?(); return }
         resizing = point.x >= bounds.width - 32 && point.y <= 32
-        guard resizing || point.y >= bounds.height - 44 else { return }
         dragStart = canvas.convert(event.locationInWindow, from: nil)
         originalFrame = frame
+        didDrag = false
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -590,17 +627,28 @@ private struct WidgetPlacement: Codable {
         return hit == nil ? nil : self
     }
 
+    func canBeginDrag(at canvasPoint: NSPoint) -> Bool {
+        let point = convert(canvasPoint, from: superview)
+        guard bounds.contains(point) else { return false }
+        for control in [action, close, promptField, promptButton] where !control.isHidden {
+            if control.bounds.contains(control.convert(point, from: self)) { return false }
+        }
+        return true
+    }
+
     override func mouseDragged(with event: NSEvent) {
         guard let canvas = superview, originalFrame != .zero else { return }
         let current = canvas.convert(event.locationInWindow, from: nil)
         let dx = current.x - dragStart.x
         let dy = current.y - dragStart.y
+        guard didDrag || hypot(dx, dy) > 3 else { return }
+        didDrag = true
         if resizing {
             frame.size = NSSize(width: max(64, originalFrame.width + dx),
                                 height: max(64, originalFrame.height + dy))
         } else {
-            frame.origin = NSPoint(x: max(0, originalFrame.minX + dx),
-                                   y: max(36, originalFrame.minY + dy))
+            frame.origin = NSPoint(x: originalFrame.minX + dx,
+                                   y: originalFrame.minY + dy)
         }
         needsLayout = true
     }
@@ -608,7 +656,9 @@ private struct WidgetPlacement: Codable {
     override func mouseUp(with event: NSEvent) {
         guard originalFrame != .zero else { return }
         originalFrame = .zero
-        didMoveOrResize?(frame)
+        if didDrag { didMoveOrResize?(frame) }
+        else if kind == .codex { submitCodex?("") }
+        didDrag = false
     }
 
     @objc private func actionPressed() { activate?() }

@@ -535,6 +535,7 @@ private final class HomeSearchGroup: NSView {
     private var homeCenter: NSView!
     private var homeCenterTop: NSLayoutConstraint!
     private var homeSearchDragMonitor: Any?
+    private var widgetDragMonitor: Any?
     private var homeSearchDragOrigin: NSPoint?
     private var homeSearchDragTop: CGFloat = 10
     private var homeSearchIsDragging = false
@@ -727,6 +728,7 @@ private final class HomeSearchGroup: NSView {
         DispatchQueue.main.async { [weak self] in self?.sizeWidgetCanvas() }
         menuBar = BrowserMenuBar(showBrowser: { [weak self] in self?.showBrowserWindow() },
                                  addWidget: { [weak self] in self?.showAddWidget() },
+                                 resetWidgets: { [weak self] in self?.widgetCanvas?.resetPositions() },
                                  currentSpaceName: { [weak self] in self?.activeSpace.saved.name ?? "Profile" },
                                  importChrome: { [weak self] in self?.showChromeImport() },
                                  deleteProfile: { [weak self] in self?.showDeleteProfile() },
@@ -771,7 +773,9 @@ private final class HomeSearchGroup: NSView {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
-        window.isMovableByWindowBackground = true
+        // Background window dragging steals drag gestures from widgets and the
+        // movable home search surface. The title bar remains draggable.
+        window.isMovableByWindowBackground = false
         window.acceptsMouseMovedEvents = true
         window.minSize = NSSize(width: 750, height: 430)
         window.center()
@@ -798,10 +802,7 @@ private final class HomeSearchGroup: NSView {
     }
 
     private func sizeWidgetCanvas() {
-        guard widgetCanvas != nil, pageArea != nil else { return }
-        pageArea.layoutSubtreeIfNeeded()
-        widgetCanvas.setFrameSize(NSSize(width: max(900, pageArea.bounds.width - 32),
-                                         height: max(680, pageArea.bounds.height - 238)))
+        widgetCanvas?.enclosingScrollView?.needsLayout = true
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) {
@@ -811,6 +812,7 @@ private final class HomeSearchGroup: NSView {
         tabPreview.hide()
         if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
         if let homeSearchDragMonitor { NSEvent.removeMonitor(homeSearchDragMonitor) }
+        if let widgetDragMonitor { NSEvent.removeMonitor(widgetDragMonitor) }
         for space in spaces { for tab in space.tabs { tab.terminalView?.stop() } }
         pendingSpaceSave?.cancel()
         let snapshot = spaces.map(\.saved)
@@ -1114,9 +1116,8 @@ private final class HomeSearchGroup: NSView {
         let scroll = NSScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = true
-        scroll.autohidesScrollers = true
+        scroll.hasVerticalScroller = false
+        scroll.hasHorizontalScroller = false
         scroll.borderType = .noBorder
         widgetCanvas = WidgetCanvas(frame: NSRect(x: 0, y: 0, width: 900, height: 680))
         widgetCanvas.activate = { [weak self] kind in self?.activateWidget(kind) }
@@ -1130,6 +1131,10 @@ private final class HomeSearchGroup: NSView {
             scroll.bottomAnchor.constraint(equalTo: homeView.bottomAnchor, constant: -8)
         ])
         widgetCanvas.show(profile: activeSpace.saved.id)
+        widgetDragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            guard let self, event.window === self.window, !self.homeView.isHidden else { return event }
+            return self.widgetCanvas.handleDragEvent(event) ? nil : event
+        }
         installHomeSearchDragMonitor()
         DispatchQueue.main.async { [weak self] in self?.restoreHomeSearchPosition() }
         refreshGoogleWidgets()
