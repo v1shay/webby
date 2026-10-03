@@ -295,6 +295,7 @@ private struct WidgetPlacement: Codable {
             label.textColor = .secondaryLabelColor
         }
         for symbol in hourSymbols { symbol.imageScaling = .scaleProportionallyUpOrDown }
+        promptField.cell = VerticallyCenteredPromptCell(textCell: "")
         promptField.placeholderString = "Ask Codex…"
         promptField.font = .systemFont(ofSize: 12)
         promptField.isBordered = false
@@ -538,7 +539,7 @@ private struct WidgetPlacement: Codable {
             if !compact {
                 promptGlass.isHidden = false; promptField.isHidden = false; promptButton.isHidden = false
                 promptGlass.frame = NSRect(x: 16, y: 14, width: width - 32, height: 38)
-                promptField.frame = NSRect(x: 27, y: 22, width: width - 74, height: 23)
+                promptField.frame = NSRect(x: 27, y: 14, width: width - 74, height: 38)
                 promptButton.frame = NSRect(x: width - 48, y: 19, width: 25, height: 27)
             }
             return
@@ -617,6 +618,28 @@ private struct WidgetPlacement: Codable {
         let prompt = promptField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         promptField.stringValue = ""
         submitCodex?(prompt)
+    }
+}
+
+private final class VerticallyCenteredPromptCell: NSTextFieldCell {
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        var content = super.drawingRect(forBounds: rect)
+        let textHeight = min(content.height, cellSize.height)
+        content.origin.y += (content.height - textHeight) / 2
+        content.size.height = textHeight
+        return content
+    }
+
+    override func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText,
+                       delegate anObject: Any?, event theEvent: NSEvent?) {
+        super.edit(withFrame: drawingRect(forBounds: rect), in: controlView, editor: textObj,
+                   delegate: anObject, event: theEvent)
+    }
+
+    override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText,
+                         delegate anObject: Any?, start selStart: Int, length selLength: Int) {
+        super.select(withFrame: drawingRect(forBounds: rect), in: controlView, editor: textObj,
+                     delegate: anObject, start: selStart, length: selLength)
     }
 }
 
