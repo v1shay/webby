@@ -1502,7 +1502,8 @@ private final class TabRow: NSView {
             pageArea.layer?.add(transition, forKey: "spaceSwitch")
         }
         for tab in tabs where tab.id == activeTabID {
-            tab.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", completionHandler: nil)
+            tab.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
+                                            in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
         }
         for tab in tabs {
             if !tab.isFloating {
@@ -1824,6 +1825,13 @@ private final class TabRow: NSView {
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "browserVideoFloat" {
+            guard message.body as? String == "video-pip-fallback",
+                  let webView = message.webView,
+                  let tab = tab(for: webView), !tab.isFloating else { return }
+            floatTab(tab)
+            return
+        }
         if message.name == "browserLinkPreview" {
             showLinkPreview(message)
             return
@@ -2027,7 +2035,8 @@ private final class TabRow: NSView {
         suggestions.close()
         linkPreview?.close()
         if let previous = activeTab, previous.id != tab.id {
-            previous.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", completionHandler: nil)
+            previous.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
+                                                 in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
         }
         if let previous = activeTab, (previous.webView == nil || previous.showsSearchView) && !previous.isTerminal {
             previous.searchDraft = homeSearchField.currentEditor()?.string ?? homeSearchField.stringValue
@@ -2635,8 +2644,11 @@ private final class TabRow: NSView {
         """, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
             if let scriptURL = Bundle.main.url(forResource: "VideoControls", withExtension: "js"),
                let script = try? String(contentsOf: scriptURL, encoding: .utf8) {
+                let videoWorld = WKContentWorld.world(name: "WebbyVideo")
+                configuration.userContentController.add(self, contentWorld: videoWorld, name: "browserVideoFloat")
                 configuration.userContentController.addUserScript(
-                    WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+                    WKUserScript(source: script, injectionTime: .atDocumentEnd,
+                                 forMainFrameOnly: false, in: videoWorld))
             }
         }
         GlassPageInjector.install(into: configuration)
