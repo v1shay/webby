@@ -137,8 +137,9 @@ import UniformTypeIdentifiers
         edit.target = self
         menu.addItem(.separator())
         let experiment = menu.addItem(withTitle: "Experimental: Fuse All Profile Tabs",
-                                      action: #selector(toggleExperiment), keyEquivalent: "")
+                                      action: #selector(toggleExperiment), keyEquivalent: "f")
         experiment.target = self
+        experiment.keyEquivalentModifierMask = [.command]
         experiment.state = BrowserExperiment.cyclesNewTabProfiles ? .on : .off
         let terminal = menu.addItem(withTitle: "Open Terminal in This Tab",
                                     action: #selector(openTerminalAction), keyEquivalent: "")

@@ -624,6 +624,7 @@ private final class HomeSearchGroup: NSView {
     private var fastRule: WKContentRuleList?
     private var fastModeEnabled = true
     private var fastModeItem: NSMenuItem?
+    private weak var fuseMenuItem: NSMenuItem?
     private var menuBar: BrowserMenuBar?
     private let suggestions = BrowserSuggestionPopup()
     private let tabPreview = TabPreviewPopover()
@@ -655,6 +656,7 @@ private final class HomeSearchGroup: NSView {
     }
 
     private func experimentalModeChanged() {
+        fuseMenuItem?.state = BrowserExperiment.cyclesNewTabProfiles ? .on : .off
         tabPreview.hide()
         linkPreview?.close()
         let enabled = BrowserExperiment.cyclesNewTabProfiles
@@ -3750,6 +3752,11 @@ private final class HomeSearchGroup: NSView {
         reload.target = self
         let sidebarItem = viewMenu.addItem(withTitle: "Toggle Tabs Sidebar", action: #selector(toggleSidebar), keyEquivalent: "\\")
         sidebarItem.target = self
+        let fuse = viewMenu.addItem(withTitle: "Fuse All Profile Tabs", action: #selector(toggleFuseMode), keyEquivalent: "f")
+        fuse.target = self
+        fuse.keyEquivalentModifierMask = [.command]
+        fuse.state = BrowserExperiment.cyclesNewTabProfiles ? .on : .off
+        fuseMenuItem = fuse
         viewMenu.addItem(NSMenuItem.separator())
         for number in 1...9 {
             let item = viewMenu.addItem(withTitle: number == 9 ? "Show Last Tab" : "Show Tab \(number)",
@@ -3766,6 +3773,11 @@ private final class HomeSearchGroup: NSView {
         report.target = self
         view.submenu = viewMenu; main.addItem(view)
         NSApplication.shared.mainMenu = main
+    }
+
+    @objc private func toggleFuseMode() {
+        BrowserExperiment.cyclesNewTabProfiles.toggle()
+        experimentalModeChanged()
     }
 
     @objc private func toggleFastMode(_ sender: NSMenuItem) {
