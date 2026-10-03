@@ -34,6 +34,10 @@ import UniformTypeIdentifiers
     private let profiles: () -> [(UUID, String)]
     private let openTerminal: () -> Void
     private let experimentChanged: () -> Void
+    private let chooseGoogleClient: () -> Void
+    private let connectGoogle: (GoogleService) -> Void
+    private let disconnectGoogle: (GoogleService) -> Void
+    private let googleConnected: (GoogleService) -> Bool
     private var settingsWindow: NSWindow?
     private var colorWells: [NSColorWell] = []
     private var preview = CAGradientLayer()
@@ -45,7 +49,11 @@ import UniformTypeIdentifiers
          importPasswords: @escaping () -> Void, showPasswords: @escaping () -> Void,
          importSignIns: @escaping () -> Void, fillPassword: @escaping () -> Void,
          profiles: @escaping () -> [(UUID, String)], openTerminal: @escaping () -> Void,
-         experimentChanged: @escaping () -> Void) {
+         experimentChanged: @escaping () -> Void,
+         chooseGoogleClient: @escaping () -> Void,
+         connectGoogle: @escaping (GoogleService) -> Void,
+         disconnectGoogle: @escaping (GoogleService) -> Void,
+         googleConnected: @escaping (GoogleService) -> Bool) {
         self.showBrowser = showBrowser
         self.currentSpaceName = currentSpaceName
         self.importChrome = importChrome
@@ -59,6 +67,10 @@ import UniformTypeIdentifiers
         self.profiles = profiles
         self.openTerminal = openTerminal
         self.experimentChanged = experimentChanged
+        self.chooseGoogleClient = chooseGoogleClient
+        self.connectGoogle = connectGoogle
+        self.disconnectGoogle = disconnectGoogle
+        self.googleConnected = googleConnected
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
         statusItem.button?.image = Self.symbol()
@@ -145,6 +157,25 @@ import UniformTypeIdentifiers
         addGlassSlider(to: menu, title: "Top Bar", value: BrowserGlass.topTransparency, tag: 1)
         addGlassSlider(to: menu, title: "Sidebar", value: BrowserGlass.sidebarTransparency, tag: 2)
         menu.addItem(.separator())
+        let googleRoot = NSMenuItem(title: "Google Widgets for \(currentSpaceName())", action: nil, keyEquivalent: "")
+        let googleMenu = NSMenu(title: "Google Widgets")
+        let client = googleMenu.addItem(withTitle: "Choose Desktop OAuth Client…", action: #selector(chooseGoogleClientAction), keyEquivalent: "")
+        client.target = self
+        googleMenu.addItem(.separator())
+        for service in GoogleService.allCases {
+            let connected = googleConnected(service)
+            let serviceTitle: String
+            switch service { case .calendar: serviceTitle = "Calendar"; case .gmail: serviceTitle = "Gmail"; case .drive: serviceTitle = "Drive" }
+            let title = "\(connected ? "Disconnect" : "Connect") \(serviceTitle)"
+            let item = googleMenu.addItem(withTitle: title,
+                                          action: connected ? #selector(disconnectGoogleAction(_:)) : #selector(connectGoogleAction(_:)),
+                                          keyEquivalent: "")
+            item.target = self
+            item.representedObject = service.rawValue
+        }
+        googleRoot.submenu = googleMenu
+        menu.addItem(googleRoot)
+        menu.addItem(.separator())
         let importItem = menu.addItem(withTitle: "Import Chrome Profiles…", action: #selector(importChromeAction), keyEquivalent: "")
         importItem.target = self
         let deleteItem = menu.addItem(withTitle: "Delete Browser Profile…", action: #selector(deleteProfileAction), keyEquivalent: "")
@@ -167,6 +198,15 @@ import UniformTypeIdentifiers
     }
 
     @objc private func showBrowserAction() { showBrowser() }
+    @objc private func chooseGoogleClientAction() { chooseGoogleClient() }
+    @objc private func connectGoogleAction(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let service = GoogleService(rawValue: raw) else { return }
+        connectGoogle(service)
+    }
+    @objc private func disconnectGoogleAction(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let service = GoogleService(rawValue: raw) else { return }
+        disconnectGoogle(service)
+    }
     @objc private func toggleExperiment() {
         BrowserExperiment.cyclesNewTabProfiles.toggle()
         experimentChanged()

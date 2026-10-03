@@ -558,5 +558,9 @@ final class NativeTerminalPane: NSVisualEffectView {
     }
 
     func focus() { window?.makeFirstResponder(screen) }
+    func sendCommand(_ command: String) {
+        guard session.running else { return }
+        session.send(Data((command + "\r").utf8))
+    }
     func stop() { session.stop(); screen.clear() }
 }

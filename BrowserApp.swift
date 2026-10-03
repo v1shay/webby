@@ -524,6 +524,9 @@ private final class TabRow: NSView {
     private var homeSearchField: NSTextField!
     private var loadErrorLabel: NSTextField!
     private var homeView: NSView!
+    private var widgetCanvas: WidgetCanvas!
+    private var terminalCommandOnOpen: [UUID: String] = [:]
+    private var lastWidgetRefresh: [UUID: Date] = [:]
     private var globe: AnimatedGlobeView!
     private var homeSearchSurface: GlassAddressSurface!
     private var chromeToggle: GlassButton!
@@ -707,6 +710,7 @@ private final class TabRow: NSView {
             updateSpaceLabel()
         }
         window.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.async { [weak self] in self?.sizeWidgetCanvas() }
         menuBar = BrowserMenuBar(showBrowser: { [weak self] in self?.showBrowserWindow() },
                                  currentSpaceName: { [weak self] in self?.activeSpace.saved.name ?? "Profile" },
                                  importChrome: { [weak self] in self?.showChromeImport() },
@@ -719,16 +723,18 @@ private final class TabRow: NSView {
                                  fillPassword: { [weak self] in self?.fillSavedPasswordForCurrentSite() },
                                  profiles: { [weak self] in self?.spaces.map { ($0.saved.id, $0.saved.name) } ?? [] },
                                  openTerminal: { [weak self] in self?.toggleTerminal() },
-                                 experimentChanged: { [weak self] in self?.experimentalModeChanged() })
+                                 experimentChanged: { [weak self] in self?.experimentalModeChanged() },
+                                 chooseGoogleClient: { [weak self] in self?.chooseGoogleClient() },
+                                 connectGoogle: { [weak self] service in self?.connectGoogle(service) },
+                                 disconnectGoogle: { [weak self] service in self?.disconnectGoogle(service) },
+                                 googleConnected: { [weak self] service in
+                                     guard let self else { return false }
+                                     return GoogleWorkspace.shared.isConnected(service, profile: self.activeSpace.saved.id)
+                                 })
         hideTrafficLights()
         themeChanged()
         windowShownAt = ProcessInfo.processInfo.systemUptime
         app.activate(ignoringOtherApps: true)
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.activeWebView == nil, !self.terminalMode,
-                  self.homeSearchField.currentEditor() != nil else { return }
-            self.presentSuggestions(for: self.homeSearchField)
-        }
         installChromeMonitor()
         DispatchQueue.main.async { [weak self] in self?.loadRules() }
         if saved.isEmpty {
@@ -771,6 +777,14 @@ private final class TabRow: NSView {
 
     func windowDidEnterFullScreen(_ notification: Notification) { hideTrafficLights() }
     func windowDidExitFullScreen(_ notification: Notification) { hideTrafficLights() }
+    func windowDidResize(_ notification: Notification) { sizeWidgetCanvas() }
+
+    private func sizeWidgetCanvas() {
+        guard widgetCanvas != nil, pageArea != nil else { return }
+        pageArea.layoutSubtreeIfNeeded()
+        widgetCanvas.setFrameSize(NSSize(width: max(900, pageArea.bounds.width - 32),
+                                         height: max(680, pageArea.bounds.height - 238)))
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) {
         NotificationCenter.default.removeObserver(self, name: .browserThemeChanged, object: nil)
@@ -800,6 +814,7 @@ private final class TabRow: NSView {
         suggestions.applyTheme(profile)
         toolbar.applyTheme(profile)
         downloads.applyTheme(profile)
+        widgetCanvas?.applyTheme(profile)
         for (id, row) in tabRows {
             let ownerID = tab(id: id).map { ownerSpace(for: $0).saved.id }
             let rowProfile = ownerID.map { BrowserTheme.profile(for: $0) } ?? profile
@@ -882,7 +897,7 @@ private final class TabRow: NSView {
         tabStack.wantsLayer = true
         tabStack.layer?.masksToBounds = true
         tabStack.translatesAutoresizingMaskIntoConstraints = false
-        let scroll = NSScrollView()
+        let scroll = WidgetCanvasScrollView()
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
@@ -1059,7 +1074,7 @@ private final class TabRow: NSView {
         preferredWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
             center.centerXAnchor.constraint(equalTo: homeView.centerXAnchor),
-            center.centerYAnchor.constraint(equalTo: homeView.centerYAnchor, constant: -22),
+            center.topAnchor.constraint(equalTo: homeView.topAnchor, constant: 10),
             preferredWidth,
             center.widthAnchor.constraint(lessThanOrEqualTo: homeView.widthAnchor, constant: -44),
             center.heightAnchor.constraint(equalToConstant: 208),
@@ -1075,6 +1090,216 @@ private final class TabRow: NSView {
             loadErrorLabel.trailingAnchor.constraint(equalTo: center.trailingAnchor, constant: -12),
             loadErrorLabel.topAnchor.constraint(equalTo: searchSurface.bottomAnchor, constant: 12)
         ])
+        let scroll = NSScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        widgetCanvas = WidgetCanvas(frame: NSRect(x: 0, y: 0, width: 900, height: 680))
+        widgetCanvas.activate = { [weak self] kind in self?.activateWidget(kind) }
+        widgetCanvas.add = { [weak self] in self?.showAddWidget() }
+        scroll.documentView = widgetCanvas
+        homeView.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: homeView.leadingAnchor, constant: 16),
+            scroll.trailingAnchor.constraint(equalTo: homeView.trailingAnchor, constant: -16),
+            scroll.topAnchor.constraint(equalTo: center.bottomAnchor, constant: 6),
+            scroll.bottomAnchor.constraint(equalTo: homeView.bottomAnchor, constant: -8)
+        ])
+        widgetCanvas.show(profile: activeSpace.saved.id)
+        refreshGoogleWidgets()
+    }
+
+    private func chooseGoogleClient() {
+        let panel = NSOpenPanel()
+        panel.allowedFileTypes = ["json"]
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the Desktop OAuth client JSON downloaded from Google Cloud. Webby stores only its client ID."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try GoogleWorkspace.shared.configureClient(from: url)
+            refreshGoogleWidgets(force: true)
+        } catch { showGoogleError(error) }
+    }
+
+    private func connectGoogle(_ service: GoogleService) {
+        if !GoogleWorkspace.shared.hasClient {
+            chooseGoogleClient()
+            guard GoogleWorkspace.shared.hasClient else { return }
+        }
+        let profile = activeSpace.saved.id
+        widgetCanvas?.set(widgetKind(service), subtitle: "Connecting in your browser…", lines: [], busy: true)
+        GoogleWorkspace.shared.connect(service, profile: profile) { [weak self] result in
+            guard let self else { return }
+            if case .failure(let error) = result { self.showGoogleError(error) }
+            if self.activeSpace.saved.id == profile { self.refreshGoogleWidgets(force: true) }
+        }
+    }
+
+    private func disconnectGoogle(_ service: GoogleService) {
+        GoogleWorkspace.shared.disconnect(service, profile: activeSpace.saved.id)
+        refreshGoogleWidgets(force: true)
+    }
+
+    private func refreshGoogleWidgets(force: Bool = false) {
+        guard widgetCanvas != nil else { return }
+        let profile = activeSpace.saved.id
+        if !force, let last = lastWidgetRefresh[profile], Date().timeIntervalSince(last) < 120 { return }
+        lastWidgetRefresh[profile] = Date()
+        for service in GoogleService.allCases {
+            let kind = widgetKind(service)
+            guard widgetCanvas.has(kind) else { continue }
+            let connected = GoogleWorkspace.shared.isConnected(service, profile: profile)
+            widgetCanvas.set(kind, subtitle: connected ? "Loading…" : "Connect this profile", lines: [], connected: connected)
+            guard connected else { continue }
+            GoogleWorkspace.shared.load(service, profile: profile) { [weak self] result in
+                guard let self, self.activeSpace.saved.id == profile else { return }
+                switch result {
+                case .success(let data): self.widgetCanvas.set(kind, subtitle: "\(data.account) · \(data.headline)", lines: data.lines, connected: true)
+                case .failure(let error): self.widgetCanvas.set(kind, subtitle: error.localizedDescription, lines: [], connected: true)
+                }
+            }
+        }
+        refreshLocalWidgets(profile: profile)
+    }
+
+    private func widgetKind(_ service: GoogleService) -> WebbyWidget {
+        switch service { case .calendar: .calendar; case .gmail: .gmail; case .drive: .drive }
+    }
+
+    private func openGoogleService(_ service: GoogleService) {
+        addTab(select: true)
+        let address: String
+        switch service {
+        case .calendar: address = "https://calendar.google.com/calendar/"
+        case .gmail: address = "https://mail.google.com/mail/"
+        case .drive: address = "https://drive.google.com/drive/"
+        }
+        navigate(address)
+    }
+
+    private func showGoogleError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Could not connect Google"
+        alert.informativeText = error.localizedDescription
+        alert.runModal()
+    }
+
+    private func refreshLocalWidgets(profile: UUID) {
+        if widgetCanvas.has(.note) {
+            let note = UserDefaults.standard.string(forKey: "webbyNote.\(profile.uuidString)") ?? ""
+            widgetCanvas.set(.note, subtitle: "Saved in this profile", lines: note.isEmpty ? ["Click Open to write a note"] : [note])
+        }
+        if widgetCanvas.has(.codex) {
+            widgetCanvas.set(.codex, subtitle: "Webby terminal", lines: ["Click Open to run Codex", "Your existing Codex login is used"])
+        }
+        if widgetCanvas.has(.weather) {
+            let city = UserDefaults.standard.string(forKey: "webbyWeatherCity.\(profile.uuidString)") ?? "San Francisco"
+            widgetCanvas.set(.weather, subtitle: city, lines: ["Loading forecast…"], busy: true)
+            Task { [weak self] in
+                do {
+                    let feed = try await WidgetFeeds.weather(city: city)
+                    guard let self, self.activeSpace.saved.id == profile else { return }
+                    self.widgetCanvas.set(.weather, subtitle: feed.subtitle, lines: feed.lines)
+                } catch {
+                    guard let self, self.activeSpace.saved.id == profile else { return }
+                    self.widgetCanvas.set(.weather, subtitle: city, lines: [error.localizedDescription])
+                }
+            }
+        }
+        if widgetCanvas.has(.stocks) {
+            let symbol = UserDefaults.standard.string(forKey: "webbyStockSymbol.\(profile.uuidString)") ?? "AAPL"
+            widgetCanvas.set(.stocks, subtitle: symbol, lines: ["Loading quote…"], busy: true)
+            Task { [weak self] in
+                do {
+                    let feed = try await WidgetFeeds.stock(symbol: symbol)
+                    guard let self, self.activeSpace.saved.id == profile else { return }
+                    self.widgetCanvas.set(.stocks, subtitle: feed.subtitle, lines: feed.lines, chart: feed.chart)
+                } catch {
+                    guard let self, self.activeSpace.saved.id == profile else { return }
+                    self.widgetCanvas.set(.stocks, subtitle: symbol, lines: [error.localizedDescription])
+                }
+            }
+        }
+    }
+
+    private func activateWidget(_ kind: WebbyWidget) {
+        if let service = kind.googleService {
+            if GoogleWorkspace.shared.isConnected(service, profile: activeSpace.saved.id) { openGoogleService(service) }
+            else { connectGoogle(service) }
+            return
+        }
+        switch kind {
+        case .weather:
+            if let city = widgetTextPrompt(title: "Weather city", value: UserDefaults.standard.string(forKey: "webbyWeatherCity.\(activeSpace.saved.id.uuidString)") ?? "San Francisco") {
+                UserDefaults.standard.set(city, forKey: "webbyWeatherCity.\(activeSpace.saved.id.uuidString)")
+                refreshLocalWidgets(profile: activeSpace.saved.id)
+            }
+        case .stocks:
+            if let symbol = widgetTextPrompt(title: "Stock symbol", value: UserDefaults.standard.string(forKey: "webbyStockSymbol.\(activeSpace.saved.id.uuidString)") ?? "AAPL") {
+                UserDefaults.standard.set(symbol.uppercased(), forKey: "webbyStockSymbol.\(activeSpace.saved.id.uuidString)")
+                refreshLocalWidgets(profile: activeSpace.saved.id)
+            }
+        case .note:
+            if let note = widgetNotePrompt(value: UserDefaults.standard.string(forKey: "webbyNote.\(activeSpace.saved.id.uuidString)") ?? "") {
+                UserDefaults.standard.set(note, forKey: "webbyNote.\(activeSpace.saved.id.uuidString)")
+                refreshLocalWidgets(profile: activeSpace.saved.id)
+            }
+        case .codex:
+            guard let prompt = widgetTextPrompt(title: "Ask Codex in a terminal", value: "") else { return }
+            addTab(select: true)
+            guard let tab = activeTab else { return }
+            let quoted = "'" + prompt.replacingOccurrences(of: "'", with: "'\\''") + "'"
+            terminalCommandOnOpen[tab.id] = prompt.isEmpty ? "codex" : "codex \(quoted)"
+            toggleTerminal()
+        default: break
+        }
+    }
+
+    private func widgetTextPrompt(title: String, value: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(string: value)
+        field.frame = NSRect(x: 0, y: 0, width: 320, height: 26)
+        alert.accessoryView = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func widgetNotePrompt(value: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = "Quick Note"
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 380, height: 180))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let editor = NSTextView(frame: scroll.bounds)
+        editor.font = .systemFont(ofSize: 13)
+        editor.string = value
+        scroll.documentView = editor
+        alert.accessoryView = scroll
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return editor.string
+    }
+
+    private func showAddWidget() {
+        let missing = WebbyWidget.allCases.filter { !widgetCanvas.has($0) }
+        guard !missing.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = "Add a widget"
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 28))
+        picker.addItems(withTitles: missing.map(\.title))
+        alert.accessoryView = picker
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        widgetCanvas.addWidget(missing[picker.indexOfSelectedItem])
+        refreshGoogleWidgets(force: true)
     }
 
     private func configureSuggestions(for surface: GlassAddressSurface) {
@@ -1149,6 +1374,10 @@ private final class TabRow: NSView {
         guard !terminalMode, let surface = field.superview else { return }
         let query = (field.currentEditor()?.string ?? field.stringValue)
             .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if field === homeSearchField && query.isEmpty {
+            suggestions.close()
+            return
+        }
         var seen = Set<String>()
         var items: [BrowserSuggestion] = []
         func append(_ title: String, _ url: String, _ kind: BrowserSuggestion.Kind) {
@@ -1234,6 +1463,8 @@ private final class TabRow: NSView {
         }
         activeSpaceIndex = next
         BrowserTheme.activate(activeSpace.saved.id)
+        widgetCanvas?.show(profile: activeSpace.saved.id)
+        lastWidgetRefresh.removeValue(forKey: activeSpace.saved.id)
         updateSpaceLabel()
         showCurrentIndicator()
         refreshTabs()
@@ -1267,6 +1498,9 @@ private final class TabRow: NSView {
                     pane.isHidden = false
                     if Motion.enabled { Motion.basic(pane.layer, key: "opacity", from: 0, to: 1, duration: 0.18) }
                     pane.open()
+                    if let command = self.terminalCommandOnOpen.removeValue(forKey: tab.id) {
+                        pane.sendCommand(command)
+                    }
                 }
             }
         } else {
@@ -1423,6 +1657,12 @@ private final class TabRow: NSView {
         linkPreview?.close()
         pendingSpaceSave?.cancel()
         let target = spaces[index]
+        GoogleWorkspace.shared.deleteProfile(target.saved.id)
+        UserDefaults.standard.removeObject(forKey: "webbyWidgetCanvas.\(target.saved.id.uuidString)")
+        for key in ["webbyNote", "webbyWeatherCity", "webbyStockSymbol"] {
+            UserDefaults.standard.removeObject(forKey: "\(key).\(target.saved.id.uuidString)")
+        }
+        lastWidgetRefresh.removeValue(forKey: target.saved.id)
         let store = target.dataStore
         if spaces.count == 1 {
             let blank = SavedBrowserSpace(id: UUID(), name: "New Profile", chromeDirectory: nil,
@@ -1524,6 +1764,8 @@ private final class TabRow: NSView {
         splitView?.isHidden = true
         activeSpaceIndex = index
         BrowserTheme.activate(activeSpace.saved.id)
+        widgetCanvas?.show(profile: activeSpace.saved.id)
+        lastWidgetRefresh.removeValue(forKey: activeSpace.saved.id)
         if tabs.isEmpty { _ = restorePinnedTabs() }
         for tab in tabs { tab.terminalView?.applyTheme(BrowserTheme.profile) }
         UserDefaults.standard.set(index, forKey: "browserActiveSpace")
@@ -2067,8 +2309,13 @@ private final class TabRow: NSView {
         if BrowserExperiment.cyclesNewTabProfiles {
             displaySpace(for: tab).activeTabID = tab.id
             if let index = spaces.firstIndex(where: { $0.saved.id == ownerSpace(for: tab).saved.id }) {
+                let changedProfile = activeSpaceIndex != index
                 activeSpaceIndex = index
                 BrowserTheme.activate(activeSpace.saved.id)
+                if changedProfile {
+                    widgetCanvas?.show(profile: activeSpace.saved.id)
+                    lastWidgetRefresh.removeValue(forKey: activeSpace.saved.id)
+                }
             }
             updateSpaceLabel()
         }
@@ -2086,6 +2333,7 @@ private final class TabRow: NSView {
             item.webView?.alphaValue = item.id == tab.id && item.showsSearchView ? 0.001 : 1
         }
         homeView.isHidden = (tab.webView != nil && !tab.showsSearchView) || tab.isTerminal
+        if !homeView.isHidden { refreshGoogleWidgets() }
         for item in tabs { item.terminalView?.isHidden = item.id != tab.id || !tab.isTerminal }
         homeSearchSurface.isHidden = false
         loadErrorLabel.stringValue = tab.loadError ?? ""
