@@ -16,6 +16,7 @@ final class BrowserTab {
     var loadError: String?
     var isTerminal = false
     var isPinned = false
+    var pinnedInstanceClosed = false
     var pinWidthFraction: CGFloat = 0.5
     var pinHeight: CGFloat = 72
     var isFloating = false
@@ -39,6 +40,7 @@ private struct PinnedTabRecord: Codable {
     let ownerSpaceID: UUID?
     let widthFraction: Double?
     let height: Double?
+    let instanceClosed: Bool?
 }
 
 private struct ClosedTabRecord {
@@ -2039,7 +2041,8 @@ private final class HomeSearchGroup: NSView {
             guard let url = tab.webView?.url?.absoluteString ?? destination(for: tab.searchDraft)?.absoluteString,
                   let parsed = URL(string: url), ["http", "https"].contains(parsed.scheme?.lowercased() ?? "") else { return nil }
             return PinnedTabRecord(title: tab.title, url: url, ownerSpaceID: tab.ownerSpaceID,
-                                   widthFraction: Double(tab.pinWidthFraction), height: Double(tab.pinHeight))
+                                   widthFraction: Double(tab.pinWidthFraction), height: Double(tab.pinHeight),
+                                   instanceClosed: tab.pinnedInstanceClosed)
         }
         UserDefaults.standard.set(try? JSONEncoder().encode(records), forKey: pinnedKey(for: space))
     }
@@ -2053,7 +2056,7 @@ private final class HomeSearchGroup: NSView {
                 let width = 1 / Double(records.count)
                 records = records.map {
                     PinnedTabRecord(title: $0.title, url: $0.url, ownerSpaceID: $0.ownerSpaceID,
-                                    widthFraction: width, height: $0.height)
+                                    widthFraction: width, height: $0.height, instanceClosed: $0.instanceClosed)
                 }
                 UserDefaults.standard.set(try? JSONEncoder().encode(records), forKey: pinnedKey(for: activeSpace))
             }
@@ -2070,7 +2073,7 @@ private final class HomeSearchGroup: NSView {
             tab.pinHeight = min(240, max(39, CGFloat(record.height ?? 72)))
             tab.title = record.title
             tab.searchDraft = record.url
-            tab.navigationInProgress = true
+            tab.pinnedInstanceClosed = record.instanceClosed == true
             if BrowserExperiment.cyclesNewTabProfiles {
                 activeSpace.tabs.insert(tab, at: activeSpace.tabs.prefix { $0.isPinned }.count)
                 fusedTabOrder.insert(tab.id, at: fusedTabOrder.prefix { id in
@@ -2079,9 +2082,12 @@ private final class HomeSearchGroup: NSView {
             } else {
                 tabs.insert(tab, at: tabs.prefix { $0.isPinned }.count)
             }
-            let view = makeWebView(for: tab)
-            view.isHidden = true
-            view.load(URLRequest(url: url))
+            if !tab.pinnedInstanceClosed {
+                tab.navigationInProgress = true
+                let view = makeWebView(for: tab)
+                view.isHidden = true
+                view.load(URLRequest(url: url))
+            }
         }
         refreshTabs()
         return tabs.first(where: { $0.isPinned })
@@ -2782,6 +2788,19 @@ private final class HomeSearchGroup: NSView {
 
     private func selectTab(_ tab: BrowserTab) {
         tabPreview.hide()
+        if tab.isPinned && tab.pinnedInstanceClosed {
+            tab.pinnedInstanceClosed = false
+            if !tab.isTerminal,
+               let url = URL(string: tab.searchDraft),
+               ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") {
+                tab.navigationInProgress = true
+                tab.showsSearchView = false
+                let view = makeWebView(for: tab)
+                view.isHidden = true
+                view.load(URLRequest(url: url))
+            }
+            savePinnedTabs(for: displaySpace(for: tab))
+        }
         if tab.isFloating {
             floatingWindows[tab.id]?.makeKeyAndOrderFront(nil)
             return
@@ -3335,6 +3354,40 @@ private final class HomeSearchGroup: NSView {
         let wasActive = activeTabID == id
         let containingSpace = displaySpace(for: tabs[index])
         let closingTab = tabs[index]
+        if closingTab.isPinned {
+            if closingTab.pinnedInstanceClosed { return }
+            if let address = closingTab.webView?.url?.absoluteString {
+                closingTab.searchDraft = address
+            }
+            discardFloatingWindow(for: id)
+            closingTab.progressObservation?.invalidate()
+            closingTab.progressObservation = nil
+            closingTab.faviconTask?.cancel()
+            closingTab.faviconTask = nil
+            closingTab.webView?.stopLoading()
+            closingTab.webView?.navigationDelegate = nil
+            closingTab.webView?.uiDelegate = nil
+            NSLayoutConstraint.deactivate(closingTab.pageConstraints)
+            closingTab.pageConstraints = []
+            closingTab.webView?.removeFromSuperview()
+            closingTab.webView = nil
+            closingTab.terminalView?.stop()
+            NSLayoutConstraint.deactivate(closingTab.terminalConstraints)
+            closingTab.terminalConstraints = []
+            closingTab.terminalView?.removeFromSuperview()
+            closingTab.terminalView = nil
+            closingTab.previewImage = nil
+            closingTab.navigationInProgress = false
+            closingTab.pinnedInstanceClosed = true
+            savePinnedTabs(for: containingSpace)
+            if wasActive {
+                activeTabID = nil
+                if let next = tabs.first(where: { $0.id != id && !$0.isFloating && !$0.pinnedInstanceClosed }) {
+                    selectTab(next)
+                } else { addTab(select: true) }
+            } else { refreshTabs() }
+            return
+        }
         recentlyClosedTabs.append(ClosedTabRecord(
             title: closingTab.title,
             address: closingTab.webView?.url?.absoluteString ?? destination(for: closingTab.searchDraft)?.absoluteString,
