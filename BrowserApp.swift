@@ -181,22 +181,33 @@ private final class PinnedTabGrid: NSView {
     var onResize: ((UUID, CGFloat, CGFloat, Bool) -> Void)?
     override var isFlipped: Bool { true }
 
+    private func groups() -> [[TabRow]] {
+        var result: [[TabRow]] = []
+        var index = 0
+        while index < rows.count {
+            let first = rows[index]
+            var group = [first]
+            index += 1
+            if first.pinHeight > 52 {
+                var fraction = min(1, max(0.22, first.pinWidthFraction))
+                while index < rows.count, rows[index].pinHeight > 52, group.count < 4 {
+                    let next = min(1, max(0.22, rows[index].pinWidthFraction))
+                    guard fraction + next <= 1.001 else { break }
+                    group.append(rows[index])
+                    fraction += next
+                    index += 1
+                }
+            }
+            result.append(group)
+        }
+        return result
+    }
+
     var requiredHeight: CGFloat {
         guard !rows.isEmpty else { return 0 }
         var height: CGFloat = 8
-        var index = 0
-        while index < rows.count {
-            let row = rows[index]
-            if row.pinHeight <= 52 {
-                height += 47
-                index += 1
-            } else if index + 1 < rows.count, rows[index + 1].pinHeight > 52 {
-                height += max(row.pinHeight, rows[index + 1].pinHeight) + 8
-                index += 2
-            } else {
-                height += row.pinHeight + 8
-                index += 1
-            }
+        for group in groups() {
+            height += (group[0].pinHeight <= 52 ? 39 : group.map(\.pinHeight).max() ?? 72) + 8
         }
         return height
     }
@@ -205,58 +216,40 @@ private final class PinnedTabGrid: NSView {
         super.layout()
         let available = max(72, bounds.width - 16)
         var y: CGFloat = 8
-        var index = 0
-        while index < rows.count {
-            let row = rows[index]
-            if row.pinHeight <= 52 {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for group in groups() {
+            if group[0].pinHeight <= 52 {
+                let row = group[0]
                 row.setTileMode(false)
                 row.frame = NSRect(x: 8, y: y, width: available, height: 39)
                 y += 47
-                index += 1
-            } else if index + 1 < rows.count, rows[index + 1].pinHeight > 52 {
-                let other = rows[index + 1]
-                let pairWidth = available - 8
-                let firstWidth = pairWidth * min(0.78, max(0.22, row.pinWidthFraction))
-                row.setTileMode(true)
-                other.setTileMode(true)
-                row.frame = NSRect(x: 8, y: y, width: firstWidth, height: row.pinHeight)
-                other.frame = NSRect(x: 16 + firstWidth, y: y,
-                                     width: pairWidth - firstWidth, height: other.pinHeight)
-                y += max(row.pinHeight, other.pinHeight) + 8
-                index += 2
             } else {
-                row.setTileMode(true)
-                row.frame = NSRect(x: 8, y: y,
-                                   width: available * min(1, max(0.22, row.pinWidthFraction)),
-                                   height: row.pinHeight)
-                y += row.pinHeight + 8
-                index += 1
+                let gaps = CGFloat(group.count - 1) * 8
+                let fractions = group.map { min(1, max(0.22, $0.pinWidthFraction)) }
+                let desired = fractions.reduce(0, +) * available
+                let scale = min(1, (available - gaps) / desired)
+                var x: CGFloat = 8
+                for (row, fraction) in zip(group, fractions) {
+                    let width = fraction * available * scale
+                    row.setTileMode(true)
+                    row.frame = NSRect(x: x, y: y, width: width, height: row.pinHeight)
+                    row.setTileIconSize(width < 70 ? 22 : 32)
+                    x += width + 8
+                }
+                y += (group.map(\.pinHeight).max() ?? 72) + 8
             }
         }
+        CATransaction.commit()
     }
 
     func beginResize(_ row: TabRow, event: NSEvent, resizeWidth: Bool, resizeHeight: Bool) {
-        guard let window, let index = rows.firstIndex(of: row) else { return }
+        guard let window, rows.contains(row) else { return }
         let start = event.locationInWindow
         let initialWidth = row.pinWidthFraction
         let initialHeight = row.pinHeight
-        var partner: TabRow?
-        var isFirst = false
-        if row.pinHeight > 52 {
-            var candidate = 0
-            while candidate < rows.count {
-                if rows[candidate].pinHeight <= 52 { candidate += 1; continue }
-                if candidate + 1 < rows.count, rows[candidate + 1].pinHeight > 52 {
-                    if candidate == index || candidate + 1 == index {
-                        partner = rows[candidate == index ? candidate + 1 : candidate]
-                        isFirst = candidate == index
-                        break
-                    }
-                    candidate += 2
-                } else { candidate += 1 }
-            }
-        }
-        let initialPairFraction = isFirst ? initialWidth : (partner?.pinWidthFraction ?? 0.5)
+        let neighbors = groups().first(where: { $0.contains(row) })?.filter { $0 !== row } ?? []
+        let initialNeighborWidths = neighbors.map(\.pinWidthFraction)
         var changed = false
         while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             if next.type == .leftMouseUp { break }
@@ -265,20 +258,18 @@ private final class PinnedTabGrid: NSView {
             if abs(dx) < 2 && abs(dy) < 2 && !changed { continue }
             changed = true
             if resizeWidth {
-                let span = max(72, bounds.width - 24)
-                if let partner {
-                    let first = min(0.78, max(0.22, initialPairFraction + (isFirst ? dx : -dx) / span))
-                    if isFirst {
-                        row.pinWidthFraction = first
-                        partner.pinWidthFraction = 1 - first
-                    } else {
-                        partner.pinWidthFraction = first
-                        row.pinWidthFraction = 1 - first
-                    }
-                    onResize?(partner.tabID, partner.pinWidthFraction, partner.pinHeight, false)
-                } else {
-                    row.pinWidthFraction = min(1, max(0.22, initialWidth + dx / span))
+                let span = max(72, bounds.width - 16)
+                let target = min(1, max(0.22, initialWidth + dx / span))
+                let neighborTotal = initialNeighborWidths.reduce(0, +)
+                let free = max(0, 1 - initialWidth - neighborTotal)
+                var shortage = max(0, target - initialWidth - free)
+                for (neighbor, original) in zip(neighbors, initialNeighborWidths) {
+                    let reduction = min(shortage, max(0, original - 0.22))
+                    neighbor.pinWidthFraction = original - reduction
+                    shortage -= reduction
+                    onResize?(neighbor.tabID, neighbor.pinWidthFraction, neighbor.pinHeight, false)
                 }
+                row.pinWidthFraction = target - shortage
             }
             if resizeHeight { row.pinHeight = min(240, max(39, initialHeight + dy)) }
             onResize?(row.tabID, row.pinWidthFraction, row.pinHeight, false)
@@ -317,7 +308,6 @@ private final class TabRow: NSView {
     private var iconCenterX: NSLayoutConstraint!
     private var iconWidth: NSLayoutConstraint!
     private var iconHeight: NSLayoutConstraint!
-    private let pinGlass = NSVisualEffectView()
     private let profileRim = CAGradientLayer()
     private let profileRimMask = CAShapeLayer()
     private let faviconRim = CAGradientLayer()
@@ -347,12 +337,6 @@ private final class TabRow: NSView {
         layer?.backgroundColor = NSColor.white.withAlphaComponent(0.035).cgColor
         selectionGradient.cornerRadius = 8
         layer?.addSublayer(selectionGradient)
-        pinGlass.material = .hudWindow
-        pinGlass.blendingMode = .withinWindow
-        pinGlass.state = .active
-        pinGlass.wantsLayer = true
-        pinGlass.layer?.cornerRadius = 16
-        pinGlass.isHidden = true
         profileRim.mask = profileRimMask
         faviconRim.mask = faviconRimMask
         translatesAutoresizingMaskIntoConstraints = false
@@ -394,7 +378,6 @@ private final class TabRow: NSView {
         layer?.addSublayer(loadingTrack)
         loadingGradient.mask = loadingBeam
         layer?.addSublayer(loadingGradient)
-        addSubview(pinGlass)
         addSubview(selectButton)
         selectButton.registerForDraggedTypes([.string])
         addSubview(iconContainer)
@@ -457,6 +440,7 @@ private final class TabRow: NSView {
     }
 
     func setTileMode(_ enabled: Bool) {
+        rowHeight.isActive = !(superview is PinnedTabGrid)
         guard tileMode != enabled else { return }
         tileMode = enabled
         iconLeading.isActive = !enabled
@@ -467,11 +451,16 @@ private final class TabRow: NSView {
         titleButton.isHidden = enabled
         closeButton.isHidden = enabled
         pinIcon.isHidden = enabled || !pinned
-        pinGlass.isHidden = !enabled
         layer?.cornerRadius = enabled ? 16 : 8
         selectionGradient.cornerRadius = enabled ? 16 : 8
         needsLayout = true
         updateBackground()
+    }
+
+    func setTileIconSize(_ size: CGFloat) {
+        guard iconWidth.constant != size || iconHeight.constant != size else { return }
+        iconWidth.constant = size
+        iconHeight.constant = size
     }
 
     private func applyFaviconRim(_ favicon: NSImage?) {
@@ -587,8 +576,9 @@ private final class TabRow: NSView {
 
     override func layout() {
         super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         selectionGradient.frame = bounds
-        pinGlass.frame = bounds
         let radius: CGFloat = tileMode ? 16 : 7
         let path = CGPath(roundedRect: bounds.insetBy(dx: 1.25, dy: 1.25),
                           cornerWidth: radius, cornerHeight: radius, transform: nil)
@@ -610,6 +600,7 @@ private final class TabRow: NSView {
         loadingBeam.frame = bounds
         loadingBeam.path = path
         loadingGradient.frame = bounds
+        CATransaction.commit()
     }
 
     func applyTheme(_ profile: PetGradientProfile) {
@@ -3058,10 +3049,23 @@ private final class HomeSearchGroup: NSView {
               let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         var ordered = tabs
         let tab = ordered.remove(at: index)
+        let previousPins = ordered.filter(\.isPinned)
         tab.isPinned.toggle()
+        var redistributed = false
+        if tab.isPinned, (2...3).contains(previousPins.count) {
+            let formerWidth = 1 / CGFloat(previousPins.count)
+            if previousPins.allSatisfy({ abs($0.pinWidthFraction - formerWidth) < 0.02 }) {
+                let width = 1 / CGFloat(previousPins.count + 1)
+                for pin in previousPins { pin.pinWidthFraction = width }
+                tab.pinWidthFraction = width
+                redistributed = true
+            }
+        }
         ordered.insert(tab, at: ordered.prefix { $0.isPinned }.count)
         tabs = ordered
-        savePinnedTabs(for: displaySpace(for: tab))
+        if redistributed {
+            for space in spaces { savePinnedTabs(for: space) }
+        } else { savePinnedTabs(for: displaySpace(for: tab)) }
         refreshTabs()
     }
 
