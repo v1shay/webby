@@ -75,8 +75,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>Webby</string>
   <key>CFBundleIconFile</key><string>Webby</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>66</string>
-  <key>CFBundleShortVersionString</key><string>3.9.2</string>
+  <key>CFBundleVersion</key><string>67</string>
+  <key>CFBundleShortVersionString</key><string>3.10.0</string>
   <key>NSAppleEventsUsageDescription</key><string>Webby reads and controls Spotify for its music widget.</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>

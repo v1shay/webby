@@ -1,6 +1,14 @@
 import AppKit
 import UniformTypeIdentifiers
 
+@MainActor enum BrowserTabPlacement: String {
+    case top, bottom
+    static var current: Self {
+        get { Self(rawValue: UserDefaults.standard.string(forKey: "webbyTabStackPlacement") ?? "top") ?? .top }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "webbyTabStackPlacement") }
+    }
+}
+
 @MainActor enum BrowserExperiment {
     static var cyclesNewTabProfiles: Bool {
         get { UserDefaults.standard.bool(forKey: "webbyExperimentalProfileCycle") }
@@ -36,6 +44,7 @@ import UniformTypeIdentifiers
     private let profiles: () -> [(UUID, String)]
     private let openTerminal: () -> Void
     private let experimentChanged: () -> Void
+    private let tabPlacementChanged: () -> Void
     private let chooseGoogleClient: () -> Void
     private let connectGoogle: (GoogleService) -> Void
     private let disconnectGoogle: (GoogleService) -> Void
@@ -54,6 +63,7 @@ import UniformTypeIdentifiers
          importSignIns: @escaping () -> Void, fillPassword: @escaping () -> Void,
          profiles: @escaping () -> [(UUID, String)], openTerminal: @escaping () -> Void,
          experimentChanged: @escaping () -> Void,
+         tabPlacementChanged: @escaping () -> Void,
          chooseGoogleClient: @escaping () -> Void,
          connectGoogle: @escaping (GoogleService) -> Void,
          disconnectGoogle: @escaping (GoogleService) -> Void,
@@ -73,6 +83,7 @@ import UniformTypeIdentifiers
         self.profiles = profiles
         self.openTerminal = openTerminal
         self.experimentChanged = experimentChanged
+        self.tabPlacementChanged = tabPlacementChanged
         self.chooseGoogleClient = chooseGoogleClient
         self.connectGoogle = connectGoogle
         self.disconnectGoogle = disconnectGoogle
@@ -141,6 +152,17 @@ import UniformTypeIdentifiers
         experiment.target = self
         experiment.keyEquivalentModifierMask = [.command]
         experiment.state = BrowserExperiment.cyclesNewTabProfiles ? .on : .off
+        let tabPosition = NSMenuItem(title: "Tab Stack Position", action: nil, keyEquivalent: "")
+        let positionMenu = NSMenu(title: "Tab Stack Position")
+        for placement in [BrowserTabPlacement.top, .bottom] {
+            let item = positionMenu.addItem(withTitle: placement == .top ? "Top" : "Bottom",
+                                            action: #selector(selectTabPlacement(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = placement.rawValue
+            item.state = BrowserTabPlacement.current == placement ? .on : .off
+        }
+        tabPosition.submenu = positionMenu
+        menu.addItem(tabPosition)
         let terminal = menu.addItem(withTitle: "Open Terminal in This Tab",
                                     action: #selector(openTerminalAction), keyEquivalent: "")
         terminal.target = self
@@ -223,6 +245,12 @@ import UniformTypeIdentifiers
     @objc private func toggleExperiment() {
         BrowserExperiment.cyclesNewTabProfiles.toggle()
         experimentChanged()
+    }
+    @objc private func selectTabPlacement(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let placement = BrowserTabPlacement(rawValue: raw) else { return }
+        BrowserTabPlacement.current = placement
+        tabPlacementChanged()
     }
     @objc private func openTerminalAction() { openTerminal() }
     @objc private func selectIndicator(_ sender: NSMenuItem) {

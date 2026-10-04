@@ -37,6 +37,16 @@ private struct PinnedTabRecord: Codable {
     let ownerSpaceID: UUID?
 }
 
+private struct ClosedTabRecord {
+    let title: String
+    let address: String?
+    let searchDraft: String
+    let ownerSpaceID: UUID
+    let displaySpaceID: UUID
+    let wasPinned: Bool
+    let wasTerminal: Bool
+}
+
 @MainActor private final class TerminalTabIconView: NSView {
     private let engine = NotchIndicatorEngine()
 
@@ -149,6 +159,21 @@ private final class TabActionButton: NSButton, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .move }
 }
 
+private final class PinnedTabGrid: NSView {
+    var rows: [TabRow] = [] { didSet { needsLayout = true } }
+    override var isFlipped: Bool { true }
+
+    override func layout() {
+        super.layout()
+        let tileWidth = max(36, (bounds.width - 24) / 2)
+        for (index, row) in rows.enumerated() {
+            row.frame = NSRect(x: 8 + CGFloat(index % 2) * (tileWidth + 8),
+                               y: 8 + CGFloat(index / 2) * 80,
+                               width: tileWidth, height: 72)
+        }
+    }
+}
+
 private final class TabRow: NSView {
     let tabID: UUID
     let titleButton: TabActionButton
@@ -168,6 +193,18 @@ private final class TabRow: NSView {
     private var loadingFraction: CGFloat = 0
     private var hovered = false
     private var selected = false
+    private var tileMode = false
+    private var rowHeight: NSLayoutConstraint!
+    private var iconLeading: NSLayoutConstraint!
+    private var iconCenterX: NSLayoutConstraint!
+    private var iconWidth: NSLayoutConstraint!
+    private var iconHeight: NSLayoutConstraint!
+    private let pinGlass = NSVisualEffectView()
+    private let profileRim = CAGradientLayer()
+    private let profileRimMask = CAShapeLayer()
+    private let faviconRim = CAGradientLayer()
+    private let faviconRimMask = CAShapeLayer()
+    private var rimFavicon: NSImage?
     private var hoverArea: NSTrackingArea?
     private var hoverPreviewWork: DispatchWorkItem?
     private var hoverGeneration = 0
@@ -192,6 +229,14 @@ private final class TabRow: NSView {
         layer?.backgroundColor = NSColor.white.withAlphaComponent(0.035).cgColor
         selectionGradient.cornerRadius = 8
         layer?.addSublayer(selectionGradient)
+        pinGlass.material = .hudWindow
+        pinGlass.blendingMode = .withinWindow
+        pinGlass.state = .active
+        pinGlass.wantsLayer = true
+        pinGlass.layer?.cornerRadius = 16
+        pinGlass.isHidden = true
+        profileRim.mask = profileRimMask
+        faviconRim.mask = faviconRimMask
         translatesAutoresizingMaskIntoConstraints = false
         selectButton.toolTip = "Hover to preview • Click to select • Double-click for Floating or profile options"
         selectButton.focusRingType = .none
@@ -231,22 +276,29 @@ private final class TabRow: NSView {
         layer?.addSublayer(loadingTrack)
         loadingGradient.mask = loadingBeam
         layer?.addSublayer(loadingGradient)
+        addSubview(pinGlass)
         addSubview(selectButton)
         selectButton.registerForDraggedTypes([.string])
         addSubview(iconContainer)
         addSubview(titleButton)
         addSubview(closeButton)
+        layer?.addSublayer(profileRim)
+        layer?.addSublayer(faviconRim)
         applyTheme(BrowserTheme.profile)
+        rowHeight = heightAnchor.constraint(equalToConstant: 39)
+        iconLeading = iconContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
+        iconCenterX = iconContainer.centerXAnchor.constraint(equalTo: centerXAnchor)
+        iconWidth = iconContainer.widthAnchor.constraint(equalToConstant: 18)
+        iconHeight = iconContainer.heightAnchor.constraint(equalToConstant: 18)
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 39),
+            rowHeight,
             selectButton.leadingAnchor.constraint(equalTo: leadingAnchor),
             selectButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             selectButton.topAnchor.constraint(equalTo: topAnchor),
             selectButton.bottomAnchor.constraint(equalTo: bottomAnchor),
-            iconContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            iconLeading,
             iconContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconContainer.widthAnchor.constraint(equalToConstant: 18),
-            iconContainer.heightAnchor.constraint(equalToConstant: 18),
+            iconWidth, iconHeight,
             siteIcon.leadingAnchor.constraint(equalTo: iconContainer.leadingAnchor),
             siteIcon.trailingAnchor.constraint(equalTo: iconContainer.trailingAnchor),
             siteIcon.topAnchor.constraint(equalTo: iconContainer.topAnchor),
@@ -274,6 +326,53 @@ private final class TabRow: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setTileMode(_ enabled: Bool) {
+        guard tileMode != enabled else { return }
+        tileMode = enabled
+        iconLeading.isActive = !enabled
+        iconCenterX.isActive = enabled
+        iconWidth.constant = enabled ? 32 : 18
+        iconHeight.constant = enabled ? 32 : 18
+        rowHeight.constant = enabled ? 72 : 39
+        titleButton.isHidden = enabled
+        closeButton.isHidden = enabled
+        pinIcon.isHidden = enabled || !pinned
+        pinGlass.isHidden = !enabled
+        layer?.cornerRadius = enabled ? 16 : 8
+        selectionGradient.cornerRadius = enabled ? 16 : 8
+        needsLayout = true
+        updateBackground()
+    }
+
+    private func applyFaviconRim(_ favicon: NSImage?) {
+        if rimFavicon === favicon { return }
+        rimFavicon = favicon
+        guard let favicon, let data = favicon.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: data) else {
+            faviconRim.colors = nil
+            return
+        }
+        var samples: [(color: NSColor, saturation: CGFloat)] = []
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: max(1, bitmap.pixelsHigh / 5)) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: max(1, bitmap.pixelsWide / 5)) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      color.alphaComponent > 0.55 else { continue }
+                var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+                color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+                if saturation > 0.20 && brightness > 0.18 && brightness < 0.98 {
+                    samples.append((color, saturation))
+                }
+            }
+        }
+        let strongest = samples.sorted { $0.saturation > $1.saturation }
+        guard let first = strongest.first?.color else { faviconRim.colors = nil; return }
+        let second = strongest.dropFirst().first(where: { abs($0.color.hueComponent - first.hueComponent) > 0.12 })?.color
+            ?? first.blended(withFraction: 0.5, of: .white) ?? first
+        faviconRim.colors = [first.cgColor, second.cgColor, first.cgColor]
+        faviconRim.startPoint = CGPoint(x: 0, y: 0)
+        faviconRim.endPoint = CGPoint(x: 1, y: 1)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -339,14 +438,18 @@ private final class TabRow: NSView {
 
     private func updateBackground() {
         let old = layer?.backgroundColor
-        let alpha: CGFloat = selected ? 0.075 : (hovered ? 0.05 : 0.025)
+        let alpha: CGFloat = tileMode ? (selected ? 0.13 : hovered ? 0.09 : 0.055)
+            : (selected ? 0.075 : hovered ? 0.05 : 0.025)
         let next = NSColor.white.withAlphaComponent(alpha).cgColor
         let oldGradientOpacity = selectionGradient.presentation()?.opacity ?? selectionGradient.opacity
-        let gradientOpacity: Float = selected ? 1 : (hovered ? 0.52 : 0.16)
+        let gradientOpacity: Float = tileMode ? (selected ? 0.67 : hovered ? 0.34 : 0.15)
+            : (selected ? 1 : hovered ? 0.52 : 0.16)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer?.backgroundColor = next
         selectionGradient.opacity = gradientOpacity
+        profileRim.opacity = tileMode ? (selected ? 1 : hovered ? 0.88 : 0.62) : 0
+        faviconRim.opacity = tileMode && selected && faviconRim.colors != nil ? 0.93 : 0
         CATransaction.commit()
         if let old { Motion.basic(layer, key: "backgroundColor", from: old, to: next, duration: 0.14) }
         Motion.basic(selectionGradient, key: "opacity", from: oldGradientOpacity,
@@ -356,8 +459,23 @@ private final class TabRow: NSView {
     override func layout() {
         super.layout()
         selectionGradient.frame = bounds
+        pinGlass.frame = bounds
+        let radius: CGFloat = tileMode ? 16 : 7
         let path = CGPath(roundedRect: bounds.insetBy(dx: 1.25, dy: 1.25),
-                          cornerWidth: 7, cornerHeight: 7, transform: nil)
+                          cornerWidth: radius, cornerHeight: radius, transform: nil)
+        profileRim.frame = bounds
+        faviconRim.frame = bounds
+        profileRimMask.frame = bounds
+        faviconRimMask.frame = bounds
+        profileRimMask.path = path
+        profileRimMask.fillColor = NSColor.clear.cgColor
+        profileRimMask.strokeColor = NSColor.white.cgColor
+        profileRimMask.lineWidth = tileMode ? 2.4 : 0
+        faviconRimMask.path = CGPath(roundedRect: bounds.insetBy(dx: 3.2, dy: 3.2),
+                                     cornerWidth: max(1, radius - 2), cornerHeight: max(1, radius - 2), transform: nil)
+        faviconRimMask.fillColor = NSColor.clear.cgColor
+        faviconRimMask.strokeColor = NSColor.white.cgColor
+        faviconRimMask.lineWidth = tileMode ? 2.3 : 0
         loadingTrack.frame = bounds
         loadingTrack.path = path
         loadingBeam.frame = bounds
@@ -368,6 +486,7 @@ private final class TabRow: NSView {
     func applyTheme(_ profile: PetGradientProfile) {
         BrowserTheme.apply(profile.gradients.ambient, to: selectionGradient, alpha: 0.28)
         BrowserTheme.apply(profile.gradients.working, to: loadingGradient)
+        BrowserTheme.apply(profile.gradients.working, to: profileRim, alpha: 0.92)
         let accent = BrowserTheme.color(profile.palette.accent)
         loadingTrack.strokeColor = accent.withAlphaComponent(0.25).cgColor
         loadingTrack.shadowColor = accent.cgColor
@@ -458,9 +577,9 @@ private final class TabRow: NSView {
             updateBackground()
         }
         siteIcon.image = favicon ?? NSImage(systemSymbolName: "globe", accessibilityDescription: "Website")
-        siteIcon.contentTintColor = nil
-        siteIcon.isHidden = isTerminal || favicon == nil
-        fallbackIcon.isHidden = isTerminal || favicon != nil
+        siteIcon.contentTintColor = favicon == nil && tileMode ? .secondaryLabelColor : nil
+        siteIcon.isHidden = isTerminal || (favicon == nil && !tileMode)
+        fallbackIcon.isHidden = isTerminal || favicon != nil || tileMode
         if isTerminal && terminalIcon == nil {
             let icon = TerminalTabIconView(frame: .zero)
             icon.translatesAutoresizingMaskIntoConstraints = false
@@ -475,7 +594,8 @@ private final class TabRow: NSView {
         }
         terminalIcon?.setVisible(isTerminal)
         pinned = isPinned
-        pinIcon.isHidden = !isPinned
+        pinIcon.isHidden = !isPinned || tileMode
+        if tileMode { applyFaviconRim(favicon); updateBackground() }
         setLoadingProgress(loadingProgress)
     }
 }
@@ -560,6 +680,9 @@ private final class HomeSearchGroup: NSView {
     private var terminalButtonLeading: NSLayoutConstraint!
     private var terminalButtonTrailing: NSLayoutConstraint!
     private var tabStack: NSStackView!
+    private var pinGrid: PinnedTabGrid!
+    private var pinGridHeight: NSLayoutConstraint!
+    private var tabSpacer: NSView!
     private var spaceLabel: FusedProfileLabel!
     private var tabRows = [UUID: TabRow]()
     private var floatingWindows = [UUID: FloatingTabWindow]()
@@ -577,6 +700,7 @@ private final class HomeSearchGroup: NSView {
     private var activeSpaceIndex = 0
     private var fusedTabOrder: [UUID] = []
     private var fusedActiveTabID: UUID?
+    private var recentlyClosedTabs: [ClosedTabRecord] = []
     private var swipeDistance: CGFloat = 0
     private var lastSwipeAt: TimeInterval = 0
     private var lastScrollAt: TimeInterval = 0
@@ -754,6 +878,7 @@ private final class HomeSearchGroup: NSView {
                                  profiles: { [weak self] in self?.spaces.map { ($0.saved.id, $0.saved.name) } ?? [] },
                                  openTerminal: { [weak self] in self?.toggleTerminal() },
                                  experimentChanged: { [weak self] in self?.experimentalModeChanged() },
+                                 tabPlacementChanged: { [weak self] in self?.applyTabPlacement() },
                                  chooseGoogleClient: { [weak self] in self?.chooseGoogleClient() },
                                  connectGoogle: { [weak self] service in self?.connectGoogle(service) },
                                  disconnectGoogle: { [weak self] service in self?.disconnectGoogle(service) },
@@ -927,10 +1052,20 @@ private final class HomeSearchGroup: NSView {
         tabStack = NSStackView()
         tabStack.orientation = .vertical
         tabStack.alignment = .leading
+        tabStack.distribution = .fill
         tabStack.spacing = 0
         tabStack.wantsLayer = true
         tabStack.layer?.masksToBounds = true
         tabStack.translatesAutoresizingMaskIntoConstraints = false
+        pinGrid = PinnedTabGrid()
+        pinGrid.translatesAutoresizingMaskIntoConstraints = false
+        pinGridHeight = pinGrid.heightAnchor.constraint(equalToConstant: 0)
+        tabSpacer = NSView()
+        tabSpacer.translatesAutoresizingMaskIntoConstraints = false
+        tabSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+        tabSpacer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        tabStack.addArrangedSubview(pinGrid)
+        tabStack.addArrangedSubview(tabSpacer)
         let scroll = WidgetCanvasScrollView()
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
@@ -962,10 +1097,26 @@ private final class HomeSearchGroup: NSView {
             scroll.trailingAnchor.constraint(equalTo: sidebarInner.trailingAnchor, constant: -8),
             scroll.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 10),
             scroll.bottomAnchor.constraint(equalTo: sidebarInner.bottomAnchor, constant: -10),
-            tabStack.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)
+            tabStack.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            tabStack.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor),
+            pinGrid.widthAnchor.constraint(equalTo: tabStack.widthAnchor),
+            pinGridHeight,
+            tabSpacer.widthAnchor.constraint(equalTo: tabStack.widthAnchor),
+            tabSpacer.heightAnchor.constraint(greaterThanOrEqualToConstant: 0)
         ])
+        applyTabPlacement()
         sidebarVisible = !UserDefaults.standard.bool(forKey: "sidebarHidden")
         if !sidebarVisible { sidebarWidth.constant = 0; sidebar.isHidden = true }
+    }
+
+    private func applyTabPlacement() {
+        guard tabStack != nil, tabSpacer != nil else { return }
+        tabStack.removeArrangedSubview(tabSpacer)
+        tabSpacer.removeFromSuperview()
+        let index = BrowserTabPlacement.current == .bottom ? min(1, tabStack.arrangedSubviews.count)
+            : tabStack.arrangedSubviews.count
+        tabStack.insertArrangedSubview(tabSpacer, at: index)
+        refreshTabs()
     }
 
     private func makeMainArea() {
@@ -2620,8 +2771,15 @@ private final class HomeSearchGroup: NSView {
         }
     }
 
+    private var visibleSidebarTabs: [BrowserTab] {
+        let visible = tabs.filter { $0.id != splitTabIDs?.1 }
+        return visible.filter(\.isPinned) + visible.filter { !$0.isPinned }
+    }
+
     private func refreshTabs() {
-        let visibleTabs = tabs.filter { $0.id != splitTabIDs?.1 }
+        let visibleTabs = visibleSidebarTabs
+        let pinnedTabs = visibleTabs.filter(\.isPinned)
+        let regularTabs = visibleTabs.filter { !$0.isPinned }
         let validIDs = Set(visibleTabs.map(\.id))
         tabStack.layer?.removeAnimation(forKey: "spaceSwitch")
         tabStack.layer?.removeAnimation(forKey: "pinTab")
@@ -2631,25 +2789,55 @@ private final class HomeSearchGroup: NSView {
             row.layer?.removeAllAnimations()
             row.isHidden = true
             tabWidthConstraints.removeValue(forKey: id)?.isActive = false
-            tabStack.removeArrangedSubview(row)
+            if tabStack.arrangedSubviews.contains(row) { tabStack.removeArrangedSubview(row) }
             row.removeFromSuperview()
             tabRows.removeValue(forKey: id)
         }
-        for (index, tab) in visibleTabs.enumerated() {
+        var tileRows: [TabRow] = []
+        for tab in pinnedTabs {
+            let row = tabRows[tab.id] ?? TabRow(tabID: tab.id, target: self)
+            tabRows[tab.id] = row
+            if row.superview !== pinGrid {
+                tabWidthConstraints.removeValue(forKey: tab.id)?.isActive = false
+                if tabStack.arrangedSubviews.contains(row) { tabStack.removeArrangedSubview(row) }
+                row.removeFromSuperview()
+                row.translatesAutoresizingMaskIntoConstraints = true
+                pinGrid.addSubview(row)
+            }
+            row.setTileMode(true)
+            tileRows.append(row)
+        }
+        pinGrid.rows = tileRows
+        pinGrid.isHidden = tileRows.isEmpty
+        pinGridHeight.constant = tileRows.isEmpty ? 0 : 8 + CGFloat((tileRows.count + 1) / 2) * 80
+        let firstRegularIndex = BrowserTabPlacement.current == .bottom ? 2 : 1
+        for (index, tab) in regularTabs.enumerated() {
             let row: TabRow
             if let existing = tabRows[tab.id] { row = existing }
             else {
                 row = TabRow(tabID: tab.id, target: self)
                 tabRows[tab.id] = row
-                tabStack.insertArrangedSubview(row, at: index)
+            }
+            if row.superview !== tabStack {
+                row.removeFromSuperview()
+                row.translatesAutoresizingMaskIntoConstraints = false
+                tabStack.insertArrangedSubview(row, at: min(firstRegularIndex + index, tabStack.arrangedSubviews.count))
+            }
+            row.setTileMode(false)
+            if tabWidthConstraints[tab.id] == nil {
                 let width = row.widthAnchor.constraint(equalTo: tabStack.widthAnchor)
                 width.isActive = true
                 tabWidthConstraints[tab.id] = width
             }
-            if tabStack.arrangedSubviews.firstIndex(of: row) != index {
+            let desired = firstRegularIndex + index
+            if tabStack.arrangedSubviews.firstIndex(of: row) != desired {
                 tabStack.removeArrangedSubview(row)
-                tabStack.insertArrangedSubview(row, at: index)
+                row.removeFromSuperview()
+                tabStack.insertArrangedSubview(row, at: min(desired, tabStack.arrangedSubviews.count))
             }
+        }
+        for tab in visibleTabs {
+            guard let row = tabRows[tab.id] else { continue }
             let ownerName = ownerSpace(for: tab).saved.name
             var displayTitle = tab.ownerSpaceID == activeSpace.saved.id
                 ? tab.title : "\(tab.title)  ·  \(ownerName)"
@@ -2669,6 +2857,7 @@ private final class HomeSearchGroup: NSView {
             }
         }
         tabStack.needsLayout = true
+        pinGrid.needsLayout = true
         tabStack.needsDisplay = true
         tabStack.enclosingScrollView?.contentView.needsDisplay = true
     }
@@ -2694,7 +2883,7 @@ private final class HomeSearchGroup: NSView {
     }
 
     @objc private func selectTabByNumber(_ sender: NSMenuItem) {
-        let visibleTabs = tabs.filter { $0.id != splitTabIDs?.1 }
+        let visibleTabs = visibleSidebarTabs
         let index = sender.tag == 9 ? visibleTabs.count - 1 : sender.tag - 1
         guard visibleTabs.indices.contains(index) else { return }
         selectTab(visibleTabs[index])
@@ -2978,6 +3167,15 @@ private final class HomeSearchGroup: NSView {
         if let splitTabIDs, splitTabIDs.0 == id || splitTabIDs.1 == id { endSplit() }
         let wasActive = activeTabID == id
         let containingSpace = displaySpace(for: tabs[index])
+        let closingTab = tabs[index]
+        recentlyClosedTabs.append(ClosedTabRecord(
+            title: closingTab.title,
+            address: closingTab.webView?.url?.absoluteString ?? destination(for: closingTab.searchDraft)?.absoluteString,
+            searchDraft: closingTab.searchDraft,
+            ownerSpaceID: ownerSpace(for: closingTab).saved.id,
+            displaySpaceID: containingSpace.saved.id,
+            wasPinned: closingTab.isPinned, wasTerminal: closingTab.isTerminal))
+        if recentlyClosedTabs.count > 20 { recentlyClosedTabs.removeFirst() }
         discardFloatingWindow(for: id)
         let closing = tabs.remove(at: index)
         if closing.isPinned { savePinnedTabs(for: containingSpace) }
@@ -2999,6 +3197,38 @@ private final class HomeSearchGroup: NSView {
             activeTabID = nil
             selectTab(tabs[min(index, tabs.count - 1)])
         }
+        else { refreshTabs() }
+    }
+
+    @objc private func reopenLastClosedTab() {
+        guard let snapshot = recentlyClosedTabs.popLast() else { return }
+        let destination = spaces.first { $0.saved.id == snapshot.displaySpaceID } ?? activeSpace
+        let ownerID = spaces.contains { $0.saved.id == snapshot.ownerSpaceID }
+            ? snapshot.ownerSpaceID : destination.saved.id
+        let tab = BrowserTab()
+        tab.title = snapshot.title
+        tab.ownerSpaceID = ownerID
+        tab.searchDraft = snapshot.searchDraft
+        tab.isPinned = snapshot.wasPinned
+        tab.isTerminal = snapshot.wasTerminal
+        destination.tabs.insert(tab, at: tab.isPinned ? destination.tabs.prefix { $0.isPinned }.count : destination.tabs.count)
+        if !BrowserExperiment.cyclesNewTabProfiles && destination !== activeSpace {
+            destination.activeTabID = tab.id
+        }
+        if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(tab.id) }
+        if let address = snapshot.address, let url = URL(string: address),
+           ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") {
+            tab.navigationInProgress = true
+            let view = makeWebView(for: tab)
+            view.isHidden = true
+            view.load(URLRequest(url: url))
+        }
+        if tab.isPinned { savePinnedTabs(for: destination) }
+        if !BrowserExperiment.cyclesNewTabProfiles,
+           let index = spaces.firstIndex(where: { $0 === destination }), index != activeSpaceIndex {
+            switchToSpace(index, direction: index > activeSpaceIndex ? 1 : -1)
+        }
+        if activeTabID != tab.id { selectTab(tab) }
         else { refreshTabs() }
     }
 
@@ -3720,6 +3950,9 @@ private final class HomeSearchGroup: NSView {
         tab.target = self
         let close = fileMenu.addItem(withTitle: "Close Tab", action: #selector(closeCurrentTab), keyEquivalent: "w")
         close.target = self
+        let reopen = fileMenu.addItem(withTitle: "Reopen Closed Tab", action: #selector(reopenLastClosedTab), keyEquivalent: "t")
+        reopen.target = self
+        reopen.keyEquivalentModifierMask = [.command, .shift]
         let location = fileMenu.addItem(withTitle: "Open Location", action: #selector(focusAddress), keyEquivalent: "l")
         location.target = self
         fileMenu.addItem(.separator())
