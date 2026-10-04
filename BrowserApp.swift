@@ -16,6 +16,8 @@ final class BrowserTab {
     var loadError: String?
     var isTerminal = false
     var isPinned = false
+    var pinWidthFraction: CGFloat = 0.5
+    var pinHeight: CGFloat = 72
     var isFloating = false
     var terminalView: NativeTerminalPane?
     var webView: WKWebView?
@@ -35,6 +37,8 @@ private struct PinnedTabRecord: Codable {
     let title: String
     let url: String
     let ownerSpaceID: UUID?
+    let widthFraction: Double?
+    let height: Double?
 }
 
 private struct ClosedTabRecord {
@@ -45,6 +49,8 @@ private struct ClosedTabRecord {
     let displaySpaceID: UUID
     let wasPinned: Bool
     let wasTerminal: Bool
+    let pinWidthFraction: CGFloat
+    let pinHeight: CGFloat
 }
 
 @MainActor private final class TerminalTabIconView: NSView {
@@ -100,7 +106,18 @@ private final class TabActionButton: NSButton, NSDraggingSource {
         (superview as? TabRow)?.menu(for: event)
     }
 
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard let row = superview as? TabRow, row.superview is PinnedTabGrid else { return }
+        addCursorRect(NSRect(x: 0, y: 0, width: bounds.width, height: 12), cursor: .resizeUpDown)
+        if row.pinHeight > 52 {
+            addCursorRect(NSRect(x: max(0, bounds.width - 12), y: 0,
+                                 width: 12, height: bounds.height), cursor: .resizeLeftRight)
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
+        if (superview as? TabRow)?.beginPinResize(with: event) == true { return }
         guard allowsTabDrag, let window else {
             super.mouseDown(with: event)
             return
@@ -161,21 +178,122 @@ private final class TabActionButton: NSButton, NSDraggingSource {
 
 private final class PinnedTabGrid: NSView {
     var rows: [TabRow] = [] { didSet { needsLayout = true } }
+    var onResize: ((UUID, CGFloat, CGFloat, Bool) -> Void)?
     override var isFlipped: Bool { true }
+
+    var requiredHeight: CGFloat {
+        guard !rows.isEmpty else { return 0 }
+        var height: CGFloat = 8
+        var index = 0
+        while index < rows.count {
+            let row = rows[index]
+            if row.pinHeight <= 52 {
+                height += 47
+                index += 1
+            } else if index + 1 < rows.count, rows[index + 1].pinHeight > 52 {
+                height += max(row.pinHeight, rows[index + 1].pinHeight) + 8
+                index += 2
+            } else {
+                height += row.pinHeight + 8
+                index += 1
+            }
+        }
+        return height
+    }
 
     override func layout() {
         super.layout()
-        let tileWidth = max(36, (bounds.width - 24) / 2)
-        for (index, row) in rows.enumerated() {
-            row.frame = NSRect(x: 8 + CGFloat(index % 2) * (tileWidth + 8),
-                               y: 8 + CGFloat(index / 2) * 80,
-                               width: tileWidth, height: 72)
+        let available = max(72, bounds.width - 16)
+        var y: CGFloat = 8
+        var index = 0
+        while index < rows.count {
+            let row = rows[index]
+            if row.pinHeight <= 52 {
+                row.setTileMode(false)
+                row.frame = NSRect(x: 8, y: y, width: available, height: 39)
+                y += 47
+                index += 1
+            } else if index + 1 < rows.count, rows[index + 1].pinHeight > 52 {
+                let other = rows[index + 1]
+                let pairWidth = available - 8
+                let firstWidth = pairWidth * min(0.78, max(0.22, row.pinWidthFraction))
+                row.setTileMode(true)
+                other.setTileMode(true)
+                row.frame = NSRect(x: 8, y: y, width: firstWidth, height: row.pinHeight)
+                other.frame = NSRect(x: 16 + firstWidth, y: y,
+                                     width: pairWidth - firstWidth, height: other.pinHeight)
+                y += max(row.pinHeight, other.pinHeight) + 8
+                index += 2
+            } else {
+                row.setTileMode(true)
+                row.frame = NSRect(x: 8, y: y,
+                                   width: available * min(1, max(0.22, row.pinWidthFraction)),
+                                   height: row.pinHeight)
+                y += row.pinHeight + 8
+                index += 1
+            }
         }
+    }
+
+    func beginResize(_ row: TabRow, event: NSEvent, resizeWidth: Bool, resizeHeight: Bool) {
+        guard let window, let index = rows.firstIndex(of: row) else { return }
+        let start = event.locationInWindow
+        let initialWidth = row.pinWidthFraction
+        let initialHeight = row.pinHeight
+        var partner: TabRow?
+        var isFirst = false
+        if row.pinHeight > 52 {
+            var candidate = 0
+            while candidate < rows.count {
+                if rows[candidate].pinHeight <= 52 { candidate += 1; continue }
+                if candidate + 1 < rows.count, rows[candidate + 1].pinHeight > 52 {
+                    if candidate == index || candidate + 1 == index {
+                        partner = rows[candidate == index ? candidate + 1 : candidate]
+                        isFirst = candidate == index
+                        break
+                    }
+                    candidate += 2
+                } else { candidate += 1 }
+            }
+        }
+        let initialPairFraction = isFirst ? initialWidth : (partner?.pinWidthFraction ?? 0.5)
+        var changed = false
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp { break }
+            let dx = next.locationInWindow.x - start.x
+            let dy = start.y - next.locationInWindow.y
+            if abs(dx) < 2 && abs(dy) < 2 && !changed { continue }
+            changed = true
+            if resizeWidth {
+                let span = max(72, bounds.width - 24)
+                if let partner {
+                    let first = min(0.78, max(0.22, initialPairFraction + (isFirst ? dx : -dx) / span))
+                    if isFirst {
+                        row.pinWidthFraction = first
+                        partner.pinWidthFraction = 1 - first
+                    } else {
+                        partner.pinWidthFraction = first
+                        row.pinWidthFraction = 1 - first
+                    }
+                    onResize?(partner.tabID, partner.pinWidthFraction, partner.pinHeight, false)
+                } else {
+                    row.pinWidthFraction = min(1, max(0.22, initialWidth + dx / span))
+                }
+            }
+            if resizeHeight { row.pinHeight = min(240, max(39, initialHeight + dy)) }
+            onResize?(row.tabID, row.pinWidthFraction, row.pinHeight, false)
+            needsLayout = true
+            superview?.layoutSubtreeIfNeeded()
+            layoutSubtreeIfNeeded()
+        }
+        if changed { onResize?(row.tabID, row.pinWidthFraction, row.pinHeight, true) }
     }
 }
 
 private final class TabRow: NSView {
     let tabID: UUID
+    var pinWidthFraction: CGFloat = 0.5
+    var pinHeight: CGFloat = 72
     let titleButton: TabActionButton
     private let selectButton: TabActionButton
     private let closeButton: TabActionButton
@@ -326,6 +444,17 @@ private final class TabRow: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func beginPinResize(with event: NSEvent) -> Bool {
+        guard let grid = superview as? PinnedTabGrid else { return false }
+        let point = convert(event.locationInWindow, from: nil)
+        let bottom = point.y <= 12
+        let right = pinHeight > 52 && point.x >= bounds.width - 12
+        guard bottom || right else { return false }
+        cancelHoverPreview()
+        grid.beginResize(self, event: event, resizeWidth: right || bottom, resizeHeight: bottom)
+        return true
+    }
 
     func setTileMode(_ enabled: Bool) {
         guard tileMode != enabled else { return }
@@ -571,7 +700,8 @@ private final class TabRow: NSView {
                 loadingProgress: Double?) {
         titleButton.title = title
         titleButton.font = .systemFont(ofSize: 13, weight: selected ? .semibold : .regular)
-        selectButton.toolTip = title
+        selectButton.toolTip = superview is PinnedTabGrid
+            ? "\(title) • Drag the bottom or right edge to resize" : title
         if self.selected != selected {
             self.selected = selected
             updateBackground()
@@ -851,7 +981,7 @@ private final class HomeSearchGroup: NSView {
         NotificationCenter.default.addObserver(self, selector: #selector(glassChanged),
                                                name: .browserGlassChanged, object: nil)
         addTab(select: true)
-        if let pinned = restorePinnedTabs() { selectTab(pinned) }
+        _ = restorePinnedTabs()
         if BrowserExperiment.cyclesNewTabProfiles {
             let originalIndex = activeSpaceIndex
             for index in spaces.indices where index != originalIndex && spaces[index].tabs.isEmpty {
@@ -1059,6 +1189,14 @@ private final class HomeSearchGroup: NSView {
         tabStack.translatesAutoresizingMaskIntoConstraints = false
         pinGrid = PinnedTabGrid()
         pinGrid.translatesAutoresizingMaskIntoConstraints = false
+        pinGrid.onResize = { [weak self] id, width, height, finished in
+            guard let self, let tab = self.tab(id: id) else { return }
+            tab.pinWidthFraction = width
+            tab.pinHeight = height
+            self.pinGridHeight.constant = self.pinGrid.requiredHeight
+            self.tabStack.needsLayout = true
+            if finished { self.savePinnedTabs(for: self.displaySpace(for: tab)) }
+        }
         pinGridHeight = pinGrid.heightAnchor.constraint(equalToConstant: 0)
         tabSpacer = NSView()
         tabSpacer.translatesAutoresizingMaskIntoConstraints = false
@@ -1918,7 +2056,8 @@ private final class HomeSearchGroup: NSView {
         let records = space.tabs.filter { $0.isPinned && !$0.isTerminal }.compactMap { tab -> PinnedTabRecord? in
             guard let url = tab.webView?.url?.absoluteString ?? destination(for: tab.searchDraft)?.absoluteString,
                   let parsed = URL(string: url), ["http", "https"].contains(parsed.scheme?.lowercased() ?? "") else { return nil }
-            return PinnedTabRecord(title: tab.title, url: url, ownerSpaceID: tab.ownerSpaceID)
+            return PinnedTabRecord(title: tab.title, url: url, ownerSpaceID: tab.ownerSpaceID,
+                                   widthFraction: Double(tab.pinWidthFraction), height: Double(tab.pinHeight))
         }
         UserDefaults.standard.set(try? JSONEncoder().encode(records), forKey: pinnedKey(for: space))
     }
@@ -1933,6 +2072,8 @@ private final class HomeSearchGroup: NSView {
                 spaces.contains { $0.saved.id == owner } ? owner : nil
             } ?? activeSpace.saved.id
             tab.isPinned = true
+            tab.pinWidthFraction = min(1, max(0.22, CGFloat(record.widthFraction ?? 0.5)))
+            tab.pinHeight = min(240, max(39, CGFloat(record.height ?? 72)))
             tab.title = record.title
             tab.searchDraft = record.url
             tab.navigationInProgress = true
@@ -2776,6 +2917,16 @@ private final class HomeSearchGroup: NSView {
         return visible.filter(\.isPinned) + visible.filter { !$0.isPinned }
     }
 
+    private func discardTabRow(_ id: UUID) {
+        guard let row = tabRows.removeValue(forKey: id) else { return }
+        row.cancelHoverPreview()
+        row.layer?.removeAllAnimations()
+        row.isHidden = true
+        tabWidthConstraints.removeValue(forKey: id)?.isActive = false
+        if tabStack.arrangedSubviews.contains(row) { tabStack.removeArrangedSubview(row) }
+        row.removeFromSuperview()
+    }
+
     private func refreshTabs() {
         let visibleTabs = visibleSidebarTabs
         let pinnedTabs = visibleTabs.filter(\.isPinned)
@@ -2783,38 +2934,36 @@ private final class HomeSearchGroup: NSView {
         let validIDs = Set(visibleTabs.map(\.id))
         tabStack.layer?.removeAnimation(forKey: "spaceSwitch")
         tabStack.layer?.removeAnimation(forKey: "pinTab")
-        for id in tabRows.keys.filter({ !validIDs.contains($0) }) {
-            guard let row = tabRows[id] else { continue }
-            row.cancelHoverPreview()
-            row.layer?.removeAllAnimations()
-            row.isHidden = true
-            tabWidthConstraints.removeValue(forKey: id)?.isActive = false
-            if tabStack.arrangedSubviews.contains(row) { tabStack.removeArrangedSubview(row) }
-            row.removeFromSuperview()
-            tabRows.removeValue(forKey: id)
-        }
+        pinGrid.rows = []
+        for id in Array(tabRows.keys) where !validIDs.contains(id) { discardTabRow(id) }
         var tileRows: [TabRow] = []
         for tab in pinnedTabs {
+            if let existing = tabRows[tab.id], existing.superview !== pinGrid {
+                discardTabRow(tab.id)
+            }
             let row = tabRows[tab.id] ?? TabRow(tabID: tab.id, target: self)
             tabRows[tab.id] = row
+            row.pinWidthFraction = tab.pinWidthFraction
+            row.pinHeight = tab.pinHeight
             if row.superview !== pinGrid {
-                tabWidthConstraints.removeValue(forKey: tab.id)?.isActive = false
-                if tabStack.arrangedSubviews.contains(row) { tabStack.removeArrangedSubview(row) }
-                row.removeFromSuperview()
                 row.translatesAutoresizingMaskIntoConstraints = true
                 pinGrid.addSubview(row)
             }
-            row.setTileMode(true)
+            row.setTileMode(row.pinHeight > 52)
             tileRows.append(row)
         }
         pinGrid.rows = tileRows
+        for old in pinGrid.subviews where !tileRows.contains(where: { $0 === old }) {
+            old.removeFromSuperview()
+        }
         pinGrid.isHidden = tileRows.isEmpty
-        pinGridHeight.constant = tileRows.isEmpty ? 0 : 8 + CGFloat((tileRows.count + 1) / 2) * 80
+        pinGridHeight.constant = pinGrid.requiredHeight
         let firstRegularIndex = BrowserTabPlacement.current == .bottom ? 2 : 1
         for (index, tab) in regularTabs.enumerated() {
             let row: TabRow
-            if let existing = tabRows[tab.id] { row = existing }
+            if let existing = tabRows[tab.id], existing.superview === tabStack { row = existing }
             else {
+                discardTabRow(tab.id)
                 row = TabRow(tabID: tab.id, target: self)
                 tabRows[tab.id] = row
             }
@@ -2858,6 +3007,7 @@ private final class HomeSearchGroup: NSView {
         }
         tabStack.needsLayout = true
         pinGrid.needsLayout = true
+        pinGrid.needsDisplay = true
         tabStack.needsDisplay = true
         tabStack.enclosingScrollView?.contentView.needsDisplay = true
     }
@@ -3174,7 +3324,8 @@ private final class HomeSearchGroup: NSView {
             searchDraft: closingTab.searchDraft,
             ownerSpaceID: ownerSpace(for: closingTab).saved.id,
             displaySpaceID: containingSpace.saved.id,
-            wasPinned: closingTab.isPinned, wasTerminal: closingTab.isTerminal))
+            wasPinned: closingTab.isPinned, wasTerminal: closingTab.isTerminal,
+            pinWidthFraction: closingTab.pinWidthFraction, pinHeight: closingTab.pinHeight))
         if recentlyClosedTabs.count > 20 { recentlyClosedTabs.removeFirst() }
         discardFloatingWindow(for: id)
         let closing = tabs.remove(at: index)
@@ -3211,6 +3362,8 @@ private final class HomeSearchGroup: NSView {
         tab.searchDraft = snapshot.searchDraft
         tab.isPinned = snapshot.wasPinned
         tab.isTerminal = snapshot.wasTerminal
+        tab.pinWidthFraction = snapshot.pinWidthFraction
+        tab.pinHeight = snapshot.pinHeight
         destination.tabs.insert(tab, at: tab.isPinned ? destination.tabs.prefix { $0.isPinned }.count : destination.tabs.count)
         if !BrowserExperiment.cyclesNewTabProfiles && destination !== activeSpace {
             destination.activeTabID = tab.id
