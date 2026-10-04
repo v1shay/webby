@@ -332,11 +332,7 @@ private final class TabRow: NSView {
                                       action: #selector(BrowserApp.closeTabAction(_:)))
         super.init(frame: .zero)
         registerForDraggedTypes([.string])
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.035).cgColor
-        selectionGradient.cornerRadius = 8
-        layer?.addSublayer(selectionGradient)
+        wantsLayer = false
         profileRim.mask = profileRimMask
         faviconRim.mask = faviconRimMask
         translatesAutoresizingMaskIntoConstraints = false
@@ -375,16 +371,12 @@ private final class TabRow: NSView {
         loadingBeam.shadowRadius = 7
         loadingBeam.strokeEnd = 0
         loadingBeam.opacity = 0
-        layer?.addSublayer(loadingTrack)
         loadingGradient.mask = loadingBeam
-        layer?.addSublayer(loadingGradient)
         addSubview(selectButton)
         selectButton.registerForDraggedTypes([.string])
         addSubview(iconContainer)
         addSubview(titleButton)
         addSubview(closeButton)
-        layer?.addSublayer(profileRim)
-        layer?.addSublayer(faviconRim)
         applyTheme(BrowserTheme.profile)
         rowHeight = heightAnchor.constraint(equalToConstant: 39)
         iconLeading = iconContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
@@ -545,6 +537,18 @@ private final class TabRow: NSView {
                                action: #selector(BrowserApp.togglePinTabAction(_:)), keyEquivalent: "")
         pin.target = owner
         pin.representedObject = tabID
+        if pinned {
+            let arrangement = NSMenuItem(title: "Pins Per Row", action: nil, keyEquivalent: "")
+            let choices = NSMenu(title: "Pins Per Row")
+            for count in 2...4 {
+                let choice = choices.addItem(withTitle: "\(count)",
+                                             action: #selector(BrowserApp.arrangePinsAction(_:)), keyEquivalent: "")
+                choice.target = owner
+                choice.tag = count
+            }
+            arrangement.submenu = choices
+            menu.addItem(arrangement)
+        }
         owner?.appendFloatingItem(for: tabID, to: menu)
         owner?.appendSplitItem(for: tabID, to: menu)
         owner?.appendMoveItems(for: tabID, to: menu)
@@ -555,23 +559,12 @@ private final class TabRow: NSView {
     }
 
     private func updateBackground() {
-        let old = layer?.backgroundColor
-        let alpha: CGFloat = tileMode ? (selected ? 0.13 : hovered ? 0.09 : 0.055)
-            : (selected ? 0.075 : hovered ? 0.05 : 0.025)
-        let next = NSColor.white.withAlphaComponent(alpha).cgColor
-        let oldGradientOpacity = selectionGradient.presentation()?.opacity ?? selectionGradient.opacity
-        let gradientOpacity: Float = tileMode ? (selected ? 0.67 : hovered ? 0.34 : 0.15)
-            : (selected ? 1 : hovered ? 0.52 : 0.16)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer?.backgroundColor = next
-        selectionGradient.opacity = gradientOpacity
-        profileRim.opacity = tileMode ? (selected ? 1 : hovered ? 0.88 : 0.62) : 0
-        faviconRim.opacity = tileMode && selected && faviconRim.colors != nil ? 0.93 : 0
-        CATransaction.commit()
-        if let old { Motion.basic(layer, key: "backgroundColor", from: old, to: next, duration: 0.14) }
-        Motion.basic(selectionGradient, key: "opacity", from: oldGradientOpacity,
-                     to: gradientOpacity, duration: 0.16)
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.borderWidth = 0
+        selectionGradient.opacity = 0
+        profileRim.opacity = 0
+        faviconRim.opacity = 0
+        needsDisplay = true
     }
 
     override func layout() {
@@ -1175,8 +1168,7 @@ private final class HomeSearchGroup: NSView {
         tabStack.alignment = .leading
         tabStack.distribution = .fill
         tabStack.spacing = 0
-        tabStack.wantsLayer = true
-        tabStack.layer?.masksToBounds = true
+        tabStack.wantsLayer = false
         tabStack.translatesAutoresizingMaskIntoConstraints = false
         pinGrid = PinnedTabGrid()
         pinGrid.translatesAutoresizingMaskIntoConstraints = false
@@ -1199,8 +1191,7 @@ private final class HomeSearchGroup: NSView {
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        scroll.contentView.wantsLayer = true
-        scroll.contentView.layer?.masksToBounds = true
+        scroll.contentView.wantsLayer = false
         scroll.documentView = tabStack
         scroll.translatesAutoresizingMaskIntoConstraints = false
         sidebarInner.addSubview(newTab)
@@ -2055,7 +2046,19 @@ private final class HomeSearchGroup: NSView {
 
     @discardableResult private func restorePinnedTabs() -> BrowserTab? {
         guard let data = UserDefaults.standard.data(forKey: pinnedKey(for: activeSpace)),
-              let records = try? JSONDecoder().decode([PinnedTabRecord].self, from: data) else { return nil }
+              var records = try? JSONDecoder().decode([PinnedTabRecord].self, from: data) else { return nil }
+        let layoutKey = "webbyPinLayoutV3.\(activeSpace.saved.id.uuidString)"
+        if !UserDefaults.standard.bool(forKey: layoutKey) {
+            if (3...4).contains(records.count) {
+                let width = 1 / Double(records.count)
+                records = records.map {
+                    PinnedTabRecord(title: $0.title, url: $0.url, ownerSpaceID: $0.ownerSpaceID,
+                                    widthFraction: width, height: $0.height)
+                }
+                UserDefaults.standard.set(try? JSONEncoder().encode(records), forKey: pinnedKey(for: activeSpace))
+            }
+            UserDefaults.standard.set(true, forKey: layoutKey)
+        }
         for record in records.prefix(20) {
             guard let url = URL(string: record.url), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { continue }
             let tab = BrowserTab()
@@ -2976,6 +2979,11 @@ private final class HomeSearchGroup: NSView {
                 tabStack.insertArrangedSubview(row, at: min(desired, tabStack.arrangedSubviews.count))
             }
         }
+        let regularIDs = Set(regularTabs.map(\.id))
+        for case let stale as TabRow in tabStack.subviews where !regularIDs.contains(stale.tabID) {
+            tabStack.removeArrangedSubview(stale)
+            stale.removeFromSuperview()
+        }
         for tab in visibleTabs {
             guard let row = tabRows[tab.id] else { continue }
             let ownerName = ownerSpace(for: tab).saved.name
@@ -3053,19 +3061,24 @@ private final class HomeSearchGroup: NSView {
         tab.isPinned.toggle()
         var redistributed = false
         if tab.isPinned, (2...3).contains(previousPins.count) {
-            let formerWidth = 1 / CGFloat(previousPins.count)
-            if previousPins.allSatisfy({ abs($0.pinWidthFraction - formerWidth) < 0.02 }) {
-                let width = 1 / CGFloat(previousPins.count + 1)
-                for pin in previousPins { pin.pinWidthFraction = width }
-                tab.pinWidthFraction = width
-                redistributed = true
-            }
+            let width = 1 / CGFloat(previousPins.count + 1)
+            for pin in previousPins { pin.pinWidthFraction = width }
+            tab.pinWidthFraction = width
+            redistributed = true
         }
         ordered.insert(tab, at: ordered.prefix { $0.isPinned }.count)
         tabs = ordered
         if redistributed {
             for space in spaces { savePinnedTabs(for: space) }
         } else { savePinnedTabs(for: displaySpace(for: tab)) }
+        refreshTabs()
+    }
+
+    @objc fileprivate func arrangePinsAction(_ sender: NSMenuItem) {
+        guard (2...4).contains(sender.tag) else { return }
+        let width = 1 / CGFloat(sender.tag)
+        for tab in visibleSidebarTabs where tab.isPinned { tab.pinWidthFraction = width }
+        for space in spaces { savePinnedTabs(for: space) }
         refreshTabs()
     }
 
