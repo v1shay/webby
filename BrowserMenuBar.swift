@@ -1,8 +1,44 @@
 import AppKit
 import UniformTypeIdentifiers
 
+extension Notification.Name {
+    static let browserSearchEngineChanged = Notification.Name("BrowserSearchEngineChanged")
+}
+
+enum BrowserSearchEngine: String, CaseIterable {
+    case google, duckDuckGo, bing, brave, ecosia
+
+    var name: String {
+        switch self {
+        case .google: "Google"
+        case .duckDuckGo: "DuckDuckGo"
+        case .bing: "Bing"
+        case .brave: "Brave Search"
+        case .ecosia: "Ecosia"
+        }
+    }
+
+    var searchBase: String {
+        switch self {
+        case .google: "https://www.google.com/search"
+        case .duckDuckGo: "https://duckduckgo.com/"
+        case .bing: "https://www.bing.com/search"
+        case .brave: "https://search.brave.com/search"
+        case .ecosia: "https://www.ecosia.org/search"
+        }
+    }
+
+    static func selected(for profile: UUID) -> Self {
+        Self(rawValue: UserDefaults.standard.string(forKey: "webbySearchEngine.\(profile.uuidString)") ?? "google") ?? .google
+    }
+
+    static func set(_ engine: Self, for profile: UUID) {
+        UserDefaults.standard.set(engine.rawValue, forKey: "webbySearchEngine.\(profile.uuidString)")
+    }
+}
+
 @MainActor enum BrowserTabPlacement: String {
-    case top, bottom
+    case top, bottom, horizontal
     static var current: Self {
         get { Self(rawValue: UserDefaults.standard.string(forKey: "webbyTabStackPlacement") ?? "top") ?? .top }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "webbyTabStackPlacement") }
@@ -13,6 +49,15 @@ import UniformTypeIdentifiers
     static var cyclesNewTabProfiles: Bool {
         get { UserDefaults.standard.bool(forKey: "webbyExperimentalProfileCycle") }
         set { UserDefaults.standard.set(newValue, forKey: "webbyExperimentalProfileCycle") }
+    }
+
+    static var fuseScene: String {
+        let saved = UserDefaults.standard.string(forKey: "webbyFuseIndicator") ?? "agents"
+        return IndicatorScenes.all[saved] == nil ? "agents" : saved
+    }
+    static func setFuseScene(_ scene: String) {
+        guard IndicatorScenes.all[scene] != nil else { return }
+        UserDefaults.standard.set(scene, forKey: "webbyFuseIndicator")
     }
 
     static func scene(for spaceID: UUID, index: Int = 0) -> String {
@@ -32,7 +77,9 @@ import UniformTypeIdentifiers
     private let showBrowser: () -> Void
     private let addWidget: () -> Void
     private let resetWidgets: () -> Void
+    private let asciiCanvas: () -> ASCIIBackgroundCanvas?
     private let currentSpaceName: () -> String
+    private let currentSpaceID: () -> UUID
     private let importChrome: () -> Void
     private let deleteProfile: () -> Void
     private let openBookmarks: () -> Void
@@ -55,7 +102,7 @@ import UniformTypeIdentifiers
 
     init(showBrowser: @escaping () -> Void, addWidget: @escaping () -> Void,
          resetWidgets: @escaping () -> Void,
-         currentSpaceName: @escaping () -> String,
+         currentSpaceName: @escaping () -> String, currentSpaceID: @escaping () -> UUID,
          importChrome: @escaping () -> Void,
          deleteProfile: @escaping () -> Void,
          openBookmarks: @escaping () -> Void, openHistory: @escaping () -> Void,
@@ -67,11 +114,14 @@ import UniformTypeIdentifiers
          chooseGoogleClient: @escaping () -> Void,
          connectGoogle: @escaping (GoogleService) -> Void,
          disconnectGoogle: @escaping (GoogleService) -> Void,
-         googleConnected: @escaping (GoogleService) -> Bool) {
+         googleConnected: @escaping (GoogleService) -> Bool,
+         asciiCanvas: @escaping () -> ASCIIBackgroundCanvas? = { nil }) {
         self.showBrowser = showBrowser
         self.addWidget = addWidget
         self.resetWidgets = resetWidgets
+        self.asciiCanvas = asciiCanvas
         self.currentSpaceName = currentSpaceName
+        self.currentSpaceID = currentSpaceID
         self.importChrome = importChrome
         self.deleteProfile = deleteProfile
         self.openBookmarks = openBookmarks
@@ -109,6 +159,28 @@ import UniformTypeIdentifiers
         widget.target = self
         let reset = menu.addItem(withTitle: "Reset Widget Positions", action: #selector(resetWidgetsAction), keyEquivalent: "")
         reset.target = self
+        let backgrounds = NSMenuItem(title: "ASCII Backgrounds", action: nil, keyEquivalent: "")
+        let artMenu = NSMenu(title: "ASCII Backgrounds")
+        for art in ASCIIArtwork.catalog {
+            let entry = NSMenuItem(title: art.name, action: nil, keyEquivalent: "")
+            let options = NSMenu(title: art.name)
+            let toggle = options.addItem(withTitle: "Show Background", action: #selector(toggleASCII(_:)), keyEquivalent: "")
+            toggle.target = self; toggle.representedObject = art.id
+            toggle.state = asciiCanvas()?.has(art.id) == true ? .on : .off
+            if asciiCanvas()?.has(art.id) == true {
+                let control = NSView(frame: NSRect(x: 0, y: 0, width: 230, height: 54))
+                let label = NSTextField(labelWithString: "Brightness")
+                label.frame = NSRect(x: 14, y: 32, width: 200, height: 18)
+                let slider = NSSlider(value: asciiCanvas()?.brightness(art.id) ?? 0.24, minValue: 0, maxValue: 1,
+                                      target: self, action: #selector(asciiBrightnessChanged(_:)))
+                slider.identifier = NSUserInterfaceItemIdentifier(art.id)
+                slider.isContinuous = true; slider.frame = NSRect(x: 14, y: 8, width: 200, height: 20)
+                control.addSubview(label); control.addSubview(slider)
+                let item = NSMenuItem(); item.view = control; options.addItem(item)
+            }
+            entry.submenu = options; artMenu.addItem(entry)
+        }
+        backgrounds.submenu = artMenu; menu.addItem(backgrounds)
         menu.addItem(.separator())
 
         let profileItem = NSMenuItem(title: "Gradient for \(currentSpaceName())", action: nil, keyEquivalent: "")
@@ -148,14 +220,14 @@ import UniformTypeIdentifiers
         edit.target = self
         menu.addItem(.separator())
         let experiment = menu.addItem(withTitle: "Experimental: Fuse All Profile Tabs",
-                                      action: #selector(toggleExperiment), keyEquivalent: "f")
+                                      action: #selector(toggleExperiment), keyEquivalent: "F")
         experiment.target = self
-        experiment.keyEquivalentModifierMask = [.command]
+        experiment.keyEquivalentModifierMask = [.command, .shift]
         experiment.state = BrowserExperiment.cyclesNewTabProfiles ? .on : .off
-        let tabPosition = NSMenuItem(title: "Tab Stack Position", action: nil, keyEquivalent: "")
-        let positionMenu = NSMenu(title: "Tab Stack Position")
-        for placement in [BrowserTabPlacement.top, .bottom] {
-            let item = positionMenu.addItem(withTitle: placement == .top ? "Top" : "Bottom",
+        let tabPosition = NSMenuItem(title: "Tab Layout", action: nil, keyEquivalent: "")
+        let positionMenu = NSMenu(title: "Tab Layout")
+        for placement in [BrowserTabPlacement.top, .bottom, .horizontal] {
+            let item = positionMenu.addItem(withTitle: placement == .horizontal ? "Horizontal" : (placement == .top ? "Vertical · Top" : "Vertical · Bottom"),
                                             action: #selector(selectTabPlacement(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = placement.rawValue
@@ -163,11 +235,46 @@ import UniformTypeIdentifiers
         }
         tabPosition.submenu = positionMenu
         menu.addItem(tabPosition)
+        let searchRoot = NSMenuItem(title: "Search Engine for \(currentSpaceName())", action: nil, keyEquivalent: "")
+        let searchMenu = NSMenu(title: "Search Engine")
+        for engine in BrowserSearchEngine.allCases {
+            let item = searchMenu.addItem(withTitle: engine.name, action: #selector(selectSearchEngine(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = engine.rawValue
+            item.state = BrowserSearchEngine.selected(for: currentSpaceID()) == engine ? .on : .off
+        }
+        searchRoot.submenu = searchMenu
+        menu.addItem(searchRoot)
+        let restore = menu.addItem(withTitle: "Restore Tabs After Restart", action: #selector(toggleRestoreTabs), keyEquivalent: "")
+        restore.target = self
+        restore.state = UserDefaults.standard.bool(forKey: "webbyRestoreTabs") ? .on : .off
+        let offload = NSMenuItem(title: "Offload Idle Tabs", action: nil, keyEquivalent: "")
+        let offloadMenu = NSMenu(title: "Offload Idle Tabs")
+        for minutes in [0, 5, 15, 30, 60] {
+            let item = offloadMenu.addItem(withTitle: minutes == 0 ? "Never" : "After \(minutes) Minutes",
+                                           action: #selector(selectOffloadTime(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = minutes
+            item.state = UserDefaults.standard.integer(forKey: "webbyOffloadMinutes") == minutes ? .on : .off
+        }
+        offload.submenu = offloadMenu
+        menu.addItem(offload)
         let terminal = menu.addItem(withTitle: "Open Terminal in This Tab",
                                     action: #selector(openTerminalAction), keyEquivalent: "")
         terminal.target = self
         let indicatorRoot = NSMenuItem(title: "Notch Indicators by Profile", action: nil, keyEquivalent: "")
         let indicatorMenu = NSMenu(title: "Notch Indicators by Profile")
+        let fuseItem = NSMenuItem(title: "Fuse", action: nil, keyEquivalent: "")
+        let fuseScenes = NSMenu(title: "Fuse Symbol")
+        for scene in IndicatorScenes.cycleIDs {
+            let item = fuseScenes.addItem(withTitle: scene.capitalized, action: #selector(selectFuseIndicator(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = scene
+            item.state = BrowserExperiment.fuseScene == scene ? .on : .off
+        }
+        fuseItem.submenu = fuseScenes
+        indicatorMenu.addItem(fuseItem)
+        indicatorMenu.addItem(.separator())
         for (index, profile) in self.profiles().enumerated() {
             let (id, name) = profile
             let profileItem = NSMenuItem(title: name, action: nil, keyEquivalent: "")
@@ -187,8 +294,15 @@ import UniformTypeIdentifiers
         menu.addItem(.separator())
         let glassHeading = menu.addItem(withTitle: "Glass Transparency", action: nil, keyEquivalent: "")
         glassHeading.isEnabled = false
+        addGlassSlider(to: menu, title: "Main Background", value: BrowserGlass.backgroundTransparency, tag: 3)
         addGlassSlider(to: menu, title: "Top Bar", value: BrowserGlass.topTransparency, tag: 1)
         addGlassSlider(to: menu, title: "Sidebar", value: BrowserGlass.sidebarTransparency, tag: 2)
+        let pageGlass = menu.addItem(withTitle: "Glass Effect on Web Pages", action: #selector(togglePageGlass), keyEquivalent: "")
+        pageGlass.target = self
+        pageGlass.state = BrowserGlass.pageInjectionEnabled ? .on : .off
+        let matchGlass = menu.addItem(withTitle: "Match Tab Pane to Page Glass", action: #selector(toggleMatchGlass), keyEquivalent: "")
+        matchGlass.target = self
+        matchGlass.state = BrowserGlass.matchPageGlassSidebar ? .on : .off
         menu.addItem(.separator())
         let googleRoot = NSMenuItem(title: "Google Widgets for \(currentSpaceName())", action: nil, keyEquivalent: "")
         let googleMenu = NSMenu(title: "Google Widgets")
@@ -232,6 +346,14 @@ import UniformTypeIdentifiers
 
     @objc private func showBrowserAction() { showBrowser() }
     @objc private func addWidgetAction() { addWidget() }
+    @objc private func toggleASCII(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        asciiCanvas()?.toggle(id)
+    }
+    @objc private func asciiBrightnessChanged(_ sender: NSSlider) {
+        guard let id = sender.identifier?.rawValue else { return }
+        asciiCanvas()?.setBrightness(sender.doubleValue, for: id)
+    }
     @objc private func resetWidgetsAction() { resetWidgets() }
     @objc private func chooseGoogleClientAction() { chooseGoogleClient() }
     @objc private func connectGoogleAction(_ sender: NSMenuItem) {
@@ -252,12 +374,32 @@ import UniformTypeIdentifiers
         BrowserTabPlacement.current = placement
         tabPlacementChanged()
     }
+    @objc private func selectSearchEngine(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let engine = BrowserSearchEngine(rawValue: raw) else { return }
+        BrowserSearchEngine.set(engine, for: currentSpaceID())
+        NotificationCenter.default.post(name: .browserSearchEngineChanged, object: nil)
+    }
+    @objc private func toggleRestoreTabs() {
+        let enabled = !UserDefaults.standard.bool(forKey: "webbyRestoreTabs")
+        UserDefaults.standard.set(enabled, forKey: "webbyRestoreTabs")
+        if !enabled { UserDefaults.standard.removeObject(forKey: "webbySessionTabs") }
+    }
+    @objc private func selectOffloadTime(_ sender: NSMenuItem) {
+        UserDefaults.standard.set(sender.tag, forKey: "webbyOffloadMinutes")
+    }
     @objc private func openTerminalAction() { openTerminal() }
     @objc private func selectIndicator(_ sender: NSMenuItem) {
         guard let pair = sender.representedObject as? [String], pair.count == 2,
               let id = UUID(uuidString: pair[0]) else { return }
         BrowserExperiment.setScene(pair[1], for: id)
-        experimentChanged()
+        NotificationCenter.default.post(name: .browserThemeChanged, object: nil)
+    }
+
+    @objc private func selectFuseIndicator(_ sender: NSMenuItem) {
+        guard let scene = sender.representedObject as? String else { return }
+        BrowserExperiment.setFuseScene(scene)
+        NotificationCenter.default.post(name: .browserThemeChanged, object: nil)
     }
 
     private func addGlassSlider(to menu: NSMenu, title: String, value: Double, tag: Int) {
@@ -268,7 +410,7 @@ import UniformTypeIdentifiers
         label.font = .systemFont(ofSize: 11, weight: .medium)
         let slider = NSSlider(frame: NSRect(x: 13, y: 2, width: 222, height: 22))
         slider.minValue = 0
-        slider.maxValue = 0.85
+        slider.maxValue = tag == 3 ? 1 : 0.85
         slider.doubleValue = value
         slider.isContinuous = true
         slider.tag = tag
@@ -283,11 +425,14 @@ import UniformTypeIdentifiers
     @objc private func glassSliderChanged(_ slider: NSSlider) {
         let value = slider.doubleValue
         if slider.tag == 1 { BrowserGlass.setTop(value) }
-        else { BrowserGlass.setSidebar(value) }
-        let name = slider.tag == 1 ? "Top Bar" : "Sidebar"
+        else if slider.tag == 2 { BrowserGlass.setSidebar(value) }
+        else { BrowserGlass.setBackground(value) }
+        let name = slider.tag == 1 ? "Top Bar" : (slider.tag == 2 ? "Sidebar" : "Main Background")
         (slider.superview?.subviews.first { $0 is NSTextField } as? NSTextField)?
             .stringValue = "\(name)  \(Int((value * 100).rounded()))%"
     }
+    @objc private func togglePageGlass() { BrowserGlass.pageInjectionEnabled.toggle() }
+    @objc private func toggleMatchGlass() { BrowserGlass.matchPageGlassSidebar.toggle() }
     @objc private func importChromeAction() { importChrome() }
     @objc private func deleteProfileAction() { deleteProfile() }
     @objc private func openBookmarksAction() { openBookmarks() }

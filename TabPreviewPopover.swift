@@ -70,7 +70,7 @@ import AppKit
         popover.animates = true
     }
 
-    func show(tabID: UUID, title: String, address: String, image: NSImage?, from row: NSView) {
+    func show(tabID: UUID, title: String, address: String, image: NSImage?, from row: NSView, preferredEdge: NSRectEdge = .maxX) {
         hide()
         self.tabID = tabID
         self.title.stringValue = title
@@ -78,7 +78,7 @@ import AppKit
         setThumbnail(image)
         placeholder.stringValue = title
         placeholder.isHidden = image != nil
-        popover.show(relativeTo: row.bounds, of: row, preferredEdge: .maxX)
+        popover.show(relativeTo: row.bounds, of: row, preferredEdge: preferredEdge)
         popover.contentViewController?.view.window?.isOpaque = false
         popover.contentViewController?.view.window?.backgroundColor = .clear
     }

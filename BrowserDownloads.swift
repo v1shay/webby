@@ -181,7 +181,7 @@ import WebKit
 
     @objc private func openDownload(_ item: NSMenuItem) {
         guard let url = item.representedObject as? URL else { return }
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     @objc private func openFolder() {

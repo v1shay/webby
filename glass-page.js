@@ -23,9 +23,28 @@
   const structuralWords = /(?:^|[\s_-])(root|app|page|layout|wrapper|container|sidebar|navbar|header|footer|content|shell)(?:$|[\s_-])/i;
   const cardWords = /(?:^|[\s_-])(card|panel|tile|surface|sheet|field|input|button|toolbar)(?:$|[\s_-])/i;
 
+  const colorCanvas = document.createElement('canvas');
+  colorCanvas.width = colorCanvas.height = 1;
+  const colorContext = colorCanvas.getContext('2d', { willReadFrequently: true });
+  const colorCache = new Map();
+
   function colorParts(value) {
     const match = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)$/i.exec(value);
-    if (!match) return null;
+    if (!match) {
+      // Modern CSS colors (oklch, oklab and color(srgb)) are common in app shells.
+      // Let WebKit convert them to sRGB rather than silently leaving them opaque.
+      if (!colorContext) return null;
+      if (colorCache.has(value)) return colorCache.get(value);
+      colorContext.clearRect(0, 0, 1, 1);
+      colorContext.fillStyle = 'transparent';
+      colorContext.fillStyle = value;
+      colorContext.fillRect(0, 0, 1, 1);
+      const pixel = colorContext.getImageData(0, 0, 1, 1).data;
+      const parts = [pixel[0], pixel[1], pixel[2], pixel[3] / 255];
+      if (colorCache.size >= 256) colorCache.clear();
+      colorCache.set(value, parts);
+      return parts;
+    }
     return [Number(match[1]), Number(match[2]), Number(match[3]),
       match[4] === undefined ? 1 : Number(match[4])];
   }
@@ -129,7 +148,11 @@
       } else if (record.target instanceof Element) {
         const element = record.target;
         if (record.attributeName === 'style' && ownStyle.get(element) === element.getAttribute('style')) continue;
-        queueOne(element, true);
+        if (element === document.documentElement || element === document.body) {
+          queueTree(document.documentElement, true);
+        } else {
+          queueOne(element, true);
+        }
       }
     }
     if (!style.isConnected) (document.head || document.documentElement)?.appendChild(style);
@@ -162,6 +185,10 @@
   // The document-start pass can run before a page's stylesheets exist. Recheck
   // once after parsing, when blocking stylesheets have been applied.
   document.addEventListener('DOMContentLoaded', () => {
+    processPageShell();
+    queueTree(document.documentElement, true);
+  }, { once: true });
+  window.addEventListener('load', () => {
     processPageShell();
     queueTree(document.documentElement, true);
   }, { once: true });

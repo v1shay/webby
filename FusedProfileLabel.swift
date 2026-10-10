@@ -30,11 +30,9 @@ import AppKit
         wantsLayer = true
         // Colors sampled from the user's sky gradient: blue, mist, warm gold,
         // then a restrained coral edge. One fixed palette keeps Fuse cohesive.
-        fusedPaint.colors = ["#6989CC", "#9BC2E9", "#E1EAE9", "#F3EDCB",
-                             "#F7DF95", "#F5BD82", "#F09488"].map {
-            BrowserTheme.color($0).cgColor
-        }
-        fusedPaint.locations = [0, 0.18, 0.38, 0.55, 0.73, 0.88, 1]
+        let stops = BrowserTheme.fuseProfile.gradients.ambient.stops
+        fusedPaint.colors = stops.map { BrowserTheme.color($0.color).cgColor }
+        fusedPaint.locations = stops.map { NSNumber(value: $0.location) }
         fusedPaint.startPoint = CGPoint(x: 0.5, y: 0)
         fusedPaint.endPoint = CGPoint(x: 0.5, y: 1)
         fusedPaint.mask = fusedMask

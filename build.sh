@@ -2,11 +2,11 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-app="$script_dir/Webby.app"
-if [ -d "$script_dir/WebKit Browser.app" ] && [ ! -e "$app" ]; then
+app="${WEBBY_BUILD_APP:-$script_dir/Webby.app}"
+if [ -z "${WEBBY_BUILD_APP:-}" ] && [ -d "$script_dir/WebKit Browser.app" ] && [ ! -e "$app" ]; then
   mv "$script_dir/WebKit Browser.app" "$app"
 fi
-if [ -d "$script_dir/WebKit Browser.app" ] && [ -d "$app" ]; then
+if [ -z "${WEBBY_BUILD_APP:-}" ] && [ -d "$script_dir/WebKit Browser.app" ] && [ -d "$app" ]; then
   # Two bundles with the same identifier can make the Dock pick the old icon.
   legacy_archive="$script_dir/../work/Legacy WebKit Browser.app-$(date +%Y%m%d%H%M%S).zip"
   mkdir -p "$(dirname "$legacy_archive")"
@@ -22,6 +22,8 @@ mkdir -p "$rule_dir"
 mkdir -p "$app/Contents/Resources/Pets"
 mkdir -p "$app/Contents/Resources/PetsWorking"
 cp "$script_dir/gradient_profiles.json" "$app/Contents/Resources/gradient_profiles.json"
+cp "$script_dir/ASCIIArtworks.json" "$app/Contents/Resources/ASCIIArtworks.json"
+cp "$script_dir/ASCIIEngine.js" "$app/Contents/Resources/ASCIIEngine.js"
 cp "$script_dir/VideoControls.js" "$app/Contents/Resources/VideoControls.js"
 cp "$script_dir/LinkPreview.js" "$app/Contents/Resources/LinkPreview.js"
 cp "$script_dir/glass-page.js" "$app/Contents/Resources/glass-page.js"
@@ -38,7 +40,7 @@ swiftc -O -module-cache-path "$module_cache" -framework WebKit \
 
 clang -O2 -target arm64-apple-macos13.0 -c "$script_dir/PTYLauncher.c" -o "$module_cache/PTYLauncher.o"
 
-swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$module_cache" -framework AppKit -framework WebKit -framework AVFoundation -framework Security -framework CryptoKit -framework IOKit \
+swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$module_cache" -framework AppKit -framework WebKit -framework AVFoundation -framework Security -framework CryptoKit -framework IOKit -framework JavaScriptCore \
   "$script_dir/PlainWebKitBrowser.swift" \
   "$script_dir/BrowserGlass.swift" \
   "$script_dir/GlassPageInjector.swift" \
@@ -51,6 +53,7 @@ swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$m
   "$script_dir/BrowserMenuBar.swift" \
   "$script_dir/GoogleWorkspace.swift" \
   "$script_dir/WidgetCanvas.swift" \
+  "$script_dir/ASCIIBackgrounds.swift" \
   "$script_dir/WidgetExtras.swift" \
   "$script_dir/WidgetFeeds.swift" \
   "$script_dir/BrowserDownloads.swift" \
@@ -59,6 +62,7 @@ swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$m
   "$script_dir/ChromeSessions.swift" \
   "$script_dir/BrowserApp.swift" \
   "$script_dir/NativeTerminal.swift" \
+  "$script_dir/LightweightIDE.swift" \
   "$script_dir/IndicatorScenes.swift" \
   "$script_dir/NotchIndicatorEngine.swift" \
   "$module_cache/PTYLauncher.o" \
@@ -75,9 +79,12 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>Webby</string>
   <key>CFBundleIconFile</key><string>Webby</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>71</string>
-  <key>CFBundleShortVersionString</key><string>3.10.4</string>
+  <key>CFBundleVersion</key><string>80</string>
+  <key>CFBundleShortVersionString</key><string>3.13.6</string>
   <key>NSAppleEventsUsageDescription</key><string>Webby reads and controls Spotify for its music widget.</string>
+  <key>NSCameraUsageDescription</key><string>Allow a website you choose to use the camera.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Allow a website you choose to use the microphone.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>Allow a website you choose to use your location.</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

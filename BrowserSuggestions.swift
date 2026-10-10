@@ -5,6 +5,34 @@ struct BrowserSuggestion {
     let title: String
     let url: String
     let kind: Kind
+    var profileID: UUID? = nil
+    var profileName: String? = nil
+}
+
+// Fuse routing uses history metadata only. WebKit credentials stay in the
+// destination profile's existing data store.
+enum FuseHistoryRouting {
+    struct Source {
+        let id: UUID
+        let name: String
+        let history: [BrowserLink]
+    }
+    static func nextProfile(after current: UUID?, profiles: [UUID]) -> UUID? {
+        guard let current, let index = profiles.firstIndex(of: current) else { return profiles.first }
+        return index + 1 < profiles.count ? profiles[index + 1] : nil
+    }
+    static func profile(for url: URL, sources: [Source]) -> UUID? {
+        guard let host = url.host?.lowercased(), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        let matches = sources.flatMap { source in
+            source.history.compactMap { link -> (UUID, Date, Bool)? in
+                guard let visited = URL(string: link.url), visited.host?.lowercased() == host else { return nil }
+                return (source.id, link.visitedAt ?? .distantPast, visited.absoluteString == url.absoluteString)
+            }
+        }
+        // Typed websites use the account most recently used on that host.
+        // Clicking a suggestion supplies its source profile explicitly instead.
+        return matches.max { lhs, rhs in lhs.1 == rhs.1 ? (!lhs.2 && rhs.2) : lhs.1 < rhs.1 }?.0
+    }
 }
 
 private final class SuggestionRow: NSView {
@@ -47,7 +75,8 @@ private final class SuggestionRow: NSView {
         headline.font = .systemFont(ofSize: 14, weight: featured ? .semibold : .medium)
         headline.textColor = .labelColor
         headline.lineBreakMode = .byTruncatingTail
-        detail.stringValue = URL(string: item.url)?.host ?? item.url
+        detail.stringValue = (URL(string: item.url)?.host ?? item.url)
+            + (item.profileName.map { " · " + $0 } ?? "")
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail
@@ -197,7 +226,7 @@ private final class SuggestionRow: NSView {
         applyTheme(BrowserTheme.profile)
         (anchor as? GlassAddressSurface)?.setSuggestionsAttached(true)
         suggestions = Array(items.prefix(8))
-        selectedIndex = -1
+        selectedIndex = 0
         if opening { makePanel(in: container, anchor: anchor, window: window) }
         rebuildRows()
         position()
@@ -331,6 +360,7 @@ private final class SuggestionRow: NSView {
         let accent = BrowserTheme.color(BrowserTheme.profile.palette.accent)
         rows = suggestions.enumerated().map { index, item in
             let row = SuggestionRow(item: item, index: index, accent: accent)
+            row.setSelected(index == selectedIndex, featureWhenIdle: false)
             row.onClick = { [weak self] in self?.choose(at: index) }
             if let url = URL(string: item.url), let host = url.host?.lowercased() {
                 if let icon = knownFavicon?(url) ?? iconsByHost[host] {

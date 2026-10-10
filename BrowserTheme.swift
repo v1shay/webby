@@ -81,6 +81,18 @@ extension Notification.Name {
         NotificationCenter.default.post(name: .browserThemeChanged, object: nil)
     }
 
+    static var fuseProfile: PetGradientProfile {
+        let colors = ["#6989CC", "#9BC2E9", "#E1EAE9", "#F3EDCB", "#F7DF95", "#F5BD82", "#F09488"]
+        let locations = [0.0, 0.18, 0.38, 0.55, 0.73, 0.88, 1.0]
+        let recipe = GradientRecipe(angleDegrees: 90, cycleDurationMs: 2500,
+            stops: zip(locations, colors).map { GradientStop(location: $0.0, color: $0.1) })
+        return PetGradientProfile(
+            palette: PetPalette(shadow: "#172A4B", primary: colors[0], secondary: colors[1],
+                                accent: colors[4], highlight: colors[3], foreground: colors[2]),
+            gradients: PetGradients(ambient: recipe, thinking: recipe, working: recipe,
+                                   success: recipe, warning: recipe, error: recipe))
+    }
+
     static var profile: PetGradientProfile {
         profile(for: activeSpaceID)
     }

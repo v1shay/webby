@@ -380,6 +380,8 @@ private final class TerminalScreenView: NSView {
     private let font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
     private let inset: CGFloat = 17
     private var scrollOffset = 0
+    private var selectionAnchor: Int?
+    private var selectionEnd: Int?
     private var columnWidth: CGFloat = 9
     private var rowHeight: CGFloat = 19
     var onInput: ((Data) -> Void)?
@@ -410,6 +412,7 @@ private final class TerminalScreenView: NSView {
     }
 
     func receive(_ data: Data) {
+        clearSelection()
         grid.feed(data)
         if scrollOffset == 0 && !isHiddenOrHasHiddenAncestor { needsDisplay = true }
     }
@@ -417,7 +420,7 @@ private final class TerminalScreenView: NSView {
         cursorColors = profile.gradients.working.stops.map { BrowserTheme.color($0.color, alpha: 0.72) }
         needsDisplay = true
     }
-    func clear() { grid.clearAll(); scrollOffset = 0; needsDisplay = true }
+    func clear() { clearSelection(); grid.clearAll(); scrollOffset = 0; needsDisplay = true }
     func dimensions() -> (Int, Int) { (grid.columns, grid.lineCount) }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -432,6 +435,11 @@ private final class TerminalScreenView: NSView {
             for (column, cell) in cells.enumerated() {
                 if let bg = cell.background {
                     bg.setFill()
+                    NSRect(x: inset + CGFloat(column) * columnWidth, y: y,
+                           width: columnWidth, height: rowHeight).fill()
+                }
+                if let range = selectionRange, range.contains(rowIndex * grid.columns + column) {
+                    NSColor.selectedTextBackgroundColor.withAlphaComponent(0.65).setFill()
                     NSRect(x: inset + CGFloat(column) * columnWidth, y: y,
                            width: columnWidth, height: rowHeight).fill()
                 }
@@ -451,16 +459,69 @@ private final class TerminalScreenView: NSView {
         }
     }
 
-    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self) }
+    private var selectionRange: Range<Int>? {
+        guard let anchor = selectionAnchor, let end = selectionEnd, anchor != end else { return nil }
+        return min(anchor, end)..<max(anchor, end)
+    }
+    private func clearSelection() { selectionAnchor = nil; selectionEnd = nil; needsDisplay = true }
+    private func cellIndex(at point: NSPoint) -> Int {
+        let row = min(grid.lineCount - 1, max(0, Int(floor((point.y - inset) / rowHeight))))
+        let column = min(grid.columns, max(0, Int(floor((point.x - inset) / columnWidth))))
+        return row * grid.columns + column
+    }
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        selectionAnchor = cellIndex(at: convert(event.locationInWindow, from: nil))
+        selectionEnd = selectionAnchor
+        needsDisplay = true
+    }
+    override func mouseDragged(with event: NSEvent) {
+        selectionEnd = cellIndex(at: convert(event.locationInWindow, from: nil))
+        needsDisplay = true
+    }
+    @objc func copy(_ sender: Any?) {
+        guard let range = selectionRange else { return }
+        let rows = grid.visibleRows(scrolledBy: scrollOffset)
+        var lines: [String] = []
+        for (rowIndex, cells) in rows.enumerated() {
+            let start = max(0, range.lowerBound - rowIndex * grid.columns)
+            let end = min(cells.count, range.upperBound - rowIndex * grid.columns)
+            guard start < end else { continue }
+            let text = cells[start..<end].map(\.character).joined()
+            lines.append(end == grid.columns ? String(text.reversed().drop(while: { $0 == " " }).reversed()) : text)
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+    }
+    @objc func paste(_ sender: Any?) {
+        guard let text = NSPasteboard.general.string(forType: .string) else { return }
+        clearSelection(); scrollOffset = 0
+        let payload = grid.bracketedPaste ? "\u{001B}[200~" + text + "\u{001B}[201~" : text
+        onInput?(Data(payload.utf8))
+    }
+    override func selectAll(_ sender: Any?) {
+        selectionAnchor = 0; selectionEnd = grid.visibleRows(scrolledBy: scrollOffset).count * grid.columns
+        needsDisplay = true
+    }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        window?.makeFirstResponder(self)
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Paste", action: #selector(paste(_:)), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Select All", action: #selector(selectAll(_:)), keyEquivalent: "").target = self
+        return menu
+    }
 
     override func scrollWheel(with event: NSEvent) {
         guard !grid.isAlternate else { return }
+        clearSelection()
         scrollOffset = max(0, min(grid.historyCount, scrollOffset + Int(event.scrollingDeltaY.rounded())))
         needsDisplay = true
     }
 
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) { super.keyDown(with: event); return }
+        clearSelection()
         let key: String
         switch event.keyCode {
         case 36, 76: key = "\r"
@@ -488,14 +549,19 @@ private final class TerminalScreenView: NSView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "v",
-           let text = NSPasteboard.general.string(forType: .string) {
-            let payload = grid.bracketedPaste ? "\u{001B}[200~" + text + "\u{001B}[201~" : text
-            onInput?(Data(payload.utf8))
-            return true
+        guard window?.firstResponder === self, event.modifierFlags.contains(.command),
+              !event.modifierFlags.contains(.control), !event.modifierFlags.contains(.option) else {
+            return super.performKeyEquivalent(with: event)
         }
-        return super.performKeyEquivalent(with: event)
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "c": copy(nil)
+        case "v": paste(nil)
+        case "a": selectAll(nil)
+        default: return super.performKeyEquivalent(with: event)
+        }
+        return true
     }
+
 }
 
 final class NativeTerminalPane: NSVisualEffectView {
@@ -504,6 +570,9 @@ final class NativeTerminalPane: NSVisualEffectView {
     private let gradientTint = CAGradientLayer()
     private let closeButton: GlassButton
     var onClose: (() -> Void)?
+    var onOutput: ((Data) -> Void)?
+    var onInterrupt: (() -> Void)?
+    var onShellExit: (() -> Void)?
 
     init(target: AnyObject, action: Selector) {
         closeButton = GlassButton(symbol: "globe", label: "Back to Search", target: target, action: action)
@@ -528,10 +597,16 @@ final class NativeTerminalPane: NSVisualEffectView {
             closeButton.widthAnchor.constraint(equalToConstant: 34),
             closeButton.heightAnchor.constraint(equalToConstant: 34)
         ])
-        screen.onInput = { [weak self] in self?.session.send($0) }
+        screen.onInput = { [weak self] data in
+            self?.session.send(data)
+            if data == Data([3]) { self?.onInterrupt?() }
+        }
         screen.onResize = { [weak self] columns, rows in self?.session.resize(columns: columns, rows: rows) }
-        session.onData = { [weak self] in self?.screen.receive($0) }
-        session.onExit = { [weak self] in self?.screen.receive(Data("\r\n[Shell exited]\r\n".utf8)) }
+        session.onData = { [weak self] data in
+            self?.screen.receive(data)
+            self?.onOutput?(data)
+        }
+        session.onExit = { [weak self] in self?.screen.receive(Data("\r\n[Shell exited]\r\n".utf8)); self?.onShellExit?() }
         applyTheme(BrowserTheme.profile)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -562,5 +637,6 @@ final class NativeTerminalPane: NSVisualEffectView {
         guard session.running else { return }
         session.send(Data((command + "\r").utf8))
     }
+    func interrupt() { session.send(Data([3])); onInterrupt?() }
     func stop() { session.stop(); screen.clear() }
 }

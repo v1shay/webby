@@ -72,6 +72,7 @@ private struct WidgetPlacement: Codable {
     override var mouseDownCanMoveWindow: Bool { false }
     var activate: ((WebbyWidget) -> Void)?
     var remove: ((WebbyWidget) -> Void)?
+    var didRebuild: ((UUID) -> Void)?
     var submitCodex: ((String) -> Void)?
     var calculatorCalculated: ((String) -> Void)?
     var musicCommand: ((MusicCommand) -> Void)?
@@ -228,6 +229,7 @@ private struct WidgetPlacement: Codable {
             card.applyTheme(BrowserTheme.profile)
         }
         needsLayout = true
+        didRebuild?(profile)
     }
 
     private func reachableFrame(for placement: WidgetPlacement) -> NSRect {
@@ -250,6 +252,11 @@ private struct WidgetPlacement: Codable {
                 card.frame = reachableFrame(for: placement)
             }
         }
+    }
+
+    func coversPoint(inWindow point: NSPoint) -> Bool {
+        let local = convert(point, from: nil)
+        return cards.values.contains { !$0.isHidden && $0.frame.contains(local) }
     }
 
     func handleDragEvent(_ event: NSEvent) -> Bool {
