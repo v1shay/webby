@@ -1,7 +1,7 @@
 import AppKit
 
 /// Hosts the existing tab view, so its WebKit data store and in-page state remain intact.
-@MainActor final class FloatingTabWindow: NSWindow {
+@MainActor class FloatingTabWindow: NSWindow {
     let tabID: UUID
     let contentHost = NSView()
     let addressField = NSTextField()

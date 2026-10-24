@@ -1,6 +1,7 @@
 import AppKit
 import IOKit.ps
 import Darwin
+import ImageIO
 
 struct SpotifySnapshot: Codable, Equatable {
     let title: String
@@ -17,7 +18,7 @@ enum MusicCommand { case previous, toggle, next }
 enum SpotifyBridge {
     private static let lastTrackKey = "webbyLastSpotifyTrack"
 
-    private static var pausedLastTrack: SpotifySnapshot? {
+    static var pausedLastTrack: SpotifySnapshot? {
         lastTrack.map { SpotifySnapshot(title: $0.title, artist: $0.artist, album: $0.album,
                                         artworkURL: $0.artworkURL, position: $0.position,
                                         duration: $0.duration, isPlaying: false) }
@@ -50,7 +51,7 @@ enum SpotifyBridge {
         guard let result = NSAppleScript(source: script)?.executeAndReturnError(&error).stringValue,
               !result.isEmpty else { return pausedLastTrack }
         let fields = result.components(separatedBy: String(UnicodeScalar(30)!))
-        guard fields.count == 7 else { return lastTrack }
+        guard fields.count == 7 else { return pausedLastTrack }
         let rawDuration = Double(fields[5]) ?? 0
         let track = SpotifySnapshot(title: fields[0], artist: fields[1], album: fields[2],
                                     artworkURL: fields[3], position: Double(fields[4]) ?? 0,
@@ -216,5 +217,28 @@ struct ExpressionCalculator {
         while index < characters.count && (characters[index].isNumber || characters[index] == ".") { index += 1 }
         guard index > start else { return nil }
         return Double(String(characters[start..<index]))
+    }
+}
+
+// One bounded last cover, shared with the system-wide Spotify playback source.
+@MainActor enum SpotifyArtworkCache {
+    private static let key = "webbyLastSpotifyArtwork.v1"
+    private struct Cover: Codable { let url: String; let data: Data }
+    static func read(_ url: String) -> NSImage? {
+        guard let data = UserDefaults.standard.data(forKey:key), data.count < 1_100_000,
+              let cover = try? JSONDecoder().decode(Cover.self,from:data), cover.url == url else { return nil }
+        return NSImage(data:cover.data)
+    }
+    static func save(_ data: Data, url: String) -> NSImage? {
+        guard data.count <= 8_000_000, let source = CGImageSourceCreateWithData(data as CFData,nil),
+              let thumbnail = CGImageSourceCreateThumbnailAtIndex(source,0,[
+                kCGImageSourceCreateThumbnailFromImageAlways:true,
+                kCGImageSourceThumbnailMaxPixelSize:640,
+                kCGImageSourceCreateThumbnailWithTransform:true] as CFDictionary) else { return nil }
+        let bitmap = NSBitmapImageRep(cgImage:thumbnail)
+        guard let png = bitmap.representation(using:.png,properties:[:]), png.count <= 750_000,
+              let encoded = try? JSONEncoder().encode(Cover(url:url,data:png)) else { return nil }
+        UserDefaults.standard.set(encoded,forKey:key)
+        return NSImage(cgImage:thumbnail,size:NSSize(width:thumbnail.width,height:thumbnail.height))
     }
 }

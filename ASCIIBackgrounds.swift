@@ -139,7 +139,8 @@ struct ASCIIArtwork: Codable {
             animate()
             timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    guard let self, self.window != nil, !self.isHiddenOrHasHiddenAncestor, !self.isDragging else { return }
+                    guard let self, let window = self.window, window.occlusionState.contains(.visible),
+                          !self.isHiddenOrHasHiddenAncestor, !self.isDragging, Motion.enabled else { return }
                     self.animate()
                 }
             }

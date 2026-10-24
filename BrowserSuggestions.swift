@@ -1,7 +1,7 @@
 import AppKit
 
-struct BrowserSuggestion {
-    enum Kind { case pinned, bookmark, history, cookie }
+struct BrowserSuggestion: Equatable {
+    enum Kind: Equatable { case pinned, bookmark, history, cookie }
     let title: String
     let url: String
     let kind: Kind
@@ -225,7 +225,13 @@ private final class SuggestionRow: NSView {
         self.container = container
         applyTheme(BrowserTheme.profile)
         (anchor as? GlassAddressSurface)?.setSuggestionsAttached(true)
-        suggestions = Array(items.prefix(8))
+        let next = Array(items.prefix(8))
+        if !opening, suggestions == next {
+            selectedIndex = 0
+            for (index, row) in rows.enumerated() { row.setSelected(index == 0, featureWhenIdle: false) }
+            return
+        }
+        suggestions = next
         selectedIndex = 0
         if opening { makePanel(in: container, anchor: anchor, window: window) }
         rebuildRows()

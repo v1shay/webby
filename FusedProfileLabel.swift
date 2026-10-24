@@ -67,6 +67,7 @@ import AppKit
     }
 
     func showProfile(_ name: String, animated: Bool) {
+        let changed = isFused || stringValue != name
         isFused = false
         // Remove the masked layer entirely. Keeping it attached at opacity 0
         // left a cached copy of "Fuse" behind the normal profile name.
@@ -77,6 +78,10 @@ import AppKit
         font = .systemFont(ofSize: 11, weight: .semibold)
         textColor = .secondaryLabelColor
         fusedPaint.opacity = 0
+        if animated && changed && Motion.enabled {
+            let fade=CATransition();fade.type = .fade;fade.duration=0.16
+            layer?.add(fade,forKey:"profileName")
+        }
         needsDisplay = true
     }
 
@@ -99,7 +104,7 @@ import AppKit
             appear.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.7, 0.2, 1)
             fusedPaint.add(appear, forKey: "fuseAppear")
             let settle = CABasicAnimation(keyPath: "transform.scale")
-            settle.fromValue = 0.92
+            settle.fromValue = 0.97
             settle.toValue = 1
             settle.duration = 0.24
             settle.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.7, 0.2, 1)

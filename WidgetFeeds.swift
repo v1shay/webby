@@ -8,13 +8,13 @@ struct WidgetFeed {
     var stock: StockSnapshot? = nil
 }
 
-struct WeatherHour {
+struct WeatherHour: Codable, Equatable {
     let label: String
     let temperature: Int
     let code: Int
 }
 
-struct WeatherSnapshot {
+struct WeatherSnapshot: Codable, Equatable {
     let city: String
     let temperature: Int
     let high: Int?
@@ -39,7 +39,7 @@ struct WeatherSnapshot {
     }
 }
 
-struct StockSnapshot {
+struct StockSnapshot: Codable, Equatable {
     let symbol: String
     let price: String
     let changePercent: Double
@@ -84,6 +84,7 @@ enum WidgetFeeds {
         let current = forecast["current"] as? [String: Any] ?? [:]
         let daily = forecast["daily"] as? [String: Any] ?? [:]
         let temperature = current["temperature_2m"] as? Double
+        guard let currentTemperature=temperature,currentTemperature.isFinite else {throw WidgetFeedError.badResponse}
         let humidity = current["relative_humidity_2m"] as? Int
         let highs = daily["temperature_2m_max"] as? [Double] ?? []
         let lows = daily["temperature_2m_min"] as? [Double] ?? []
@@ -102,7 +103,7 @@ enum WidgetFeeds {
                           lines: [temperature.map { "Now  \(Int($0.rounded()))°F" } ?? "Current temperature unavailable",
                                   highs.first.map { "Today  H: \(Int($0.rounded()))°  L: \(Int((lows.first ?? 0).rounded()))°" } ?? "",
                                   humidity.map { "Humidity  \($0)%" } ?? ""].filter { !$0.isEmpty },
-                          weather: WeatherSnapshot(city: name, temperature: Int((temperature ?? 0).rounded()),
+                          weather: WeatherSnapshot(city: name, temperature: Int(currentTemperature.rounded()),
                                                    high: highs.first.map { Int($0.rounded()) },
                                                    low: lows.first.map { Int($0.rounded()) },
                                                    humidity: humidity, code: current["weather_code"] as? Int ?? 0,
@@ -140,5 +141,27 @@ enum WidgetFeeds {
               let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw WidgetFeedError.badResponse }
         return root
+    }
+}
+
+// One small record per profile/service. Defaults persists these asynchronously;
+// startup reads metadata without waiting for a provider or creating a webview.
+@MainActor enum WidgetSnapshotCache {
+    struct Record<Value: Codable>: Codable {
+        let query: String
+        let updated: Date
+        let value: Value
+    }
+    static func normalized(_ query: String) -> String { query.trimmingCharacters(in:.whitespacesAndNewlines).lowercased() }
+    private static func key(_ profile: UUID, _ kind: String) -> String { "webbyWidgetSnapshot.v1.\(profile.uuidString).\(kind)" }
+    static func read<Value: Codable>(_ type: Value.Type, profile: UUID, kind: String, query: String) -> Record<Value>? {
+        guard let data=UserDefaults.standard.data(forKey:key(profile,kind)),data.count<=131072,
+              let record=try? JSONDecoder().decode(Record<Value>.self,from:data),record.query==normalized(query) else{return nil}
+        return record
+    }
+    static func save<Value: Codable>(_ value: Value, profile: UUID, kind: String, query: String, updated: Date = Date()) {
+        let record=Record(query:normalized(query),updated:updated,value:value)
+        guard let data=try? JSONEncoder().encode(record),data.count<=131072 else{return}
+        UserDefaults.standard.set(data,forKey:key(profile,kind))
     }
 }

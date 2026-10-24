@@ -73,6 +73,8 @@ private struct WidgetPlacement: Codable {
     var activate: ((WebbyWidget) -> Void)?
     var remove: ((WebbyWidget) -> Void)?
     var didRebuild: ((UUID) -> Void)?
+    var calendarMonthChanged: ((Date) -> Void)?
+    var calendarDayOpened: ((Date) -> Void)?
     var submitCodex: ((String) -> Void)?
     var calculatorCalculated: ((String) -> Void)?
     var musicCommand: ((MusicCommand) -> Void)?
@@ -87,6 +89,11 @@ private struct WidgetPlacement: Codable {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        NotificationCenter.default.addObserver(self, selector: #selector(updateGlassOpacity), name: .browserWidgetGlassChanged, object: nil)
+    }
+    deinit { NotificationCenter.default.removeObserver(self) }
+    @objc private func updateGlassOpacity() {
+        for (kind, card) in cards { card.setGlassOpacity(BrowserGlass.widgetOpacity(profile: profile, kind: kind.rawValue)) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -96,8 +103,8 @@ private struct WidgetPlacement: Codable {
         let key = storageKey
         if let data = UserDefaults.standard.data(forKey: key),
            let saved = try? JSONDecoder().decode([WidgetPlacement].self, from: data) {
-            let containedGoogle = saved.contains { $0.kind.googleService != nil }
-            placements = saved.filter { $0.kind.googleService == nil }
+            let containedGoogle = saved.contains { $0.kind == .gmail || $0.kind == .drive }
+            placements = saved.filter { $0.kind != .gmail && $0.kind != .drive }
             if containedGoogle {
                 // Reclaim the row previously occupied by Google widgets.
                 for index in placements.indices where placements[index].y >= 200 {
@@ -115,6 +122,12 @@ private struct WidgetPlacement: Codable {
                 save()
             }
             UserDefaults.standard.set(true, forKey: fullCanvasKey)
+        }
+        if CalendarSubscription.url(profile: profile) != nil, !placements.contains(where: { $0.kind == .calendar }),
+           !UserDefaults.standard.bool(forKey: "webbyCalendarFeedAdded.\(profile.uuidString)") {
+            placements.append(.init(kind: .calendar, x: 12, y: 12, width: 350, height: 370))
+            UserDefaults.standard.set(true, forKey: "webbyCalendarFeedAdded.\(profile.uuidString)")
+            save()
         }
         rebuild()
     }
@@ -178,8 +191,14 @@ private struct WidgetPlacement: Codable {
         cards[kind]?.set(subtitle: subtitle, lines: lines, busy: busy, connected: connected, chart: chart)
     }
 
-    func setWeather(_ snapshot: WeatherSnapshot) { cards[.weather]?.setWeather(snapshot) }
-    func setStock(_ snapshot: StockSnapshot) { cards[.stocks]?.setStock(snapshot) }
+    func setCalendar(_ snapshot: CalendarSnapshot) { cards[.calendar]?.calendarView.set(snapshot) }
+    func setCalendarStatus(_ text: String) { cards[.calendar]?.calendarView.setStatus(text) }
+
+    func setWeather(_ snapshot: WeatherSnapshot) { cards[.weather]?.setWeather(snapshot, animated:true);cards[.weather]?.finishFeed() }
+    func setStock(_ snapshot: StockSnapshot) { cards[.stocks]?.setStock(snapshot, animated:true);cards[.stocks]?.finishFeed() }
+    func prepareFeed(_ kind: WebbyWidget, query: String, refreshing: Bool) { cards[kind]?.prepareFeed(query:query,refreshing:refreshing) }
+    func failFeed(_ kind: WebbyWidget, message: String) { cards[kind]?.failFeed(message) }
+    func setFeedsVisible(_ visible: Bool) { for card in cards.values {card.setFeedVisible(visible)} }
     func setMusic(_ snapshot: SpotifySnapshot?) { cards[.music]?.setMusic(snapshot) }
     func setBattery(_ snapshot: BatterySnapshot) { cards[.battery]?.setBattery(snapshot) }
     func setCalculatorHistory(_ entries: [String]) { cards[.calculator]?.setCalculatorHistory(entries) }
@@ -210,6 +229,10 @@ private struct WidgetPlacement: Codable {
             let card = GlassWidgetCard(kind: placement.kind,
                                        frame: NSRect(x: placement.x + horizontalInset, y: placement.y,
                                                      width: placement.width, height: placement.height))
+            if placement.kind == .calendar {
+                card.calendarView.changeMonth = { [weak self] date in self?.calendarMonthChanged?(date) }
+                card.calendarView.openDay = { [weak self] date in self?.calendarDayOpened?(date) }
+            }
             card.activate = { [weak self] in self?.activate?(placement.kind) }
             card.submitCodex = { [weak self] prompt in self?.submitCodex?(prompt) }
             card.musicCommand = { [weak self] command in self?.musicCommand?(command) }
@@ -224,6 +247,15 @@ private struct WidgetPlacement: Codable {
                 self.save()
                 self.enclosingScrollView?.needsLayout = true
             }
+            card.glassProfile = profile
+            card.setGlassOpacity(BrowserGlass.widgetOpacity(profile: profile, kind: placement.kind.rawValue))
+            if placement.kind == .weather || placement.kind == .stocks {
+                let key=placement.kind == .weather ? "webbyWeatherCity." : "webbyStockSymbol."
+                let fallback=placement.kind == .weather ? "San Francisco" : "AAPL"
+                card.prepareFeed(query:UserDefaults.standard.string(forKey:key+profile.uuidString) ?? fallback,refreshing:false)
+            }
+            if placement.kind == .calendar, let cached = CalendarSnapshotCache.read(profile:profile) { card.calendarView.set(cached) }
+            if placement.kind == .music { card.prepareMusic() }
             cards[placement.kind] = card
             addSubview(card)
             card.applyTheme(BrowserTheme.profile)
@@ -283,15 +315,29 @@ private struct WidgetPlacement: Codable {
 
 }
 
-@MainActor private final class GlassWidgetCard: NSVisualEffectView, NSTextFieldDelegate {
+@MainActor private final class WidgetGlassBackdrop: NSVisualEffectView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+@MainActor private final class GlassWidgetCard: NSView, NSTextFieldDelegate {
     override var mouseDownCanMoveWindow: Bool { false }
     let kind: WebbyWidget
+    var glassProfile = UUID()
+    private let glass = WidgetGlassBackdrop()
+    private var glassOpacity = 0.45
+    private lazy var skeleton = WidgetFeedSkeleton(kind:kind)
+    private let feedStatus = NSTextField(labelWithString: "")
+    private var feedQuery = ""
+    private var feedUpdated: Date?
+    private var showSkeleton = false
+    private var feedVisible = false
     var activate: (() -> Void)?
     var remove: (() -> Void)?
     var submitCodex: ((String) -> Void)?
     var musicCommand: ((MusicCommand) -> Void)?
     var calculatorCalculated: ((String) -> Void)?
     var didMoveOrResize: ((NSRect) -> Void)?
+    lazy var calendarView = CalendarWidgetView(frame: .zero)
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
@@ -325,6 +371,8 @@ private struct WidgetPlacement: Codable {
     private var music: SpotifySnapshot?
     private var battery: BatterySnapshot?
     private var loadedArtworkURL = ""
+    private var artworkTask: Task<Void,Never>?
+    private var artworkAttempt = Date.distantPast
     private let gradientTint = CAGradientLayer()
     private let topSheen = CAGradientLayer()
     private let gradientRim = CAGradientLayer()
@@ -338,10 +386,16 @@ private struct WidgetPlacement: Codable {
     init(kind: WebbyWidget, frame: NSRect) {
         self.kind = kind
         super.init(frame: frame)
-        material = .hudWindow
-        blendingMode = .behindWindow
-        state = .active
         wantsLayer = true
+        glass.material = .hudWindow
+        glass.blendingMode = .withinWindow
+        glass.state = .active
+        glass.wantsLayer = true
+        glass.layer?.cornerRadius = 18
+        glass.layer?.masksToBounds = true
+        glass.alphaValue = glassOpacity
+        addSubview(glass)
+        if kind == .calendar { addSubview(calendarView) }
         layer?.cornerRadius = 18
         layer?.masksToBounds = true
         topSheen.colors = [NSColor.white.withAlphaComponent(0.13).cgColor,
@@ -349,8 +403,8 @@ private struct WidgetPlacement: Codable {
         topSheen.locations = [0, 0.58]
         topSheen.startPoint = CGPoint(x: 0.5, y: 1)
         topSheen.endPoint = CGPoint(x: 0.5, y: 0)
-        layer?.addSublayer(gradientTint)
-        layer?.addSublayer(topSheen)
+        glass.layer?.addSublayer(gradientTint)
+        glass.layer?.addSublayer(topSheen)
         gradientRim.mask = rimMask
         layer?.addSublayer(gradientRim)
         weatherHalo.type = .radial
@@ -365,7 +419,7 @@ private struct WidgetPlacement: Codable {
         } else {
             icon.image = NSImage(systemSymbolName: kind.symbol, accessibilityDescription: kind.title)
         }
-        if kind.googleService != nil { loadBrandIcon() }
+        if kind.googleService != nil && kind != .calendar { loadBrandIcon() }
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.contentTintColor = .labelColor
         title.stringValue = kind.title
@@ -468,6 +522,12 @@ private struct WidgetPlacement: Codable {
         for view in hourSymbols { addSubview(view) }
         for view in hourLabels { addSubview(view) }
         set(subtitle: "", lines: [])
+        feedStatus.font = .systemFont(ofSize:9)
+        feedStatus.textColor = .secondaryLabelColor
+        feedStatus.lineBreakMode = .byTruncatingTail
+        feedStatus.isHidden = true
+        skeleton.isHidden = true
+        addSubview(skeleton);addSubview(feedStatus)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -510,7 +570,9 @@ private struct WidgetPlacement: Codable {
         needsLayout = true
     }
 
-    func setWeather(_ snapshot: WeatherSnapshot) {
+    func setWeather(_ snapshot: WeatherSnapshot, animated: Bool = false) {
+        if animated && weather != snapshot { transitionFeed() }
+        if weather?.code != snapshot.code {weatherIcon.layer?.removeAnimation(forKey:"weatherFloat")}
         weather = snapshot
         weatherMeta.stringValue = snapshot.city
         value.stringValue = "\(snapshot.temperature)°"
@@ -555,8 +617,17 @@ private struct WidgetPlacement: Codable {
         weatherHalo.colors = [weatherColor.withAlphaComponent(0.26).cgColor,
                               weatherColor.withAlphaComponent(0).cgColor]
         weatherHalo.isHidden = false
+        updateFeedMotion()
+        needsLayout = true
+    }
+
+    private func updateFeedMotion() {
+        guard feedVisible, Motion.enabled, weather != nil else {
+            weatherIcon.layer?.removeAnimation(forKey:"weatherFloat");weatherHalo.removeAnimation(forKey:"weatherGlow");return
+        }
+        guard weatherIcon.layer?.animation(forKey:"weatherFloat") == nil else{return}
         weatherIcon.layer?.removeAnimation(forKey: "weatherFloat")
-        let isSun = snapshot.code == 0
+        let isSun = weather?.code == 0
         let motion = CABasicAnimation(keyPath: isSun ? "transform.rotation.z" : "transform.translation.y")
         motion.fromValue = isSun ? -0.12 : -2
         motion.toValue = isSun ? 0.12 : 2
@@ -574,10 +645,49 @@ private struct WidgetPlacement: Codable {
         glow.repeatCount = .infinity
         glow.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         weatherHalo.add(glow, forKey: "weatherGlow")
-        needsLayout = true
     }
-
-    func setStock(_ snapshot: StockSnapshot) {
+    func setFeedVisible(_ visible: Bool) {
+        feedVisible=visible
+        updateFeedMotion()
+    }
+    private func transitionFeed() {
+        guard feedVisible,Motion.enabled,!isHiddenOrHasHiddenAncestor,window?.occlusionState.contains(.visible)==true else{return}
+        let fade=CATransition();fade.type = .fade;fade.duration=0.22
+        fade.timingFunction=CAMediaTimingFunction(name:.easeInEaseOut)
+        layer?.add(fade,forKey:"feedUpdate")
+    }
+    private func savedTime() -> String {
+        guard let date=feedUpdated else{return ""}
+        let formatter=RelativeDateTimeFormatter();formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for:date,relativeTo:Date())
+    }
+    func prepareFeed(query: String, refreshing: Bool) {
+        let normalized=WidgetSnapshotCache.normalized(query)
+        if feedQuery != normalized {
+            feedQuery=normalized;feedUpdated=nil;weather=nil;stock=nil
+            if kind == .weather,let cached=WidgetSnapshotCache.read(WeatherSnapshot.self,profile:glassProfile,kind:kind.rawValue,query:query) {
+                setWeather(cached.value);feedUpdated=cached.updated
+            } else if kind == .stocks,let cached=WidgetSnapshotCache.read(StockSnapshot.self,profile:glassProfile,kind:kind.rawValue,query:query) {
+                setStock(cached.value);feedUpdated=cached.updated
+            }
+        }
+        showSkeleton = weather == nil && stock == nil
+        feedStatus.stringValue = showSkeleton ? "Loading…" : (refreshing ? "Refreshing · saved " : "Saved ") + savedTime()
+        toolTip = feedStatus.stringValue
+        needsLayout=true
+    }
+    func finishFeed() {
+        feedUpdated=Date();showSkeleton=false;feedStatus.stringValue=""
+        toolTip="Updated just now";needsLayout=true
+    }
+    func failFeed(_ message: String) {
+        showSkeleton=false
+        if weather == nil && stock == nil {set(subtitle:feedQuery,lines:[message])}
+        feedStatus.stringValue = feedUpdated == nil ? "We couldn’t refresh this widget" : "Offline · saved " + savedTime()
+        toolTip=message;needsLayout=true
+    }
+    func setStock(_ snapshot: StockSnapshot, animated: Bool = false) {
+        if animated && stock != snapshot {transitionFeed()}
         stock = snapshot
         weatherMeta.stringValue = snapshot.symbol
         value.stringValue = snapshot.price
@@ -590,26 +700,45 @@ private struct WidgetPlacement: Codable {
         needsLayout = true
     }
 
+    func prepareMusic() {
+        if let cached = SpotifyBridge.pausedLastTrack { setMusic(cached) }
+        else { showSkeleton = true; needsLayout = true }
+    }
+
     func setMusic(_ snapshot: SpotifySnapshot?) {
+        let snapshot = snapshot ?? music.map {
+            SpotifySnapshot(title:$0.title,artist:$0.artist,album:$0.album,artworkURL:$0.artworkURL,
+                            position:$0.position,duration:$0.duration,isPlaying:false)
+        }
+        if showSkeleton || music?.title != snapshot?.title || music?.artworkURL != snapshot?.artworkURL {
+            transitionFeed()
+        }
+        showSkeleton = false
         music = snapshot
         trackTitle.stringValue = snapshot?.title ?? "Open Spotify"
         trackArtist.stringValue = snapshot.map { "\($0.artist) · \($0.album)" } ?? "Your last played song appears here"
         musicToggle.image = NSImage(systemSymbolName: snapshot?.isPlaying == true ? "pause.fill" : "play.fill", accessibilityDescription: nil)
         musicProgress.doubleValue = snapshot.map { $0.duration > 0 ? min(1, $0.position / $0.duration) : 0 } ?? 0
         let artworkURL = snapshot?.artworkURL ?? ""
-        if artworkURL != loadedArtworkURL, let url = URL(string: artworkURL), url.scheme == "https" {
+        if artworkURL != loadedArtworkURL || (albumArt.image == nil && Date().timeIntervalSince(artworkAttempt) >= 60) {
+            artworkAttempt = Date()
+            artworkTask?.cancel()
             loadedArtworkURL = artworkURL
-            albumArt.image = nil
-            Task { [weak self] in
-                guard let (data, _) = try? await URLSession.shared.data(from: url),
-                      let image = NSImage(data: data) else {
-                    self?.loadedArtworkURL = ""
-                    return
+            albumArt.image = SpotifyArtworkCache.read(artworkURL)
+            if albumArt.image == nil, let url = URL(string:artworkURL), url.scheme == "https" {
+                artworkTask = Task { [weak self] in
+                    var request = URLRequest(url:url,cachePolicy:.returnCacheDataElseLoad,timeoutInterval:15)
+                    request.setValue("image/*",forHTTPHeaderField:"Accept")
+                    guard let (data,response) = try? await URLSession.shared.data(for:request),
+                          !Task.isCancelled, (response as? HTTPURLResponse)?.statusCode == 200,
+                          let self, self.music?.artworkURL == artworkURL else { return }
+                    guard let image = SpotifyArtworkCache.save(data,url:artworkURL) else { return }
+                    self.transitionFeed()
+                    self.albumArt.image = image
+                    self.needsLayout = true
                 }
-                guard self?.music?.artworkURL == artworkURL else { return }
-                self?.albumArt.image = image
             }
-        } else if artworkURL.isEmpty { loadedArtworkURL = ""; albumArt.image = nil }
+        }
         needsLayout = true
     }
 
@@ -629,6 +758,30 @@ private struct WidgetPlacement: Codable {
         needsLayout = true
     }
 
+    func setGlassOpacity(_ opacity: Double) {
+        glassOpacity = min(1, max(0, opacity))
+        glass.alphaValue = glassOpacity
+        // Artwork, text, controls and live charts retain their own opacity.
+    }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu(title: "Widget Glass")
+        let item = NSMenuItem()
+        let host = NSView(frame: NSRect(x:0,y:0,width:245,height:48))
+        let label = NSTextField(labelWithString:"Glass opacity  \(Int((glassOpacity * 100).rounded()))%")
+        label.frame = NSRect(x:14,y:27,width:220,height:17)
+        let slider = NSSlider(value:glassOpacity,minValue:0,maxValue:1,target:self,action:#selector(glassOpacityChanged(_:)))
+        slider.isContinuous = true; slider.frame = NSRect(x:12,y:3,width:220,height:22)
+        host.addSubview(label);host.addSubview(slider);item.view=host;menu.addItem(item)
+        let reset = menu.addItem(withTitle:"Use Profile Widget Opacity",action:#selector(resetGlassOpacity),keyEquivalent:"")
+        reset.target=self
+        return menu
+    }
+    @objc private func glassOpacityChanged(_ sender: NSSlider) {
+        BrowserGlass.setWidgetOpacity(sender.doubleValue,profile:glassProfile,kind:kind.rawValue)
+        (sender.superview?.subviews.first { $0 is NSTextField } as? NSTextField)?.stringValue = "Glass opacity  \(Int((sender.doubleValue * 100).rounded()))%"
+    }
+    @objc private func resetGlassOpacity() { BrowserGlass.resetWidgetOpacity(profile:glassProfile,kind:kind.rawValue) }
+
     func applyTheme(_ profile: PetGradientProfile) {
         BrowserTheme.apply(profile.gradients.ambient, to: gradientTint, alpha: 0.08)
         BrowserTheme.apply(profile.gradients.ambient, to: gradientRim, alpha: 0.58)
@@ -641,6 +794,7 @@ private struct WidgetPlacement: Codable {
         super.layout()
         let width = bounds.width
         let height = bounds.height
+        glass.frame = bounds
         gradientTint.frame = bounds
         topSheen.frame = bounds
         gradientRim.frame = bounds
@@ -668,29 +822,81 @@ private struct WidgetPlacement: Codable {
                      musicProgress, calculatorField, calculatorAnswer, calculatorHistory] { view.isHidden = true }
         close.isHidden = compact
         close.frame = NSRect(x: width - 27, y: height - 29, width: 21, height: 21)
+        skeleton.frame=bounds;skeleton.isHidden = !showSkeleton
+        feedStatus.isHidden = compact || feedStatus.stringValue.isEmpty
+        feedStatus.frame=NSRect(x:14,y:4,width:max(1,width-28),height:12)
+        if showSkeleton {
+            icon.isHidden=true;subtitle.isHidden=true;body.isHidden=true;action.isHidden=true;sparkline.isHidden=true
+            return
+        }
+        if kind == .calendar {
+            icon.isHidden = true; subtitle.isHidden = true; body.isHidden = true
+            action.isHidden = true; sparkline.isHidden = true
+            calendarView.frame = compact ? bounds.insetBy(dx: 8, dy: 8)
+                : NSRect(x: 12, y: 20, width: max(1, width-42), height: max(1, height-44))
+            return
+        }
         if kind == .music {
             icon.isHidden = true; subtitle.isHidden = true; body.isHidden = true
             action.isHidden = true; sparkline.isHidden = true
             albumArt.isHidden = music == nil
-            if compact {
-                albumArt.frame = bounds.insetBy(dx: 8, dy: 8)
-                if music == nil { icon.isHidden = false; icon.frame = bounds.insetBy(dx: width * 0.28, dy: height * 0.28) }
+            let padding = min(20, max(12, min(width, height) * 0.055))
+            let tiny = width < 180 || height < 120
+            let stacked = !tiny && height >= 220 && height >= width * 0.72
+            let art: NSRect
+            if tiny {
+                let side = max(1, min(width, height) - padding * 2)
+                art = NSRect(x:(width-side)/2, y:(height-side)/2, width:side, height:side)
+            } else if stacked {
+                // A poster layout: the cover grows with both available dimensions.
+                let footer: CGFloat = 104
+                let side = max(48, min(width-padding*2, height-footer-padding*2))
+                let bottom = max(padding, (height-side-footer)/2)
+                art = NSRect(x:(width-side)/2, y:bottom+footer, width:side, height:side)
+                trackTitle.alignment = .center; trackArtist.alignment = .center
+                trackTitle.font = .systemFont(ofSize:width >= 300 ? 16 : 14, weight:.semibold)
+                trackArtist.font = .systemFont(ofSize:12)
+                trackTitle.maximumNumberOfLines = 1
+                trackTitle.frame = NSRect(x:padding, y:art.minY-30, width:width-padding*2, height:24)
+                trackArtist.frame = NSRect(x:padding, y:art.minY-50, width:width-padding*2, height:18)
+                musicProgress.frame = NSRect(x:padding+4, y:art.minY-67, width:width-padding*2-8, height:6)
+                let buttonSide: CGFloat = 30
+                let gap: CGFloat = 16
+                let start = (width-(buttonSide*3+gap*2))/2
+                for (index,button) in [musicPrevious,musicToggle,musicNext].enumerated() {
+                    button.frame = NSRect(x:start+CGFloat(index)*(buttonSide+gap),y:bottom,width:buttonSide,height:30)
+                }
             } else {
-                let artSide = min(height - 26, medium ? 62 : 104)
-                albumArt.frame = NSRect(x: 14, y: 14, width: artSide, height: artSide)
-                trackTitle.isHidden = false; trackArtist.isHidden = false
-                trackTitle.frame = NSRect(x: artSide + 25, y: height - 41, width: width - artSide - 58, height: 22)
-                trackArtist.frame = NSRect(x: artSide + 25, y: height - 61, width: width - artSide - 58, height: 18)
-                for button in [musicPrevious, musicToggle, musicNext] { button.isHidden = music == nil }
-                let controlsX = artSide + 25
-                musicPrevious.frame = NSRect(x: controlsX, y: 17, width: 31, height: 28)
-                musicToggle.frame = NSRect(x: controlsX + 38, y: 17, width: 31, height: 28)
-                musicNext.frame = NSRect(x: controlsX + 76, y: 17, width: 31, height: 28)
-                musicProgress.isHidden = music == nil
-                musicProgress.frame = NSRect(x: controlsX, y: medium ? 48 : 62,
-                                             width: max(30, width - controlsX - 22), height: 7)
-                if !medium { albumArt.frame = NSRect(x: 17, y: height - 122, width: 105, height: 105) }
+                // Wide cards keep a large cover beside one compact information group.
+                let gap = max(12, width * 0.035)
+                let side = min(height-padding*2, width*0.43)
+                art = NSRect(x:padding, y:(height-side)/2, width:side, height:side)
+                let textX = art.maxX+gap
+                let textWidth = max(1,width-textX-padding)
+                let dense = height < 170
+                let titleHeight: CGFloat = dense ? 20 : (textWidth < 180 ? 36 : 24)
+                let buttonSide = min(dense ? 26 : 32,max(18,(textWidth-16)/3))
+                let groupHeight = titleHeight+18+buttonSide+36
+                let bottom = max(padding,(height-groupHeight)/2)
+                trackTitle.alignment = .left;trackArtist.alignment = .left
+                trackTitle.font = .systemFont(ofSize:width >= 400 ? 17 : 14,weight:.semibold)
+                trackArtist.font = .systemFont(ofSize:width >= 400 ? 12 : 11)
+                trackTitle.maximumNumberOfLines = !dense && textWidth < 180 ? 2 : 1
+                trackTitle.frame = NSRect(x:textX,y:bottom+groupHeight-titleHeight,width:max(1,textWidth-32),height:titleHeight)
+                trackArtist.frame = NSRect(x:textX,y:trackTitle.frame.minY-22,width:textWidth,height:18)
+                musicProgress.frame = NSRect(x:textX,y:bottom+buttonSide+14,width:textWidth,height:6)
+                let start = textX+(textWidth-buttonSide*3-16)/2
+                for (index,button) in [musicPrevious,musicToggle,musicNext].enumerated() {
+                    button.frame = NSRect(x:start+CGFloat(index)*(buttonSide+8),y:bottom,width:buttonSide,height:buttonSide)
+                }
             }
+            albumArt.frame = art
+            albumArt.layer?.cornerRadius = min(14,art.width*0.07)
+            icon.isHidden = albumArt.image != nil
+            icon.frame = art.insetBy(dx:art.width*0.25,dy:art.height*0.25)
+            trackTitle.isHidden = tiny;trackArtist.isHidden = tiny
+            musicProgress.isHidden = tiny || music == nil
+            for button in [musicPrevious,musicToggle,musicNext] { button.isHidden = tiny || music == nil }
             return
         }
         if kind == .calculator {
@@ -785,14 +991,15 @@ private struct WidgetPlacement: Codable {
                 value.frame = NSRect(x: 16, y: height - (medium ? 77 : 87), width: width - 32, height: 39)
                 detail.frame = NSRect(x: width - 105, y: height - 40, width: 80, height: 22)
                 detail.alignment = .right
-                sparkline.frame = NSRect(x: 16, y: medium ? 13 : 30, width: width - 32,
-                                         height: medium ? max(20, height - 102) : max(38, height - 130))
+                sparkline.frame = NSRect(x: 16, y: medium ? 23 : 30, width: width - 32,
+                                         height: medium ? max(20, height - 112) : max(38, height - 130))
                 if !medium && height >= 195 {
                     hourly.isHidden = false
                     hourly.frame = NSRect(x: 16, y: 10, width: width - 32, height: 16)
                     hourly.alignment = .left
                 }
             }
+            if !feedStatus.isHidden { hourly.isHidden=true }
             return
         }
         if kind == .codex {
@@ -853,6 +1060,7 @@ private struct WidgetPlacement: Codable {
     func canBeginDrag(at canvasPoint: NSPoint) -> Bool {
         let point = convert(canvasPoint, from: superview)
         guard bounds.contains(point) else { return false }
+        if kind == .calendar, calendarView.frame.contains(point) { return false }
         for control in [action, close, promptField, promptButton, calculatorField,
                         musicPrevious, musicToggle, musicNext] where !control.isHidden {
             if control.bounds.contains(control.convert(point, from: self)) { return false }
@@ -961,5 +1169,36 @@ private final class VerticallyCenteredPromptCell: NSTextFieldCell {
                    ending: tint.withAlphaComponent(0.01))?.draw(in: fill, angle: 90)
         tint.withAlphaComponent(0.95).setStroke()
         path.stroke()
+    }
+}
+
+// Static skeletons use no display links or timers; cached widgets never show them.
+@MainActor private final class WidgetFeedSkeleton: NSView {
+    let kind: WebbyWidget
+    init(kind:WebbyWidget) {self.kind=kind;super.init(frame:.zero);setAccessibilityLabel("Loading \(kind.title)")}
+    required init?(coder:NSCoder) {fatalError()}
+    override func hitTest(_ point:NSPoint)->NSView? {nil}
+    override func setFrameSize(_ size:NSSize) {super.setFrameSize(size);needsDisplay=true}
+    override func draw(_ dirtyRect:NSRect) {
+        let w=bounds.width,h=bounds.height
+        NSColor.white.withAlphaComponent(0.13).setFill()
+        func bar(_ x:CGFloat,_ y:CGFloat,_ width:CGFloat,_ height:CGFloat) {
+            NSBezierPath(roundedRect:NSRect(x:x,y:y,width:max(1,width),height:max(1,height)),xRadius:6,yRadius:6).fill()
+        }
+        if w<145 || h<105 {bar(w*0.2,h*0.35,w*0.6,h*0.3);return}
+        if kind == .music {
+            let side = min(w*0.42,h-45)
+            bar(16,(h-side)/2,side,side)
+            bar(side+30,h*0.65,max(20,w-side-50),14)
+            bar(side+30,h*0.48,max(20,w-side-70),10)
+            bar(side+30,h*0.25,max(20,w-side-50),8)
+        } else if kind == .weather {
+            NSBezierPath(ovalIn:NSRect(x:18,y:h-105,width:62,height:62)).fill()
+            bar(96,h-40,min(120,w-125),12);bar(96,h-82,min(80,w-125),28)
+            if h>=190 {for i in 0..<5 {bar(17+CGFloat(i)*(w-30)/5,24,(w-50)/5,20)}}
+        } else {
+            bar(16,h-40,65,14);bar(16,h-88,min(130,w-40),32)
+            bar(16,27,w-32,max(16,h-135))
+        }
     }
 }

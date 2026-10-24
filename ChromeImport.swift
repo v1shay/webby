@@ -17,7 +17,8 @@ struct SavedBrowserSpace: Codable {
 }
 
 @MainActor final class BrowserSpace {
-    var saved: SavedBrowserSpace
+    var saved: SavedBrowserSpace { didSet { historyRevision &+= 1 } }
+    private(set) var historyRevision = 0
     var tabs: [BrowserTab] = []
     var activeTabID: UUID?
     private var cachedDataStore: WKWebsiteDataStore?

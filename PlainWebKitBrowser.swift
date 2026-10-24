@@ -6,10 +6,15 @@ enum Motion {
 
     static func basic(_ layer: CALayer?, key: String, from: Any, to: Any, duration: CFTimeInterval, delay: CFTimeInterval = 0) {
         guard enabled, let layer else { return }
-        let animation = CABasicAnimation(keyPath: key)
+        let animation: CABasicAnimation
+        if key.hasPrefix("transform.translation") || key == "transform.scale" {
+            let spring = CASpringAnimation(keyPath: key)
+            spring.mass = 1; spring.stiffness = 380; spring.damping = 27
+            animation = spring
+        } else { animation = CABasicAnimation(keyPath: key) }
         animation.fromValue = from
         animation.toValue = to
-        animation.duration = duration
+        animation.duration = (animation as? CASpringAnimation)?.settlingDuration ?? duration
         animation.beginTime = CACurrentMediaTime() + delay
         animation.fillMode = .backwards
         animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -30,9 +35,30 @@ enum Motion {
         animation.toValue = to
         animation.mass = 0.45
         animation.stiffness = 600
-        animation.damping = 33
-        animation.duration = min(animation.settlingDuration, 0.30)
+        animation.damping = 24
+        animation.duration = animation.settlingDuration
         layer.add(animation, forKey: "springScale")
+    }
+}
+
+@MainActor enum WebbySounds {
+    static var enabled: Bool {
+        get { UserDefaults.standard.object(forKey: "webbyActionSounds") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "webbyActionSounds") }
+    }
+    private static var cached: [String: NSSound] = [:]
+    private static var lastPlayed = -Double.infinity
+    static func play(_ name: String) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard enabled, now-lastPlayed > 0.12 else { return }
+        if cached[name] == nil, let url = Bundle.main.url(forResource: name, withExtension: "wav", subdirectory: "Sounds") {
+            cached[name] = NSSound(contentsOf: url, byReference: false)
+            cached[name]?.volume = 0.28
+        }
+        guard let sound = cached[name], !sound.isPlaying else { return }
+        // Prevent two different cues overlapping during rapid keyboard actions.
+        cached.values.forEach { $0.stop() }
+        sound.play(); lastPlayed = now
     }
 }
 
@@ -288,7 +314,7 @@ final class GlassButton: NSButton {
         hovered = true
         updateGlass()
         if isEnabled {
-            Motion.springScale(layer, from: 1, to: 1.035)
+            Motion.springScale(layer, from: 1, to: 1.02)
             Motion.basic(glint, key: "transform.translation.x", from: 0, to: bounds.width * 2, duration: 0.28)
         }
     }
@@ -296,17 +322,17 @@ final class GlassButton: NSButton {
     override func mouseExited(with event: NSEvent) {
         hovered = false
         updateGlass()
-        if isEnabled { Motion.springScale(layer, from: 1.035, to: 1) }
+        if isEnabled { Motion.springScale(layer, from: 1.02, to: 1) }
     }
 
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
         pressed = true
-        Motion.springScale(layer, from: hovered ? 1.035 : 1, to: 0.965)
+        Motion.springScale(layer, from: hovered ? 1.02 : 1, to: 0.975)
         updateGlass()
         super.mouseDown(with: event)
         pressed = false
-        Motion.springScale(layer, from: 0.965, to: hovered ? 1.035 : 1)
+        Motion.springScale(layer, from: 0.975, to: hovered ? 1.02 : 1)
         updateGlass()
     }
 
@@ -694,4 +720,101 @@ final class GlassAddressSurface: NSView, NSTextFieldDelegate {
     }
 
     func applyGlassTransparency() { updateGlass() }
+}
+
+// Only browser chrome is rasterized, once per switch. Web pages keep their live layers.
+@MainActor final class ProfileSwitchMotion {
+    private final class Snapshot: NSImageView {
+        override func hitTest(_ point:NSPoint) -> NSView? { nil }
+    }
+    private weak var surface:NSView?
+    private var outgoing:Snapshot?
+    private var generation=0
+    private var offset:CGFloat=0
+    private var travel:CGFloat=1
+    private var trackingOrigin:CGFloat=0
+
+    func beginTracking(_ view:NSView) {
+        let visible=(view.layer?.presentation()?.value(forKeyPath:"transform.translation.x") as? NSNumber).map {CGFloat(truncating:$0)} ?? 0
+        reset();surface=view;trackingOrigin=visible
+    }
+
+    func track(_ view:NSView, distance:CGFloat) {
+        guard Motion.enabled else { return }
+        if surface !== view { reset();surface=view }
+        view.wantsLayer=true
+        travel=min(view.bounds.width,360)
+        // Bounded rubber banding keeps the gesture attached without exposing distant UI.
+        offset=travel*0.85*tanh((trackingOrigin+distance)/(travel*0.85))
+        view.layer?.removeAnimation(forKey:"profileSlide")
+        CATransaction.begin();CATransaction.setDisableActions(true)
+        view.layer?.setValue(offset,forKeyPath:"transform.translation.x")
+        CATransaction.commit()
+    }
+    func prepare(_ view:NSView) {
+        generation += 1
+        outgoing?.removeFromSuperview();outgoing=nil
+        if surface !== view { reset();surface=view }
+        guard Motion.enabled,!view.isHiddenOrHasHiddenAncestor,let parent=view.superview,
+              view.bounds.width>1,view.bounds.height>1 else { return }
+        view.wantsLayer=true
+        parent.wantsLayer=true;parent.layer?.masksToBounds=true
+        offset=(view.layer?.presentation()?.value(forKeyPath:"transform.translation.x") as? NSNumber).map { CGFloat(truncating:$0) } ?? offset
+        travel=min(view.bounds.width,360)
+        view.layoutSubtreeIfNeeded()
+        if let bitmap=view.bitmapImageRepForCachingDisplay(in:view.bounds) {
+            view.cacheDisplay(in:view.bounds,to:bitmap)
+            let image=NSImage(size:view.bounds.size);image.addRepresentation(bitmap)
+            let snapshot=Snapshot(frame:view.frame)
+            snapshot.image=image;snapshot.imageScaling = .scaleAxesIndependently;snapshot.wantsLayer=true
+            parent.addSubview(snapshot,positioned:.above,relativeTo:view)
+            snapshot.layer?.setValue(offset,forKeyPath:"transform.translation.x")
+            outgoing=snapshot
+        }
+        view.layer?.removeAnimation(forKey:"profileSlide")
+        CATransaction.begin();CATransaction.setDisableActions(true)
+        view.layer?.setValue(0,forKeyPath:"transform.translation.x")
+        CATransaction.commit()
+    }
+    private func slide(_ layer:CALayer?,from:CGFloat,to:CGFloat) {
+        guard let layer else { return }
+        CATransaction.begin();CATransaction.setDisableActions(true)
+        layer.setValue(to,forKeyPath:"transform.translation.x")
+        CATransaction.commit()
+        let spring=CASpringAnimation(keyPath:"transform.translation.x")
+        spring.fromValue=from;spring.toValue=to
+        spring.mass=1;spring.stiffness=520;spring.damping=42
+        spring.duration=min(0.55,spring.settlingDuration)
+        layer.add(spring,forKey:"profileSlide")
+    }
+    func finish(direction:Int) {
+        guard Motion.enabled,let view=surface else { reset();return }
+        let distance=CGFloat(direction)*travel
+        slide(view.layer,from:distance+offset,to:0)
+        slide(outgoing?.layer,from:offset,to:-distance)
+        let fade=CABasicAnimation(keyPath:"opacity");fade.fromValue=1;fade.toValue=0;fade.duration=0.22
+        outgoing?.layer?.opacity=0;outgoing?.layer?.add(fade,forKey:"profileFade")
+        offset=0
+        let token=generation
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.56) { [weak self] in
+            guard let self,self.generation==token else {return}
+            self.outgoing?.removeFromSuperview();self.outgoing=nil
+        }
+    }
+    func cancel() {
+        guard let view=surface else {return}
+        let from=(view.layer?.presentation()?.value(forKeyPath:"transform.translation.x") as? NSNumber).map {CGFloat(truncating:$0)} ?? offset
+        if Motion.enabled {slide(view.layer,from:from,to:0)}
+        else {view.layer?.setValue(0,forKeyPath:"transform.translation.x")}
+        offset=0
+    }
+    func reset() {
+        generation += 1
+        outgoing?.removeFromSuperview();outgoing=nil
+        surface?.layer?.removeAnimation(forKey:"profileSlide")
+        CATransaction.begin();CATransaction.setDisableActions(true)
+        surface?.layer?.setValue(0,forKeyPath:"transform.translation.x")
+        CATransaction.commit()
+        surface=nil;offset=0;trackingOrigin=0
+    }
 }

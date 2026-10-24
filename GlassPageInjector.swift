@@ -4,12 +4,20 @@ import WebKit
 @MainActor enum GlassPageInjector {
     private static let marker = "/* Webby glass-page v1 */"
 
+    private static let promptSource = Bundle.main.url(forResource: "GooglePromptFilter", withExtension: "js").flatMap { try? String(contentsOf: $0) }
+    private static let glassSource = Bundle.main.url(forResource: "glass-page", withExtension: "js").flatMap { try? String(contentsOf: $0) }
+
     static func install(into configuration: WKWebViewConfiguration) {
-        guard BrowserGlass.pageInjectionEnabled else { return }
         let controller = configuration.userContentController
+        let promptMarker = "/* Webby Google prompt filter */"
+        if !controller.userScripts.contains(where: { $0.source.hasPrefix(promptMarker) }),
+           let source = promptSource {
+            controller.addUserScript(WKUserScript(source: promptMarker + "\n" + source,
+                injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
+        guard BrowserGlass.pageInjectionEnabled else { return }
         guard !controller.userScripts.contains(where: { $0.source.hasPrefix(marker) }),
-              let url = Bundle.main.url(forResource: "glass-page", withExtension: "js"),
-              let source = try? String(contentsOf: url, encoding: .utf8) else { return }
+              let source = glassSource else { return }
         controller.addUserScript(WKUserScript(source: marker + "\n" + source,
                                               injectionTime: .atDocumentStart,
                                               forMainFrameOnly: false))

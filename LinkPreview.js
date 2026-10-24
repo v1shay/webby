@@ -17,7 +17,7 @@
       window.webkit.messageHandlers.browserLinkPreview.postMessage({
         url, x: rect.left, y: rect.bottom, width: Math.max(rect.width, 1)
       });
-    }, 320);
+    }, 2000);
   }, true);
   document.addEventListener('pointerout', event => {
     if (current && !current.contains(event.relatedTarget)) {

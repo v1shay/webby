@@ -63,6 +63,7 @@ import WebKit
     private var active = [ObjectIdentifier: Int]()
     private var reservedPaths = Set<String>()
     private let menu = NSMenu(title: "Downloads")
+    var hasActiveDownloads: Bool { !active.isEmpty }
 
     override init() {
         super.init()

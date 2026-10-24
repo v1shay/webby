@@ -74,10 +74,13 @@ enum BrowserSearchEngine: String, CaseIterable {
 
 @MainActor final class BrowserMenuBar: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
+    private var petAnimator: WebbyMenuPetAnimator?
     private let showBrowser: () -> Void
     private let addWidget: () -> Void
     private let resetWidgets: () -> Void
     private let asciiCanvas: () -> ASCIIBackgroundCanvas?
+    private let openWallpaper: () -> Void
+    private let miniMenu: () -> NSMenu
     private let currentSpaceName: () -> String
     private let currentSpaceID: () -> UUID
     private let importChrome: () -> Void
@@ -115,11 +118,15 @@ enum BrowserSearchEngine: String, CaseIterable {
          connectGoogle: @escaping (GoogleService) -> Void,
          disconnectGoogle: @escaping (GoogleService) -> Void,
          googleConnected: @escaping (GoogleService) -> Bool,
-         asciiCanvas: @escaping () -> ASCIIBackgroundCanvas? = { nil }) {
+         asciiCanvas: @escaping () -> ASCIIBackgroundCanvas? = { nil },
+         openWallpaper: @escaping () -> Void = {},
+         miniMenu: @escaping () -> NSMenu = { NSMenu(title:"Mini Webby") }) {
         self.showBrowser = showBrowser
         self.addWidget = addWidget
         self.resetWidgets = resetWidgets
         self.asciiCanvas = asciiCanvas
+        self.openWallpaper = openWallpaper
+        self.miniMenu = miniMenu
         self.currentSpaceName = currentSpaceName
         self.currentSpaceID = currentSpaceID
         self.importChrome = importChrome
@@ -138,9 +145,9 @@ enum BrowserSearchEngine: String, CaseIterable {
         self.connectGoogle = connectGoogle
         self.disconnectGoogle = disconnectGoogle
         self.googleConnected = googleConnected
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: 30)
         super.init()
-        statusItem.button?.image = Self.symbol()
+        if let button = statusItem.button { petAnimator = WebbyMenuPetAnimator(button: button) }
         statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.toolTip = "Webby Settings"
         let menu = NSMenu(title: "Webby")
@@ -149,16 +156,37 @@ enum BrowserSearchEngine: String, CaseIterable {
         rebuildMenu(menu)
     }
 
+    @objc private func toggleSounds() { WebbySounds.enabled.toggle() }
+
     func menuWillOpen(_ menu: NSMenu) { rebuildMenu(menu) }
 
-    private func rebuildMenu(_ menu: NSMenu) {
+    func makeTabSettingsMenu() -> NSMenu {
+        // Reuse the real settings/actions so both entry points stay in sync.
+        let source = NSMenu(); buildSettingsItems(source)
+        let menu = NSMenu(title: "Tab Settings")
+        let titles: Set<String> = ["Tab Layout", "Restore Tabs After Restart", "Offload Idle Tabs",
+            "Glass Effect on Web Pages", "Match Tab Pane to Page Glass"]
+        for item in source.items where titles.contains(item.title) || item.view?.subviews.contains(where: { $0 is NSSlider }) == true {
+            source.removeItem(item); menu.addItem(item)
+        }
+        return menu
+    }
+
+    private func rebuildMenu(_ menu: NSMenu) { buildSettingsItems(menu, grouped:true) }
+
+    private func buildSettingsItems(_ menu: NSMenu, grouped: Bool = false) {
         menu.removeAllItems()
+        let sounds = menu.addItem(withTitle: "Subtle Action Sounds", action: #selector(toggleSounds), keyEquivalent: "")
+        sounds.target = self; sounds.state = WebbySounds.enabled ? .on : .off
+        menu.addItem(.separator())
         let show = menu.addItem(withTitle: "Show Browser", action: #selector(showBrowserAction), keyEquivalent: "")
         show.target = self
         let widget = menu.addItem(withTitle: "Add Widget…", action: #selector(addWidgetAction), keyEquivalent: "")
         widget.target = self
         let reset = menu.addItem(withTitle: "Reset Widget Positions", action: #selector(resetWidgetsAction), keyEquivalent: "")
         reset.target = self
+        let wallpaper = menu.addItem(withTitle: "Background & Effects…", action: #selector(openWallpaperAction), keyEquivalent: "")
+        wallpaper.target = self
         let backgrounds = NSMenuItem(title: "ASCII Backgrounds", action: nil, keyEquivalent: "")
         let artMenu = NSMenu(title: "ASCII Backgrounds")
         for art in ASCIIArtwork.catalog {
@@ -211,15 +239,17 @@ enum BrowserSearchEngine: String, CaseIterable {
         menu.addItem(petItem)
         let choosePet = menu.addItem(withTitle: "Choose Custom Pet Image…", action: #selector(chooseCustomPet), keyEquivalent: "")
         choosePet.target = self
+        var resetPet: NSMenuItem?
         if BrowserTheme.customPetURL != nil {
             let clearPet = menu.addItem(withTitle: "Use Profile Pet Image", action: #selector(clearCustomPet), keyEquivalent: "")
             clearPet.target = self
+            resetPet = clearPet
         }
 
         let edit = menu.addItem(withTitle: "Customize Gradient…", action: #selector(showSettings), keyEquivalent: "")
         edit.target = self
         menu.addItem(.separator())
-        let experiment = menu.addItem(withTitle: "Experimental: Fuse All Profile Tabs",
+        let experiment = menu.addItem(withTitle: "Fuse All Profile Tabs",
                                       action: #selector(toggleExperiment), keyEquivalent: "F")
         experiment.target = self
         experiment.keyEquivalentModifierMask = [.command, .shift]
@@ -259,6 +289,7 @@ enum BrowserSearchEngine: String, CaseIterable {
         }
         offload.submenu = offloadMenu
         menu.addItem(offload)
+        let miniRoot=NSMenuItem(title:"Mini Webby",action:nil,keyEquivalent:"");miniRoot.submenu=miniMenu();menu.addItem(miniRoot)
         let terminal = menu.addItem(withTitle: "Open Terminal in This Tab",
                                     action: #selector(openTerminalAction), keyEquivalent: "")
         terminal.target = self
@@ -292,8 +323,10 @@ enum BrowserSearchEngine: String, CaseIterable {
         indicatorRoot.submenu = indicatorMenu
         menu.addItem(indicatorRoot)
         menu.addItem(.separator())
+        let glassStart = menu.items.count
         let glassHeading = menu.addItem(withTitle: "Glass Transparency", action: nil, keyEquivalent: "")
         glassHeading.isEnabled = false
+        addGlassSlider(to: menu, title: "Widget Glass Opacity", value: BrowserGlass.widgetOpacity(profile: currentSpaceID()), tag: 4)
         addGlassSlider(to: menu, title: "Main Background", value: BrowserGlass.backgroundTransparency, tag: 3)
         addGlassSlider(to: menu, title: "Top Bar", value: BrowserGlass.topTransparency, tag: 1)
         addGlassSlider(to: menu, title: "Sidebar", value: BrowserGlass.sidebarTransparency, tag: 2)
@@ -303,6 +336,7 @@ enum BrowserSearchEngine: String, CaseIterable {
         let matchGlass = menu.addItem(withTitle: "Match Tab Pane to Page Glass", action: #selector(toggleMatchGlass), keyEquivalent: "")
         matchGlass.target = self
         matchGlass.state = BrowserGlass.matchPageGlassSidebar ? .on : .off
+        let glassItems = Array(menu.items[glassStart...])
         menu.addItem(.separator())
         let googleRoot = NSMenuItem(title: "Google Widgets for \(currentSpaceName())", action: nil, keyEquivalent: "")
         let googleMenu = NSMenu(title: "Google Widgets")
@@ -313,7 +347,8 @@ enum BrowserSearchEngine: String, CaseIterable {
             let connected = googleConnected(service)
             let serviceTitle: String
             switch service { case .calendar: serviceTitle = "Calendar"; case .gmail: serviceTitle = "Gmail"; case .drive: serviceTitle = "Drive" }
-            let title = "\(connected ? "Disconnect" : "Connect") \(serviceTitle)"
+            let title = service == .calendar ? (connected ? "Disconnect Calendar Feed" : "Connect Calendar iCal Feed…")
+                : "\(connected ? "Disconnect" : "Connect") \(serviceTitle)"
             let item = googleMenu.addItem(withTitle: title,
                                           action: connected ? #selector(disconnectGoogleAction(_:)) : #selector(connectGoogleAction(_:)),
                                           keyEquivalent: "")
@@ -342,6 +377,36 @@ enum BrowserSearchEngine: String, CaseIterable {
         menu.addItem(.separator())
         let quit = menu.addItem(withTitle: "Quit Webby", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         quit.target = NSApplication.shared
+        guard grouped else { return }
+
+        // Reparent the original controls so selectors, checkmarks and sliders stay identical.
+        func section(_ title: String, symbol: String, items: [NSMenuItem]) -> NSMenuItem {
+            let root = NSMenuItem(title:title,action:nil,keyEquivalent:"")
+            root.image = NSImage(systemSymbolName:symbol,accessibilityDescription:nil)
+            let children = NSMenu(title:title)
+            for item in items { item.menu?.removeItem(item); children.addItem(item) }
+            root.submenu = children
+            return root
+        }
+        let transparency = section("Glass & Transparency",symbol:"square.on.square",items:glassItems)
+        let tabs = section("Tabs & Search",symbol:"rectangle.topthird.inset.filled",
+                           items:[tabPosition,searchRoot,.separator(),restore,offload,.separator(),miniRoot,terminal])
+        let accounts = section("Profiles & Fuse",symbol:"person.2",
+                               items:[experiment,.separator(),importItem,signIns,.separator(),deleteItem])
+        let appearance = section("Appearance",symbol:"paintpalette",
+                                 items:[profileItem,edit,.separator(),transparency,.separator(),sounds])
+        let widgets = section("Widgets & Backgrounds",symbol:"square.grid.2x2",
+                              items:[reset,.separator(),wallpaper,backgrounds,.separator(),googleRoot])
+        var petItems = [petItem,choosePet]
+        if let resetPet { petItems.append(resetPet) }
+        petItems += [.separator(),indicatorRoot]
+        let pets = section("Pets & Indicators",symbol:"pawprint",items:petItems)
+        let library = section("History & Passwords",symbol:"clock.arrow.circlepath",
+                              items:[history,bookmarks,.separator(),passwords,fill,importPasswordsItem])
+        // Keep daily actions immediately accessible; everything else has one clear home.
+        menu.removeAllItems()
+        for item in [show,widget,NSMenuItem.separator(),tabs,accounts,appearance,widgets,pets,library,
+                     NSMenuItem.separator(),quit] { menu.addItem(item) }
     }
 
     @objc private func showBrowserAction() { showBrowser() }
@@ -410,7 +475,7 @@ enum BrowserSearchEngine: String, CaseIterable {
         label.font = .systemFont(ofSize: 11, weight: .medium)
         let slider = NSSlider(frame: NSRect(x: 13, y: 2, width: 222, height: 22))
         slider.minValue = 0
-        slider.maxValue = tag == 3 ? 1 : 0.85
+        slider.maxValue = tag >= 3 ? 1 : 0.85
         slider.doubleValue = value
         slider.isContinuous = true
         slider.tag = tag
@@ -426,8 +491,9 @@ enum BrowserSearchEngine: String, CaseIterable {
         let value = slider.doubleValue
         if slider.tag == 1 { BrowserGlass.setTop(value) }
         else if slider.tag == 2 { BrowserGlass.setSidebar(value) }
+        else if slider.tag == 4 { BrowserGlass.setWidgetOpacity(value, profile: currentSpaceID()) }
         else { BrowserGlass.setBackground(value) }
-        let name = slider.tag == 1 ? "Top Bar" : (slider.tag == 2 ? "Sidebar" : "Main Background")
+        let name = slider.tag == 1 ? "Top Bar" : (slider.tag == 2 ? "Sidebar" : (slider.tag == 4 ? "Widget Glass Opacity" : "Main Background"))
         (slider.superview?.subviews.first { $0 is NSTextField } as? NSTextField)?
             .stringValue = "\(name)  \(Int((value * 100).rounded()))%"
     }
@@ -469,6 +535,7 @@ enum BrowserSearchEngine: String, CaseIterable {
 
     @objc private func clearCustomPet() { BrowserTheme.clearCustomPet() }
 
+    @objc private func openWallpaperAction() { openWallpaper() }
     @objc private func showSettings() {
         if settingsWindow == nil { makeSettingsWindow() }
         settingsWindow?.title = "Webby Gradient • \(currentSpaceName())"
@@ -546,29 +613,5 @@ enum BrowserSearchEngine: String, CaseIterable {
         preview.endPoint = CGPoint(x: 1, y: 0.5)
     }
 
-    private static func symbol() -> NSImage {
-        let image = NSImage(size: NSSize(width: 23, height: 18), flipped: false) { _ in
-            NSColor.black.setStroke()
-            let left = NSBezierPath()
-            left.lineWidth = 2.6
-            left.lineCapStyle = .round
-            left.lineJoinStyle = .round
-            left.move(to: NSPoint(x: 1.5, y: 8))
-            left.line(to: NSPoint(x: 6.2, y: 15))
-            left.line(to: NSPoint(x: 12.5, y: 2.7))
-            left.line(to: NSPoint(x: 19, y: 2.7))
-            left.stroke()
-            let right = NSBezierPath()
-            right.lineWidth = 2.6
-            right.lineCapStyle = .round
-            right.lineJoinStyle = .round
-            right.move(to: NSPoint(x: 12.1, y: 8))
-            right.line(to: NSPoint(x: 17, y: 15))
-            right.line(to: NSPoint(x: 21.5, y: 9))
-            right.stroke()
-            return true
-        }
-        image.isTemplate = true
-        return image
-    }
+
 }
