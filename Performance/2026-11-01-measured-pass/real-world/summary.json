@@ -1,0 +1,384 @@
+[
+  {
+    "url": "https://www.bbc.com/",
+    "baseline": {
+      "samples": 4,
+      "medianLoadWaitMs": 1845.0763125147205,
+      "rangeLoadWaitMs": [
+        563.0359999777284,
+        3911.9515833153855
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "BBC Home | Breaking News, World News, US News, Sports, Business, Innovation, Climate, Culture, Travel, Video & Audio"
+      ],
+      "challengeSuspected": false
+    },
+    "candidate": {
+      "samples": 4,
+      "medianLoadWaitMs": 2026.673562504584,
+      "rangeLoadWaitMs": [
+        606.0244166583288,
+        3402.6747916650493
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "BBC Home | Breaking News, World News, US News, Sports, Business, Innovation, Climate, Culture, Travel, Video & Audio"
+      ],
+      "challengeSuspected": false
+    },
+    "control-no-glass": {
+      "samples": 2,
+      "medianLoadWaitMs": 2528.511416661786,
+      "rangeLoadWaitMs": [
+        1525.901499990141,
+        3531.121333333431
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "BBC Home | Breaking News, World News, US News, Sports, Business, Innovation, Climate, Culture, Travel, Video & Audio"
+      ],
+      "challengeSuspected": false
+    },
+    "control-minimal-wk": {
+      "samples": 2,
+      "medianLoadWaitMs": 1836.1462708271574,
+      "rangeLoadWaitMs": [
+        506.7971666576341,
+        3165.4953749966808
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "BBC Home | Breaking News, World News, US News, Sports, Business, Innovation, Climate, Culture, Travel, Video & Audio"
+      ],
+      "challengeSuspected": false
+    }
+  },
+  {
+    "url": "https://github.com/explore",
+    "baseline": {
+      "samples": 4,
+      "medianLoadWaitMs": 1069.4442083331523,
+      "rangeLoadWaitMs": [
+        819.0123749955092,
+        2632.7838333381806
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Explore GitHub \u00b7 GitHub"
+      ],
+      "challengeSuspected": false
+    },
+    "candidate": {
+      "samples": 4,
+      "medianLoadWaitMs": 1002.6802500069607,
+      "rangeLoadWaitMs": [
+        809.8604583356064,
+        1331.7839583323803
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Explore GitHub \u00b7 GitHub"
+      ],
+      "challengeSuspected": false
+    },
+    "control-no-glass": {
+      "samples": 2,
+      "medianLoadWaitMs": 997.3313541704556,
+      "rangeLoadWaitMs": [
+        782.5798749981914,
+        1212.0828333427198
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Explore GitHub \u00b7 GitHub"
+      ],
+      "challengeSuspected": false
+    },
+    "control-minimal-wk": {
+      "samples": 2,
+      "medianLoadWaitMs": 1211.4726666623028,
+      "rangeLoadWaitMs": [
+        1047.5386249891017,
+        1375.406708335504
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Explore GitHub \u00b7 GitHub"
+      ],
+      "challengeSuspected": false
+    }
+  },
+  {
+    "url": "https://developer.mozilla.org/en-US/",
+    "baseline": {
+      "samples": 4,
+      "medianLoadWaitMs": 682.3942708288087,
+      "rangeLoadWaitMs": [
+        605.2909166610334,
+        811.3264583225828
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "MDN Web Docs"
+      ],
+      "challengeSuspected": false
+    },
+    "candidate": {
+      "samples": 4,
+      "medianLoadWaitMs": 759.819625003729,
+      "rangeLoadWaitMs": [
+        698.0170416645706,
+        839.8153749876656
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "MDN Web Docs"
+      ],
+      "challengeSuspected": false
+    },
+    "control-no-glass": {
+      "samples": 2,
+      "medianLoadWaitMs": 522.1573333255947,
+      "rangeLoadWaitMs": [
+        481.97312498814426,
+        562.3415416630451
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "MDN Web Docs"
+      ],
+      "challengeSuspected": false
+    },
+    "control-minimal-wk": {
+      "samples": 2,
+      "medianLoadWaitMs": 715.436916667386,
+      "rangeLoadWaitMs": [
+        645.990333345253,
+        784.8834999895189
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "MDN Web Docs"
+      ],
+      "challengeSuspected": false
+    }
+  },
+  {
+    "url": "https://stackoverflow.com/questions",
+    "baseline": {
+      "samples": 4,
+      "medianLoadWaitMs": 1171.1718958249548,
+      "rangeLoadWaitMs": [
+        341.5963333391119,
+        1837.7166249847505
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 2,
+      "titles": [
+        "Just a moment...",
+        "Newest Questions - Stack Overflow"
+      ],
+      "challengeSuspected": true
+    },
+    "candidate": {
+      "samples": 4,
+      "medianLoadWaitMs": 1021.3649791694479,
+      "rangeLoadWaitMs": [
+        384.43458333495073,
+        1700.9477083338425
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 2,
+      "titles": [
+        "Just a moment...",
+        "Newest Questions - Stack Overflow"
+      ],
+      "challengeSuspected": true
+    },
+    "control-no-glass": {
+      "samples": 2,
+      "medianLoadWaitMs": 901.210166659439,
+      "rangeLoadWaitMs": [
+        344.6177083242219,
+        1457.802624994656
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 1,
+      "titles": [
+        "Just a moment...",
+        "Newest Questions - Stack Overflow"
+      ],
+      "challengeSuspected": true
+    },
+    "control-minimal-wk": {
+      "samples": 2,
+      "medianLoadWaitMs": 931.9844374986133,
+      "rangeLoadWaitMs": [
+        334.9831249797717,
+        1528.9857500174548
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 1,
+      "titles": [
+        "Just a moment...",
+        "Newest Questions - Stack Overflow"
+      ],
+      "challengeSuspected": true
+    }
+  },
+  {
+    "url": "https://www.wikipedia.org/",
+    "baseline": {
+      "samples": 4,
+      "medianLoadWaitMs": 381.6391250002198,
+      "rangeLoadWaitMs": [
+        351.2266250036191,
+        493.6029583332129
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Wikipedia"
+      ],
+      "challengeSuspected": false
+    },
+    "candidate": {
+      "samples": 4,
+      "medianLoadWaitMs": 377.32122917077504,
+      "rangeLoadWaitMs": [
+        352.7229166647885,
+        390.6404583249241
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Wikipedia"
+      ],
+      "challengeSuspected": false
+    },
+    "control-no-glass": {
+      "samples": 2,
+      "medianLoadWaitMs": 329.93483332393225,
+      "rangeLoadWaitMs": [
+        328.65612499881536,
+        331.21354164904915
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Wikipedia"
+      ],
+      "challengeSuspected": false
+    },
+    "control-minimal-wk": {
+      "samples": 2,
+      "medianLoadWaitMs": 371.46870834112633,
+      "rangeLoadWaitMs": [
+        352.77129168389365,
+        390.166124998359
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Wikipedia"
+      ],
+      "challengeSuspected": false
+    }
+  },
+  {
+    "url": "https://www.apple.com/",
+    "baseline": {
+      "samples": 4,
+      "medianLoadWaitMs": 938.2121041562641,
+      "rangeLoadWaitMs": [
+        848.2523749989923,
+        1083.9477083354723
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Apple"
+      ],
+      "challengeSuspected": false
+    },
+    "candidate": {
+      "samples": 4,
+      "medianLoadWaitMs": 1008.1360000040149,
+      "rangeLoadWaitMs": [
+        824.5458749879617,
+        1488.0726249830332
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Apple"
+      ],
+      "challengeSuspected": false
+    },
+    "control-no-glass": {
+      "samples": 2,
+      "medianLoadWaitMs": 1537.3640208417783,
+      "rangeLoadWaitMs": [
+        1272.8120833344292,
+        1801.9159583491273
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Apple"
+      ],
+      "challengeSuspected": false
+    },
+    "control-minimal-wk": {
+      "samples": 2,
+      "medianLoadWaitMs": 992.0335624919971,
+      "rangeLoadWaitMs": [
+        799.5894166524522,
+        1184.477708331542
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Apple"
+      ],
+      "challengeSuspected": false
+    }
+  }
+]

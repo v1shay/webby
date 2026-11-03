@@ -39,6 +39,14 @@ extension Notification.Name {
         }
     }
 
+    static var matchWebsiteEdge: Bool {
+        get { UserDefaults.standard.bool(forKey: "webbyMatchWebsiteEdge") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "webbyMatchWebsiteEdge")
+            NotificationCenter.default.post(name: .browserGlassChanged, object: nil)
+        }
+    }
+
     static var matchPageGlassSidebar: Bool {
         get { UserDefaults.standard.bool(forKey: matchSidebarKey) }
         set {

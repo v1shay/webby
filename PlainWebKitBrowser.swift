@@ -1,6 +1,13 @@
 import AppKit
 import WebKit
 
+enum BrowserHoverPreferences {
+    static var glancesEnabled:Bool {
+        get {UserDefaults.standard.object(forKey:"webbyLinkGlancesEnabled") as? Bool ?? true}
+        set {UserDefaults.standard.set(newValue,forKey:"webbyLinkGlancesEnabled");NotificationCenter.default.post(name:NSNotification.Name("WebbyLinkGlancesChanged"),object:nil)}
+    }
+}
+
 enum Motion {
     static var enabled: Bool { !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
@@ -19,6 +26,25 @@ enum Motion {
         animation.fillMode = .backwards
         animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
         layer.add(animation, forKey: key)
+    }
+
+    static func color(_ layer: CALayer?, key: String = "backgroundColor", to color: CGColor, animate: Bool) {
+        guard let layer else { return }
+        let old = key == "fillColor" ? (layer as? CAShapeLayer)?.fillColor : layer.backgroundColor
+        guard old != color else { return }
+        let displayed = layer.presentation() ?? layer
+        let visible = (key == "fillColor" ? (displayed as? CAShapeLayer)?.fillColor : displayed.backgroundColor) ?? old
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        if key == "fillColor" { (layer as? CAShapeLayer)?.fillColor = color }
+        else { layer.backgroundColor = color }
+        CATransaction.commit()
+        guard enabled, animate, let visible else { layer.removeAnimation(forKey: "webbyChromeColor"); return }
+        let fade = CABasicAnimation(keyPath: key)
+        fade.fromValue = visible; fade.toValue = color
+        fade.duration = 0.24
+        fade.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.68, 0.25, 1)
+        // Retarget the displayed color when scrolling or switching quickly.
+        layer.add(fade, forKey: "webbyChromeColor")
     }
 
     static func springScale(_ layer: CALayer?, from: CGFloat, to: CGFloat) {
@@ -146,9 +172,23 @@ final class GlassPanel: NSView {
         navigationPulse.shadowColor = BrowserTheme.color(profile.palette.accent).cgColor
     }
 
+    /// The address field and buttons already supply their own glass surfaces.
+    /// Keep only the loading indicator; a second panel draws a rim across the buttons.
+    private weak var addressLoadingSurface: GlassAddressSurface?
+    private var bareAddressChrome = false
+    func useBareAddressChrome(surface: GlassAddressSurface) {
+        addressLoadingSurface = surface
+        bareAddressChrome = true
+        materialView.isHidden = true
+        layer?.shadowOpacity = 0
+        // Use the address field rim; never draw across neighboring buttons.
+        progressLine.removeFromSuperlayer()
+        navigationPulse.removeFromSuperlayer()
+    }
+
     func applyGlassTransparency() {
         materialView.alphaValue = 1 - BrowserGlass.topTransparency * 0.72
-        layer?.shadowOpacity = Float(0.20 * (1 - BrowserGlass.topTransparency * 0.5))
+        layer?.shadowOpacity = bareAddressChrome ? 0 : Float(0.20 * (1 - BrowserGlass.topTransparency * 0.5))
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -170,6 +210,12 @@ final class GlassPanel: NSView {
     }
 
     func setProgress(_ fraction: Double) {
+        if bareAddressChrome {
+            if progressFraction == 0 { addressLoadingSurface?.startLoading() }
+            progressFraction = max(progressFraction, CGFloat(min(max(fraction, 0), 1)))
+            addressLoadingSurface?.setLoadingProgress(Double(progressFraction))
+            return
+        }
         let newFraction = max(progressFraction, CGFloat(min(max(fraction, 0), 1)))
         let oldWidth = progressLine.presentation()?.bounds.width ?? progressLine.bounds.width
         progressFraction = newFraction
@@ -183,6 +229,7 @@ final class GlassPanel: NSView {
     }
 
     func resetProgress() {
+        addressLoadingSurface?.stopLoading()
         progressFraction = 0
         progressLine.removeAnimation(forKey: "bounds.size.width")
         CATransaction.begin()
@@ -193,6 +240,7 @@ final class GlassPanel: NSView {
     }
 
     func hideProgress() {
+        if bareAddressChrome { addressLoadingSurface?.stopLoading();progressFraction=0;return }
         Motion.basic(progressLine, key: "opacity", from: 1, to: 0, duration: 0.18)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -201,6 +249,7 @@ final class GlassPanel: NSView {
     }
 
     func emitNavigationPulse(from sourceX: CGFloat) {
+        if bareAddressChrome { return }
         guard Motion.enabled else { return }
         let move = CABasicAnimation(keyPath: "position.x")
         move.fromValue = sourceX
@@ -474,7 +523,7 @@ final class GlassAddressSurface: NSView, NSTextFieldDelegate {
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
-        if (field.font?.pointSize ?? 0) < 14 { field.font = .systemFont(ofSize: 14) }
+        if (field.font?.pointSize ?? 0) < 14 { field.font = WebbyTypography.font(ofSize: 14) }
         field.delegate = self
         field.translatesAutoresizingMaskIntoConstraints = false
         addSubview(field)
@@ -818,3 +867,92 @@ final class GlassAddressSurface: NSView, NSTextFieldDelegate {
         surface=nil;offset=0;trackingOrigin=0
     }
 }
+
+// Event-driven compositor motion: final layout and hit testing update once;
+// presentation layers settle independently without per-frame layout or timers.
+@MainActor extension Motion {
+    enum Character {case tabs,split,widget,panel,editor,art
+        var spring:(CGFloat,CGFloat) {switch self {case .tabs:return(650,42);case .split:return(460,38);case .widget:return(420,32);case .panel:return(680,44);case .editor:return(800,52);case .art:return(330,34)}}
+        var fade:Double {switch self {case .editor:return 0.12;case .tabs,.panel:return 0.16;case .widget:return 0.22;case .split:return 0.24;case .art:return 0.28}}
+    }
+    struct Geometry {
+        let frames:[ObjectIdentifier:NSRect]
+        static let empty=Geometry(frames:[:])
+    }
+    static func capture(_ views:[NSView],in root:NSView)->Geometry {
+        guard enabled,root.window?.occlusionState.contains(.visible)==true,!root.isHiddenOrHasHiddenAncestor else{return .empty}
+        var frames:[ObjectIdentifier:NSRect]=[:]
+        for view in views.prefix(80) where !view.isHiddenOrHasHiddenAncestor && view.superview != nil {
+            var frame=view.convert(view.bounds,to:root)
+            if let layer=view.layer,let shown=layer.presentation(){frame.origin.x+=shown.position.x-layer.position.x;frame.origin.y+=shown.position.y-layer.position.y}
+            if frame.intersects(root.visibleRect) {frames[ObjectIdentifier(view)]=frame}
+        }
+        return Geometry(frames:frames)
+    }
+    static func settle(_ before:Geometry,views:[NSView],in root:NSView,character:Character){
+        guard enabled,root.window?.occlusionState.contains(.visible)==true,!root.isHiddenOrHasHiddenAncestor else{return}
+        root.layoutSubtreeIfNeeded()
+        for view in views.prefix(80) where !view.isHiddenOrHasHiddenAncestor && view.superview != nil {
+            let next=view.convert(view.bounds,to:root)
+            guard next.width>1,next.height>1,next.intersects(root.visibleRect) else{continue}
+            guard let old=before.frames[ObjectIdentifier(view)] else{reveal(view,character:character);continue}
+            let dx=old.midX-next.midX,dy=old.midY-next.midY
+            guard abs(dx)+abs(dy)+abs(old.width-next.width)+abs(old.height-next.height)>0.75 else{continue}
+            view.wantsLayer=true;guard let layer=view.layer else{continue}
+            let (stiffness,damping)=character.spring
+            let position=CASpringAnimation(keyPath:"position");position.fromValue=NSValue(point:NSPoint(x:layer.position.x+dx,y:layer.position.y+dy));position.toValue=NSValue(point:layer.position)
+            let bounds=CASpringAnimation(keyPath:"bounds");bounds.fromValue=NSValue(rect:NSRect(origin:layer.bounds.origin,size:old.size));bounds.toValue=NSValue(rect:layer.bounds)
+            for animation in [position,bounds]{animation.mass=1;animation.stiffness=stiffness;animation.damping=damping;animation.duration=min(0.45,animation.settlingDuration)}
+            let group=CAAnimationGroup();group.animations=[position,bounds];group.duration=max(position.duration,bounds.duration)
+            layer.add(group,forKey:"webbyGeometry")
+        }
+    }
+    static func reveal(_ view:NSView,character:Character = .panel){
+        guard enabled,view.window?.occlusionState.contains(.visible)==true,!view.isHiddenOrHasHiddenAncestor else{return}
+        view.wantsLayer=true
+        basic(view.layer,key:"opacity",from:0,to:view.layer?.opacity ?? 1,duration:character.fade)
+        let spring=CASpringAnimation(keyPath:character == .split ? "transform.translation.x":"transform.translation.y");spring.fromValue=character == .tabs ? -5:character == .split ? 18:8;spring.toValue=0;spring.mass=1;spring.stiffness=character.spring.0;spring.damping=character.spring.1;spring.duration=min(0.4,spring.settlingDuration)
+        view.layer?.add(spring,forKey:"webbyReveal")
+    }
+    static func change(_ view:NSView?,character:Character = .panel){
+        guard enabled,let view,view.window?.occlusionState.contains(.visible)==true,!view.isHiddenOrHasHiddenAncestor else{return}
+        view.wantsLayer=true
+        let fade=CATransition();fade.type = .fade;fade.duration=character.fade;fade.timingFunction=CAMediaTimingFunction(name:.easeOut)
+        view.layer?.add(fade,forKey:"webbyContentChange")
+    }
+    static func interact(_ view:NSView){
+        for key in ["webbyGeometry","webbyReveal","webbyContentChange"] {view.layer?.removeAnimation(forKey:key)}
+    }
+    // Freeze only the outgoing chrome, in root coordinates. Its constraints can
+    // finish immediately without squeezing the glass/text during dismissal.
+    static func departChrome(_ views:[NSView],in root:NSView,horizontal:Bool)->[NSView] {
+        guard enabled,root.window?.occlusionState.contains(.visible)==true else{return []}
+        return views.compactMap { view in
+            guard !view.isHiddenOrHasHiddenAncestor,view.bounds.width>0,view.bounds.height>0,
+                  view.bounds.width*view.bounds.height<600_000,
+                  let bitmap=view.bitmapImageRepForCachingDisplay(in:view.bounds) else{return nil}
+            view.cacheDisplay(in:view.bounds,to:bitmap)
+            let image=NSImage(size:view.bounds.size);image.addRepresentation(bitmap)
+            let ghost=MotionGhost(frame:view.convert(view.bounds,to:root))
+            ghost.image=image;ghost.imageScaling = .scaleAxesIndependently;ghost.wantsLayer=true
+            root.addSubview(ghost,positioned:.above,relativeTo:nil)
+            ghost.layer?.opacity=0
+            basic(ghost.layer,key:"opacity",from:1,to:0,duration:0.22)
+            basic(ghost.layer,key:horizontal ? "transform.translation.y":"transform.translation.x",from:0,to:horizontal ? 14:-28,duration:0.22)
+            DispatchQueue.main.asyncAfter(deadline:.now()+0.22){[weak ghost] in ghost?.removeFromSuperview()}
+            return ghost
+        }
+    }
+    static func depart(_ view:NSView,character:Character = .tabs){
+        guard enabled,let parent=view.superview,parent.window?.occlusionState.contains(.visible)==true,!view.isHiddenOrHasHiddenAncestor,
+              view.bounds.width>0,view.bounds.height>0,view.bounds.width*view.bounds.height<600_000,
+              let bitmap=view.bitmapImageRepForCachingDisplay(in:view.bounds) else{return}
+        view.cacheDisplay(in:view.bounds,to:bitmap)
+        let image=NSImage(size:view.bounds.size);image.addRepresentation(bitmap)
+        let ghost=MotionGhost(frame:view.frame);ghost.image=image;ghost.imageScaling = .scaleAxesIndependently;ghost.wantsLayer=true;parent.addSubview(ghost,positioned:.above,relativeTo:view)
+        ghost.layer?.opacity=0;basic(ghost.layer,key:"opacity",from:1,to:0,duration:character.fade)
+        basic(ghost.layer,key:"transform.scale",from:1,to:0.96,duration:character.fade)
+        DispatchQueue.main.asyncAfter(deadline:.now()+character.fade){[weak ghost] in ghost?.removeFromSuperview()}
+    }
+}
+private final class MotionGhost:NSImageView {override func hitTest(_ point:NSPoint)->NSView?{nil}}

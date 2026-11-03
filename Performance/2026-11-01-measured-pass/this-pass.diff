@@ -1,0 +1,611 @@
+--- /private/tmp/webby-measured-pass/before/ASCIIBackgrounds.swift	2026-11-01 15:42:50
++++ /Users/vishayagarwal/Documents/Codex/2026-09-29/can-y/outputs/ASCIIBackgrounds.swift	2026-11-01 15:45:23
+@@ -34,6 +34,8 @@
+     override init(frame frameRect: NSRect) {
+         super.init(frame: frameRect)
+         wantsLayer = true
++        NotificationCenter.default.addObserver(self,selector:#selector(occlusionChanged(_:)),name:NSWindow.didChangeOcclusionStateNotification,object:nil)
++        NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(motionPreferenceChanged),name:NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,object:nil)
+         selection.strokeColor = NSColor.systemTeal.cgColor
+         selection.fillColor = nil; selection.lineWidth = 1.5
+         handles.strokeColor = NSColor.systemTeal.cgColor
+@@ -139,12 +141,25 @@
+             context.evaluateScript("var backgroundIco = ico.New(94,20,50,8,1,20);")
+             renderer = context
+             animate()
+-            timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+-                MainActor.assumeIsolated {
+-                    guard let self, let window = self.window, window.occlusionState.contains(.visible),
+-                          !self.isHiddenOrHasHiddenAncestor, !self.isDragging, Motion.enabled else { return }
+-                    self.animate()
+-                }
++            refreshActivity()
++        }
++    }
++    override func viewDidMoveToWindow() {super.viewDidMoveToWindow();refreshActivity()}
++    @objc private func occlusionChanged(_ note:Notification) {
++        if note.object as? NSWindow === window {refreshActivity()}
++    }
++    @objc private func motionPreferenceChanged() {refreshActivity()}
++    func refreshActivity() {
++        guard renderer != nil,window?.occlusionState.contains(.visible)==true,!isHiddenOrHasHiddenAncestor,!isDragging,Motion.enabled else {
++            timer?.invalidate();timer=nil;return
++        }
++        guard timer==nil else{return}
++        timer = Timer.scheduledTimer(withTimeInterval:0.1,repeats:true) { [weak self] _ in
++            MainActor.assumeIsolated {
++                guard let self else{return}
++                self.refreshActivity()
++                guard self.timer != nil else{return}
++                self.animate()
+             }
+         }
+     }
+@@ -163,7 +178,7 @@
+             let right = abs(point.x - original.maxX) <= 16
+             let bottom = abs(point.y - original.maxY) <= 16
+             resizing = right && bottom ? .corner : right ? .right : bottom ? .bottom : nil
+-            updateSelection()
++            updateSelection();refreshActivity()
+             return true
+         case .leftMouseDragged:
+             guard let id = dragID else { return false }
+@@ -186,11 +201,11 @@
+             guard let id = dragID, let rect = cards[id]?.frame, let index = placements.firstIndex(where: { $0.id == id }) else { return false }
+             placements[index].x = rect.minX; placements[index].y = rect.minY
+             placements[index].width = rect.width; placements[index].height = rect.height
+-            dragID = nil; updateSelection(); save(); return true
++            dragID = nil; updateSelection(); save();refreshActivity(); return true
+         default: return false
+         }
+     }
+-    deinit { timer?.invalidate() }
++    deinit {timer?.invalidate();NotificationCenter.default.removeObserver(self);NSWorkspace.shared.notificationCenter.removeObserver(self)}
+ }
+ 
+ @MainActor private final class ASCIIArtView: NSView {
+
+--- /private/tmp/webby-measured-pass/before/BrowserApp.swift	2026-11-01 12:36:00
++++ /Users/vishayagarwal/Documents/Codex/2026-09-29/can-y/outputs/BrowserApp.swift	2026-11-01 15:45:23
+@@ -1619,6 +1619,7 @@
+     private var applyingLayout = false
+     private var restoringPinnedSplit = false
+     private var sessionSaveWork: DispatchWorkItem?
++    private let sessionWriter = BrowserSnapshotWriter()
+     private var tabOffloadTimer: Timer?
+     private var memoryPressureSource: DispatchSourceMemoryPressure?
+     private var lastDiscardPass = -Double.infinity
+@@ -1813,10 +1814,7 @@
+         makeSidebar()
+         makeMainArea()
+         makeHome()
+-        widgetTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+-            MainActor.assumeIsolated { self?.pollRealtimeWidgets() }
+-        }
+-        widgetTimer?.tolerance = 1
++        updateWidgetActivity()
+         NotificationCenter.default.addObserver(self, selector: #selector(themeChanged),
+                                                name: .browserThemeChanged, object: nil)
+         NotificationCenter.default.addObserver(self,selector:#selector(geistChanged),name:Notification.Name("WebbyGeistChanged"),object:nil)
+@@ -1977,7 +1975,7 @@
+         tabOffloadTimer?.invalidate()
+         memoryPressureSource?.cancel()
+         for state in widgetFeedStates.values {state.task?.cancel()}
+-        saveSessionTabs()
++        saveSessionTabs(wait: true)
+         NotificationCenter.default.removeObserver(self, name: .browserThemeChanged, object: nil)
+         NotificationCenter.default.removeObserver(self, name: .browserGlassChanged, object: nil)
+         NotificationCenter.default.removeObserver(self, name: .browserSearchEngineChanged, object: nil)
+@@ -2806,7 +2804,30 @@
+         }
+     }
+ 
++    // Stop the timer itself while its consumers are hidden. Mini-window expiry
++    // remains active independently of homepage visibility.
++    private func updateWidgetActivity() {
++        asciiCanvas?.refreshActivity()
++        let visible = widgetCanvas != nil && homeView?.isHidden == false && window?.isVisible == true && window?.occlusionState.contains(.visible) == true
++        widgetCanvas?.setFeedsVisible(visible)
++        let needed = visible || !miniTabs.isEmpty
++        if !needed { widgetTimer?.invalidate(); widgetTimer = nil; return }
++        guard widgetTimer == nil else { return }
++        widgetTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
++            MainActor.assumeIsolated { self?.pollRealtimeWidgets() }
++        }
++        widgetTimer?.tolerance = 1
++    }
++
++    func windowDidChangeOcclusionState(_ notification: Notification) {
++        guard notification.object as? NSWindow === window else { return }
++        updateWidgetActivity()
++        wallpaper?.refreshActivity()
++        if window.occlusionState.contains(.visible) { pollRealtimeWidgets() }
++    }
++
+     private func pollRealtimeWidgets() {
++        updateWidgetActivity()
+         let hours=MiniWebbySettings.archiveHours
+         if hours>0 {for (id,host) in floatingWindows {if let mini=host as? MiniWebbyWindow,!mini.isKeyWindow,Date().timeIntervalSince(mini.lastUsed)>Double(hours)*3600 {expireMiniWebby(id,hours:hours)}}}
+         let visible = widgetCanvas != nil && !homeView.isHidden && window.isVisible && window.occlusionState.contains(.visible)
+@@ -3307,7 +3328,7 @@
+         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+     }
+ 
+-    private func saveSessionTabs() {
++    private func saveSessionTabs(wait: Bool = false) {
+         guard restoreTabsOnLaunch else { return }
+         let pages = spaces.flatMap { space in
+             space.tabs.compactMap { tab -> BrowserSessionRecord.Page? in
+@@ -3321,7 +3342,7 @@
+                              groupID: tab.groupID)
+             }
+         }
+-        UserDefaults.standard.set(try? JSONEncoder().encode(BrowserSessionRecord(pages: pages)), forKey: "webbySessionTabs")
++        sessionWriter.save(BrowserSessionRecord(pages: pages), key: "webbySessionTabs", wait: wait)
+     }
+ 
+     private func restoreSessionTabs() {
+@@ -3355,8 +3376,12 @@
+         let candidates = spaces.flatMap(\.tabs).filter {
+             canDiscard($0, cutoff: cutoff) && !recent.contains($0.id)
+         }.sorted { a, b in a.isPinned == b.isPinned ? a.lastActiveAt < b.lastActiveAt : !a.isPinned }
+-        // Bound cross-process checks and release oldest, unpinned pages first.
+-        for tab in candidates.prefix(memoryPressure ? 4 : 2) { checkDiscard(tab, cutoff: cutoff) }
++        // A soft working-set target accelerates only already-eligible idle tabs.
++        // User idle timeouts, dirty/media/capture/split checks and keep-loaded
++        // exceptions are unchanged. No timer is added and each pass stays bounded.
++        let loaded = spaces.reduce(0) { $0 + $1.tabs.lazy.filter { $0.webView != nil }.count }
++        let budget = BrowserWorkingSet.discardBatch(loaded: loaded, physicalMemory: ProcessInfo.processInfo.physicalMemory, pressure: memoryPressure)
++        for tab in candidates.prefix(budget) { checkDiscard(tab, cutoff: cutoff) }
+     }
+ 
+     private func canDiscard(_ tab: BrowserTab, cutoff: Date) -> Bool {
+@@ -4310,7 +4335,6 @@
+         }
+         guard tabs.contains(where: { $0.id == tab.id }) else { return }
+         if activeTabID == tab.id {
+-            content.layoutSubtreeIfNeeded()
+             returnVideoInline(tab)
+             return
+         }
+@@ -4369,8 +4393,12 @@
+         for item in tabs {
+             if item.isFloating { continue }
+             let inSplit = splitTabIDs?.contains(item.id) ?? false
+-            item.webView?.isHidden = inSplit ? !showsSplit : item.id != tab.id
+-            item.webView?.alphaValue = item.id == tab.id && item.showsSearchView ? 0.001 : 1
++            if let view = item.webView {
++                let hidden = inSplit ? !showsSplit : item.id != tab.id
++                if view.isHidden != hidden { view.isHidden = hidden }
++                let alpha: CGFloat = item.id == tab.id && item.showsSearchView ? 0.001 : 1
++                if view.alphaValue != alpha { view.alphaValue = alpha }
++            }
+         }
+         homeView.isHidden = showsSplit || (tab.webView != nil && !tab.showsSearchView) || tab.isTerminal
+         if !homeView.isHidden { refreshGoogleWidgets() }
+@@ -4766,9 +4794,10 @@
+         let light = rgb.redComponent * 0.2126 + rgb.greenComponent * 0.7152 + rgb.blueComponent * 0.0722 > 0.55
+         horizontalProfile.contentTintColor = light ? .black : .white
+         mainArea.subviews.first { $0.identifier?.rawValue == "horizontalNewTab" }.map { ($0 as? NSButton)?.contentTintColor = light ? .black : .white }
++        let pinnedIDs = Set(tabs.lazy.filter(\.isPinned).map(\.id))
+         for view in horizontalRows.values where view.tabID != rowID {
+             // Reuse the active edge color for legible inactive labels as well.
+-            view.setHorizontal(pinned: self.tab(id: view.tabID)?.isPinned == true, color: color)
++            view.setHorizontal(pinned: pinnedIDs.contains(view.tabID), color: color)
+         }
+     }
+ 
+@@ -5868,6 +5897,8 @@
+         chromeToggle.isHidden = true
+         toolbar.isHidden = pane ? terminalMode : !page
+         toolbarVisible = !toolbar.isHidden
++        updateWidgetActivity()
++        wallpaper?.refreshActivity()
+     }
+ 
+     private func installChromeMonitor() {
+@@ -7619,6 +7650,7 @@
+         let currentMiniOwner=(NSApp.keyWindow as? MiniWebbyWindow).flatMap{miniTabs[$0.tabID]?.ownerSpaceID}
+         let tab=BrowserTab();tab.ownerSpaceID=profile ?? currentMiniOwner ?? activeSpace.saved.id;tab.isFloating=true
+         miniTabs[tab.id]=tab
++        updateWidgetActivity()
+         let pointer=NSEvent.mouseLocation
+         let screen=NSScreen.screens.first{$0.frame.contains(pointer)} ?? window.screen
+         let mini=MiniWebbyWindow(tabID:tab.id,profiles:spaces.map{($0.saved.id,$0.saved.name)},owner:tab.ownerSpaceID!,screen:screen)
+@@ -7645,6 +7677,7 @@
+     }
+     private func closeMiniWebby(_ id:UUID,restoreFocus:Bool=true){
+         guard let tab=miniTabs.removeValue(forKey:id) else{return}
++        updateWidgetActivity()
+         miniSuggestions.removeValue(forKey:id)?.close()
+         if let url=tab.webView?.url,["http","https"].contains(url.scheme?.lowercased() ?? ""),let profile=tab.ownerSpaceID {
+             var entries=MiniWebbyArchive.entries;entries.insert(MiniWebbyArchive(id:UUID(),title:tab.title,url:url.absoluteString,profile:profile,closed:Date()),at:0);MiniWebbyArchive.entries=entries
+@@ -7714,6 +7747,7 @@
+             WebbyTypography.apply(to:root);typographyWindows.add(host)
+         }
+         if let mini=notification.object as? MiniWebbyWindow {mini.lastUsed=Date()}
++        updateWidgetActivity()
+     }
+     func application(_ application:NSApplication,open urls:[URL]){
+         let valid=Array(urls.filter{["http","https"].contains($0.scheme?.lowercased() ?? "") && $0.host != nil}.prefix(20))
+@@ -7740,10 +7774,12 @@
+ 
+ extension BrowserApp {
+     private func applyWallpaperPresentation(){
++        updateWidgetActivity()
++        wallpaper?.refreshActivity()
+         guard let wallpaper,let pageArea,let mainBackdrop,let sidebarBackdrop else{return}
+         let full=wallpaper.fillsWindow
+         let motionState="\(full)-\(wallpaper.tabBlurScope)"
+-        let artGeometry=Motion.capture([wallpaper],in:content)
++        let artGeometry=wallpaperMotionState != motionState ? Motion.capture([wallpaper],in:content):.empty
+         defer {if wallpaperMotionState != motionState {Motion.settle(artGeometry,views:[wallpaper],in:content,character:.art);Motion.change(sidebarBackdrop,character:.art);Motion.change(wallpaperPaneBlur,character:.art)};wallpaperMotionState=motionState}
+         let host=full ? content!:pageArea
+         if wallpaperChromeHost !== host {
+@@ -7785,9 +7821,10 @@
+         for group in Array(groupContainers.values)+Array(horizontalGroupContainers.values) {
+             group.updateGlass(opacity:Double(full && wallpaper.tabBlurScope==0 ? tabFrost:0),material:BrowserGlass.matchPageGlassSidebar ? .popover:.sidebar)
+         }
++        let frostedIDs=Set(tabs.lazy.filter{$0.groupID==nil || $0.isPinned}.map(\.id))
+         for row in Array(tabRows.values)+Array(horizontalRows.values) {
+             let existing=row.subviews.first{$0 is WallpaperTabFrost} as? WallpaperTabFrost
+-            if !(BrowserGlass.matchWebsiteEdge && homeView?.isHidden == true && BrowserTabPlacement.current == .horizontal) && full && wallpaper.tabBlurScope==0 && (tab(id:row.tabID)?.groupID==nil || tab(id:row.tabID)?.isPinned==true) {
++            if !(BrowserGlass.matchWebsiteEdge && homeView?.isHidden == true && BrowserTabPlacement.current == .horizontal) && full && wallpaper.tabBlurScope==0 && frostedIDs.contains(row.tabID) {
+                 let frost=existing ?? WallpaperTabFrost(frame:row.bounds)
+                 if existing==nil {frost.material = .sidebar;frost.blendingMode = .withinWindow;frost.state = .active;frost.autoresizingMask=[.width,.height];frost.wantsLayer=true;frost.layer?.cornerRadius=10;frost.layer?.masksToBounds=true;row.addSubview(frost,positioned:.below,relativeTo:row.subviews.first)}
+                 frost.alphaValue=tabFrost;frost.isHidden=false;row.updateTabGlassMask()
+
+--- /private/tmp/webby-measured-pass/before/BrowserPerformance.swift	2026-10-31 13:01:28
++++ /Users/vishayagarwal/Documents/Codex/2026-09-29/can-y/outputs/BrowserPerformance.swift	2026-11-01 15:40:05
+@@ -146,3 +146,39 @@
+         configuration.userContentController.addUserScript(WKUserScript(source:source,injectionTime:.atDocumentEnd,forMainFrameOnly:true,in:world))
+     }
+ }
++
++
++// UI code captures value snapshots only. Encoding and persistence share a serial
++// utility queue; newer revisions supersede pending writes. Shutdown can drain it.
++final class BrowserSnapshotWriter: @unchecked Sendable {
++    private let queue = DispatchQueue(label: "local.webby.session-writer", qos: .utility)
++    private let lock = NSLock()
++    private var revision: UInt64 = 0
++
++    func save<Value: Encodable>(_ snapshot: Value, defaults: UserDefaults = .standard,
++                               key: String, wait: Bool = false) {
++        lock.lock(); revision &+= 1; let ticket = revision; lock.unlock()
++        let write = { [self] in
++            lock.lock(); let current = ticket == revision; lock.unlock()
++            guard current, let data = try? JSONEncoder().encode(snapshot) else { return }
++            lock.lock(); defer { lock.unlock() }
++            guard ticket == revision else { return }
++            defaults.set(data, forKey: key)
++        }
++        if wait { queue.sync(execute: write) } else { queue.async(execute: write) }
++    }
++
++    func flush() { queue.sync {} }
++}
++
++
++// Soft target, not a promise about per-site memory: WebKit owns renderer heaps.
++// Large machines retain a larger working set; user protections always take precedence.
++enum BrowserWorkingSet {
++    static func residentTarget(physicalMemory: UInt64) -> Int {
++        max(12, min(48, Int(physicalMemory / (1024 * 1024 * 1024))))
++    }
++    static func discardBatch(loaded: Int, physicalMemory: UInt64, pressure: Bool) -> Int {
++        pressure ? 4 : min(4, max(2, loaded - residentTarget(physicalMemory: physicalMemory)))
++    }
++}
+
+--- /private/tmp/webby-measured-pass/before/BrowserWallpaper.swift	2026-10-27 17:32:29
++++ /Users/vishayagarwal/Documents/Codex/2026-09-29/can-y/outputs/BrowserWallpaper.swift	2026-11-01 15:40:05
+@@ -173,7 +173,20 @@
+         addSubview(surface)
+         NotificationCenter.default.addObserver(self,selector:#selector(flushSetEdits),name:NSNotification.Name("WebbyWallpaperSetWillChange"),object:nil)
+         NotificationCenter.default.addObserver(self,selector:#selector(reloadSet),name:NSNotification.Name("WebbyWallpaperSetChanged"),object:nil)
++        NotificationCenter.default.addObserver(self,selector:#selector(activityChanged(_:)),name:NSWindow.didChangeOcclusionStateNotification,object:nil)
++        NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(motionPreferenceChanged),name:NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,object:nil)
+     }
++    override func viewDidMoveToWindow() {
++        super.viewDidMoveToWindow()
++        refreshActivity()
++    }
++    @objc private func activityChanged(_ note: Notification) {
++        guard note.object as? NSWindow === window else { return }
++        refreshActivity()
++    }
++    @objc private func motionPreferenceChanged() { refreshActivity() }
++    func refreshActivity() { tick() }
++
+     private func updateTicker(_ interval: Double) {
+         guard tickInterval != interval else { return }
+         timer?.invalidate();timer=nil;tickInterval=interval
+@@ -184,7 +197,7 @@
+         timer?.tolerance=interval * 0.2
+     }
+     required init?(coder: NSCoder) { fatalError() }
+-    deinit { NotificationCenter.default.removeObserver(self);timer?.invalidate(); if let videoEnd { NotificationCenter.default.removeObserver(videoEnd) } }
++    deinit { NotificationCenter.default.removeObserver(self);NSWorkspace.shared.notificationCenter.removeObserver(self);timer?.invalidate(); if let videoEnd { NotificationCenter.default.removeObserver(videoEnd) } }
+ 
+     func show(profile: UUID) {
+         guard self.profile != profile else { return }
+@@ -200,7 +213,11 @@
+     override func layout() {
+         super.layout()
+         surface.frame = bounds; html?.frame = bounds
+-        if lastSize != bounds.size { lastSize = bounds.size; dirty = true; generation += 1 }
++        if lastSize != bounds.size {
++            lastSize = bounds.size; dirty = true; generation += 1
++            // A static wallpaper has no poller. Resizing explicitly wakes it.
++            DispatchQueue.main.async { [weak self] in self?.refreshActivity() }
++        }
+     }
+     private func resetSource() {
+         lastChromeColorUpdate=0
+@@ -222,7 +239,7 @@
+         let visibility = home ? settings.opacity : settings.pageOpacity
+         let visible = settings.path != nil && visibility > 0.001 && (!settings.homeOnly || home || fillsWindow) && window?.occlusionState.contains(.visible) == true
+         let animated = settings.kind != "image" || cachedDelay > 0
+-        updateTicker(settings.path == nil ? 0 : (visible && animated && settings.motion && Motion.enabled ? 0.05 : 0.25))
++        updateTicker(visible && animated && settings.motion && Motion.enabled ? 0.05 : 0)
+         isHidden = !visible
+         alphaValue = visibility
+         if visible != lastVisible {
+@@ -373,6 +390,9 @@
+                     self.errorText?.stringValue=""
+                     if CACurrentMediaTime()-self.lastChromeColorUpdate>0.25 {self.lastChromeColorUpdate=CACurrentMediaTime();self.chromeColorChanged?()}
+                 } else { self.errorText?.stringValue="We couldn’t decode this file. Let’s choose another image or movie." }
++                // Once a still image is decoded, its timer is unnecessary.
++                let moving = self.lastVisible && (self.settings.kind != "image" || frameDelay > 0) && self.settings.motion && Motion.enabled
++                self.updateTicker(moving ? 0.05 : 0)
+             }
+         }
+     }
+
+--- /private/tmp/webby-measured-pass/before/Tests/BrowserPerformanceHarness.swift.inc	2026-11-01 12:48:19
++++ /Users/vishayagarwal/Documents/Codex/2026-09-29/can-y/outputs/Tests/BrowserPerformanceHarness.swift.inc	2026-11-01 16:03:57
+@@ -1,3 +1,4 @@
++import Darwin
+ // Appended only to a temporary test copy of BrowserApp.swift by the test builder.
+ // Private access lets this exercise the actual browser paths, not a parallel model.
+ extension BrowserApp {
+@@ -30,10 +31,19 @@
+         spaces = [a,b]
+         for space in spaces { UserDefaults.standard.set(Data("[]".utf8), forKey: "webbyWidgetCanvas.\(space.saved.id.uuidString)") }
+         downloads = BrowserDownloads()
++        if ProcessInfo.processInfo.environment["WEBBY_REAL_CORPUS"] != nil {
++            BrowserGlass.pageInjectionEnabled = ProcessInfo.processInfo.environment["WEBBY_REAL_VARIANT"] != "webby-no-glass"
++            appliedPageInjection = BrowserGlass.pageInjectionEnabled
++            loadRules()
++        }
+         makeWindow(); makeSidebar(); makeMainArea(); makeHome()
+         NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: .browserThemeChanged, object: nil)
+         BrowserTheme.activate(a.saved.id)
+         themeChanged()
++        if let corpus=ProcessInfo.processInfo.environment["WEBBY_REAL_CORPUS"] {
++            try await runRealCorpus(corpus:corpus,output:output)
++            exit(0)
++        }
+         if ProcessInfo.processInfo.environment["WEBBY_TEST_FAST_LOAD"] == "only" {
+             try await verifyFastLoading(base:base,output:output)
+             exit(0)
+@@ -244,7 +254,7 @@
+         try await verifyChromeTone(base:base)
+         try await verifyProfileMotion()
+         try await verifyLinkOpening(base:base)
+-        func p95(_ values: [Double]) -> Double { let a=values.sorted(); return a[min(a.count-1,Int(Double(a.count-1)*0.95))] }
++        func p95(_ values: [Double]) -> Double { let a=values.sorted(); return a[max(0,min(a.count-1,Int(ceil(Double(a.count)*0.95))-1))] }
+         var result: [String: Any] = [:]
+         result["passed"] = true
+         result["restoredTabs"] = 80
+@@ -254,9 +264,11 @@
+         result["verticalSelectionCPUp95Ms"] = p95(topTimes)
+         result["horizontalSelectionCPUp95Ms"] = p95(horizontalTimes)
+         result["selectionSamplesPerLayout"] = 45
++        result["rawSelectionMs"] = ["vertical":topTimes,"horizontal":horizontalTimes]
++        result["percentileConvention"] = "nearest-rank ceil(n * 0.95) - 1"
+         result["profileOwnershipPreserved"] = true
+         result["suggestionCorpusSize"] = 10000
+-        result["optimization"]="-O"
++        result["optimization"]=Bundle.main.object(forInfoDictionaryKey:"WebbyTestOptimization") ?? "unknown"
+         result["suggestionMainThreadP95Ms"]=p95(suggestionMainTimes)
+         result["suggestionMainThreadMaxMs"]=suggestionMainTimes.max()!
+         result["suggestionWorkP95Ms"] = p95(suggestionTimes)
+@@ -1011,7 +1023,7 @@
+         try expect(splitTabs(sourceID:first.id,targetID:pane.id),"Group split fixture failed")
+         selectTab(pane);commandGroupTab(second.id)
+         try expect(first.groupID==groupID && pane.groupID==groupID && splitTabIDs?.count==2,"Grouping damaged a split or left one pane out")
+-        saveSessionTabs()
++        saveSessionTabs(wait: true)
+         let data=UserDefaults.standard.data(forKey:"webbySessionTabs")!
+         let saved=try JSONDecoder().decode(BrowserSessionRecord.self,from:data)
+         try expect(saved.pages.filter{$0.url.contains("group-")}.allSatisfy{$0.groupID==groupID},"Grouped page metadata did not persist")
+@@ -1190,5 +1202,77 @@
+     func testCommandClick() {
+         let event=NSEvent.mouseEvent(with:.leftMouseDown,location:convert(NSPoint(x:bounds.midX,y:bounds.midY),to:nil),modifierFlags:[.command],timestamp:ProcessInfo.processInfo.systemUptime,windowNumber:window!.windowNumber,context:nil,eventNumber:1,clickCount:1,pressure:1)!
+         mouseDown(with:event)
++    }
++}
++
++// Accepts arbitrary public URLs. No host-specific success criteria or timing thresholds.
++extension BrowserApp {
++    private func runRealCorpus(corpus:String,output:URL) async throws {
++        let urls=try JSONDecoder().decode([String].self,from:Data(contentsOf:URL(fileURLWithPath:corpus)))
++        let repeats=max(1,min(10,Int(ProcessInfo.processInfo.environment["WEBBY_REAL_REPEATS"] ?? "3") ?? 3))
++        let variant=ProcessInfo.processInfo.environment["WEBBY_REAL_VARIANT"] ?? "webby"
++        try expect(!urls.isEmpty && urls.allSatisfy{ let u=URL(string:$0); return u?.scheme=="https" && u?.host != nil },"Corpus must contain HTTPS URLs")
++        window.makeKeyAndOrderFront(nil)
++        var samples:[[String:Any]]=[]
++        let store=WKWebsiteDataStore.nonPersistent()
++        // Give the asynchronous compiled-rule lookup a bounded preparation window.
++        try await Task.sleep(nanoseconds:200_000_000)
++        content.layoutSubtreeIfNeeded()
++        func cpuMilliseconds()->Double {
++            var usage=rusage();getrusage(RUSAGE_SELF,&usage)
++            return Double(usage.ru_utime.tv_sec+usage.ru_stime.tv_sec)*1000 + Double(usage.ru_utime.tv_usec+usage.ru_stime.tv_usec)/1000
++        }
++        for round in 0..<repeats {
++            // Rotate order so a single host is not always tested first.
++            for offset in urls.indices {
++                let address=urls[(offset+round)%urls.count]
++                let started=ProcessInfo.processInfo.systemUptime
++                let startedCPU=cpuMilliseconds()
++                var row:[String:Any]=["url":address,"round":round,"variant":variant,"cache":round==0 ? "fresh ephemeral store; OS caches uncontrolled":"reused ephemeral store; server cache policy respected"]
++                addTab(select:true)
++                let target=activeTab!
++                let view:WKWebView
++                if variant=="minimal-wk" {
++                    let config=WKWebViewConfiguration();config.websiteDataStore=store
++                    view=WKWebView(frame:pageArea.bounds,configuration:config)
++                    target.webView=view;pageArea.addSubview(view)
++                    target.showsSearchView=false
++                    homeView.isHidden=true;globe.engine.hide()
++                    applyAddressChrome();content.layoutSubtreeIfNeeded()
++                    view.frame=pageArea.bounds;view.autoresizingMask=[.width,.height]
++                    view.load(URLRequest(url:URL(string:address)!))
++                } else {
++                    view=makeWebView(for:target)
++                    // Keep a single ephemeral store per run in the test builder.
++                    navigate(address,in:target)
++                }
++                let deadline=ProcessInfo.processInfo.systemUptime+25
++                while (view.isLoading || view.url == nil) && ProcessInfo.processInfo.systemUptime<deadline {try await Task.sleep(nanoseconds:20_000_000)}
++                row["nativeLoadWaitMs"]=(ProcessInfo.processInfo.systemUptime-started)*1000
++                row["browserHostCPUUntilLoadMs"]=cpuMilliseconds()-startedCPU
++                row["effects"]=["glass":variant != "minimal-wk" && BrowserGlass.pageInjectionEnabled,"geist":variant != "minimal-wk" && GlassPageInjector.geistEnabled,"fastRule":variant != "minimal-wk" && fastModeEnabled && fastRule != nil,"injectedScriptBytes":view.configuration.userContentController.userScripts.reduce(0){$0+$1.source.utf8.count}]
++                var usage=rusage();getrusage(RUSAGE_SELF,&usage)
++                row["browserHostCumulativePeakRSSBytes"]=usage.ru_maxrss
++                row["timedOut"]=view.isLoading || view.url == nil
++                row["finalURL"]=view.url?.absoluteString ?? ""
++                row["navigationError"]=target.loadError ?? ""
++                if !view.isLoading {
++                    do {
++                        row["page"]=try await view.evaluateJavaScript("""
++                        (()=>{const n=performance.getEntriesByType('navigation')[0];return {title:document.title,readyState:document.readyState,navigation:n?JSON.parse(JSON.stringify(n.toJSON())):null,paint:performance.getEntriesByType('paint').map(e=>({name:e.name,startTime:e.startTime})),resourceCount:performance.getEntriesByType('resource').length,domElements:document.getElementsByTagName('*').length,viewport:{width:innerWidth,height:innerHeight}}})()
++                        """)
++                        row["frameOpportunityGapsMs"]=try await view.callAsyncJavaScript("""
++                        return await new Promise(resolve=>{let last=null,gaps=[];function frame(t){if(last!==null)gaps.push(t-last);last=t;if(gaps.length>=60)resolve(gaps);else requestAnimationFrame(frame)}requestAnimationFrame(frame);setTimeout(()=>resolve(gaps),3000)})
++                        """,arguments:[:],in:nil,contentWorld:.defaultClient)
++                    } catch {row["measurementError"]=String(describing:error)}
++                }
++                samples.append(row)
++                let report:[String:Any]=["samples":samples,"optimization":Bundle.main.object(forInfoDictionaryKey:"WebbyTestOptimization") ?? "unknown","limitations":["Logged-out isolated profiles; no production sign-ins","rAF gaps are frame opportunities, not compositor FPS or GPU time","OS DNS/TLS caches and server/network variance uncontrolled","No cold-cache claim; failures and timeouts included","Host CPU/RSS excludes WebKit content/network/GPU processes","Load completion does not prove a functional signed-in or challenge-free page"]]
++                try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output,options:.atomic)
++                releaseWebView(for:target)
++                activeSpace.tabs.removeAll{$0.id==target.id}
++                print("CORPUS \(variant) round \(round) \(address) \(row["nativeLoadWaitMs"]!)ms")
++            }
++        }
+     }
+ }
+
+--- /private/tmp/webby-measured-pass/before/Tests/build_performance_harness.py	2026-10-31 13:01:28
++++ /Users/vishayagarwal/Documents/Codex/2026-09-29/can-y/outputs/Tests/build_performance_harness.py	2026-11-01 15:40:05
+@@ -1,17 +1,23 @@
+ from pathlib import Path
+-import re, subprocess, plistlib, shutil, sys, os
++import re, subprocess, plistlib, shutil, sys, os, json, hashlib, platform, datetime
+ root=Path(__file__).resolve().parents[1]
+ work=Path(sys.argv[1]).resolve(); work.mkdir(parents=True,exist_ok=True)
+-source=(root/'BrowserApp.swift').read_text()
++baseline=Path(os.environ['WEBBY_TEST_BASELINE_DIR']) if os.environ.get('WEBBY_TEST_BASELINE_DIR') else None
++def sourcefile(name):
++    candidate=baseline/name if baseline else None
++    return candidate if candidate and candidate.is_file() else root/name
++source=sourcefile('BrowserApp.swift').read_text()
+ source=source.replace('LightweightIDE()', 'LightweightIDE(nativeOnly: true)')
+ source=source.replace('    private func scheduleSpaceSave() {','    private func scheduleSpaceSave() {\n        return // Test copy never writes real browser profiles.',1)
+ source=source.replace('    private func loadCookieHosts(for space: BrowserSpace) {','    private func loadCookieHosts(for space: BrowserSpace) {\n        return // Never read personal cookies in a fixture.',1)
+-source=source.replace('configuration.websiteDataStore = ownerSpace(for: tab).dataStore','configuration.websiteDataStore = .nonPersistent()')
++source=source.replace('configuration.websiteDataStore = ownerSpace(for: tab).dataStore','configuration.websiteDataStore = Self.performanceStore')
+ source=source.replace('    static func main() {','    static func main() {\n        if CommandLine.arguments.count == 3 {\n            if ProcessInfo.processInfo.environment["WEBBY_TEST_IDE_PURE"] == "1" { try! IDEProjectWidgetChecks.pure(); return }; BrowserApp.launchPerformanceChecks(base: CommandLine.arguments[1], output: URL(fileURLWithPath: CommandLine.arguments[2])); return\n        }',1)
+ # Fixture-only traces never run against personal tabs.
+ source=source.replace('    private func navigationFailed(in webView: WKWebView, error: Error) {', '    private func navigationFailed(in webView: WKWebView, error: Error) {\n        print("FIXTURE failure",(error as NSError).code)')
+ source=source.replace('    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {', '    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {\n        print("FIXTURE provisional",(error as NSError).code,tab(for:webView)?.currentNavigation === navigation)')
+-source+='\n'+(root/'Tests/BrowserPerformanceHarness.swift.inc').read_text()
++harness=(root/'Tests/BrowserPerformanceHarness.swift.inc').read_text()
++if 'private func saveSessionTabs(wait:' not in source: harness=harness.replace('saveSessionTabs(wait: true)','saveSessionTabs()')
++source+='\n'+harness+'\nextension BrowserApp { static let performanceStore = WKWebsiteDataStore.nonPersistent() }\n'
+ copy=work/'BrowserApp.swift';copy.write_text(source)
+ workbench_copy=work/'CodeWorkbench.swift'
+ workbench_source=(root/'CodeWorkbench.swift').read_text().replace('private var process: Process?', 'fileprivate var process: Process?').replace('private var clients =', 'fileprivate var clients =')
+@@ -21,7 +27,7 @@
+ codex_copy=work/'CodexAppWidgets.swift'
+ codex_copy.write_text((root/'CodexAppWidgets.swift').read_text()+'\n'+(root/'Tests/CodexAppWidgetHarness.swift.inc').read_text())
+ wallpaper_copy=work/'BrowserWallpaper.swift'
+-wallpaper_copy.write_text((root/'BrowserWallpaper.swift').read_text()+'\n'+(root/'Tests/WallpaperHarness.swift.inc').read_text())
++wallpaper_copy.write_text(sourcefile('BrowserWallpaper.swift').read_text()+'\n'+(root/'Tests/WallpaperHarness.swift.inc').read_text())
+ menu_copy=work/'BrowserMenuBar.swift'
+ menu_copy.write_text((root/'BrowserMenuBar.swift').read_text()+'\n'+(root/'Tests/BrowserMenuBarHarness.swift.inc').read_text())
+ widget_copy=work/'WidgetCanvas.swift'
+@@ -35,18 +41,30 @@
+ (resources/'Fonts/Geist').mkdir(parents=True,exist_ok=True)
+ for font in (root/'Fonts/Geist').iterdir(): shutil.copy2(font,resources/'Fonts/Geist'/font.name)
+ for name in ['VideoControls.js','GeistPage.js','glass-page.js','PasswordFieldProbe.js','GooglePromptFilter.js','ChromeTone.js','ChatGPTWidget.js','LinkPreview.js']:
+-    shutil.copy2(root/name,resources/name)
+-plistlib.dump({'CFBundleIdentifier':'local.webby.performance-tests','CFBundleExecutable':'Webby','CFBundleName':'Webby Performance Tests','CFBundlePackageType':'APPL','LSMinimumSystemVersion':'13.0'},(app/'Contents/Info.plist').open('wb'))
++    shutil.copy2(sourcefile(name),resources/name)
++optimization=os.environ.get('WEBBY_TEST_OPTIMIZATION','-Onone')
++plistlib.dump({'WebbyTestOptimization':optimization,'CFBundleIdentifier':'local.webby.performance-tests','CFBundleExecutable':'Webby','CFBundleName':'Webby Performance Tests','CFBundlePackageType':'APPL','LSMinimumSystemVersion':'13.0'},(app/'Contents/Info.plist').open('wb'))
+ cache=work/'module-cache';cache.mkdir(exist_ok=True)
+ obj=work/'PTYLauncher.o'
+ subprocess.run(['clang','-O2','-target','arm64-apple-macos13.0','-c',str(root/'PTYLauncher.c'),'-o',str(obj)],check=True)
+ files=re.findall(r'"\$script_dir/([^"\n]+\.swift)"',(root/'build.sh').read_text())
+-files=[str(copy if f=='BrowserApp.swift' else (identity_copy if f=='IDEIdentity.swift' else workbench_copy if f=='CodeWorkbench.swift' else widget_copy if f=='WidgetCanvas.swift' else (menu_copy if f=='BrowserMenuBar.swift' else codex_copy if f=='CodexAppWidgets.swift' else wallpaper_copy if f=='BrowserWallpaper.swift' else root/f))) for f in files if f!='CompileRules.swift']
+-args=['swiftc',os.environ.get('WEBBY_TEST_OPTIMIZATION','-Onone'),'-parse-as-library','-target','arm64-apple-macos13.0','-module-cache-path',str(cache)]
++files=[str(copy if f=='BrowserApp.swift' else (identity_copy if f=='IDEIdentity.swift' else workbench_copy if f=='CodeWorkbench.swift' else widget_copy if f=='WidgetCanvas.swift' else (menu_copy if f=='BrowserMenuBar.swift' else codex_copy if f=='CodexAppWidgets.swift' else wallpaper_copy if f=='BrowserWallpaper.swift' else sourcefile(f)))) for f in files if f!='CompileRules.swift']
++args=['swiftc',optimization,'-parse-as-library','-target','arm64-apple-macos13.0','-module-cache-path',str(cache)]
+ for framework in ['AppKit','WebKit','AVFoundation','Security','CryptoKit','IOKit','JavaScriptCore','CoreImage','ImageIO','Carbon','WidgetKit']:args+=['-framework',framework]
+ background_target=root.parent/'work/code-background-target'
+ subprocess.run([str(Path.home()/'.cargo/bin/cargo'),'build','--release','--offline','--manifest-path',str(root/'Vendor/CodeBackground/Cargo.toml'),'--target-dir',str(background_target)],check=True)
+ args+=files+[str(obj),str(background_target/'release/libwebby_code_background.a'),'-lc++','-lsqlite3','-o',str(mac/'Webby')]
++def capture(command):
++    result=subprocess.run(command,capture_output=True,text=True)
++    return {'exit':result.returncode,'output':result.stdout.strip(),'error':result.stderr.strip()}
++manifest={'builtUTC':datetime.datetime.now(datetime.timezone.utc).isoformat(),
++    'optimization':optimization,'swiftArguments':args,'hardware':capture(['sysctl','-n','hw.model']),
++    'os':platform.platform(),'power':capture(['pmset','-g','batt']),
++    'thermal':capture(['pmset','-g','therm']), 'compiler':capture(['swiftc','--version']),
++    'commit':capture(['git','-C',str(root),'rev-parse','HEAD']),
++    'sources':{str(Path(f).relative_to(root)) if Path(f).is_relative_to(root) else Path(f).name:hashlib.sha256(Path(f).read_bytes()).hexdigest() for f in files},
++    'scripts':{n:hashlib.sha256((resources/n).read_bytes()).hexdigest() for n in ['glass-page.js','GeistPage.js','ChromeTone.js']}}
++(work/'build-manifest.json').write_text(json.dumps(manifest,indent=2))
+ subprocess.run(args,check=True)
+ subprocess.run(['codesign','--force','--deep','--sign','-',str(app)],check=True)
+ print(app)
+
+--- /private/tmp/webby-measured-pass/before/glass-page.js	2026-11-01 12:41:54
++++ /Users/vishayagarwal/Documents/Codex/2026-09-29/can-y/outputs/glass-page.js	2026-11-01 15:40:05
+@@ -113,8 +113,7 @@
+   function surfaceAlpha(element, rect) {
+     const tag = element.localName;
+     if (tag === 'html' || tag === 'body') return 0;
+-    if (element.closest(media)) return null;
+-
++    // prepare() already excludes media and all of its descendants.
+     const role = element.getAttribute('role') || '';
+     const names = `${element.id} ${typeof element.className === 'string' ? element.className : ''} ${role}`;
+     if (rect.width < 20 || rect.height < 14) return null;
+@@ -328,13 +327,19 @@
+   function processPageShell() {
+     const shallow = [{ element: document.documentElement, depth: 0 }];
+     const batch = [];
+-    while (shallow.length && batch.length < (mainFrame ? 24 : 8)) {
++    const limit = mainFrame ? 24 : 8;
++    while (shallow.length && batch.length < limit) {
+       const { element, depth } = shallow.shift();
+       if (!element || element.matches(`${media},${nonvisual}`)) continue;
+       const plan = prepare(element, true);
+       if (plan) batch.push(plan);
+       if (depth < 2) {
+-        for (const child of element.children) shallow.push({ element: child, depth: depth + 1 });
++        for (const child of element.children) {
++          // This is the first-paint shell, not the full bounded crawler. Never
++          // allocate a queue for thousands of siblings just to consume 24.
++          if (shallow.length + batch.length >= limit) break;
++          if (!child.matches(`${media},${nonvisual}`)) shallow.push({ element: child, depth: depth + 1 });
++        }
+       }
+     }
+     batch.map(measure).forEach(apply);

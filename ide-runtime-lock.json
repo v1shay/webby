@@ -1,0 +1,18 @@
+{
+  "platform": "darwin-arm64",
+  "codeServer": {
+    "version": "4.112.0",
+    "url": "https://ghcr.io/v2/homebrew/core/code-server/blobs/sha256:2d90eca0664540b5eea48c3034340b25bb540865d2d15a2f21d4b6ec9d391867",
+    "sha256": "2d90eca0664540b5eea48c3034340b25bb540865d2d15a2f21d4b6ec9d391867"
+  },
+  "node": {
+    "version": "22.23.4",
+    "url": "https://nodejs.org/dist/v22.23.4/node-v22.23.4-darwin-arm64.tar.gz",
+    "sha256": "c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428"
+  },
+  "extensions": [
+    "redhat.java",
+    "vscjava.vscode-java-debug",
+    "vscjava.vscode-java-dependency"
+  ]
+}

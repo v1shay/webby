@@ -17,6 +17,7 @@ import AppKit
         super.init(contentRect: rect, styleMask: [.titled, .closable, .miniaturizable, .resizable],
                    backing: .buffered, defer: false)
         self.title = title
+        animationBehavior = .utilityWindow
         isReleasedWhenClosed = false
         isOpaque = false
         backgroundColor = .clear
@@ -39,7 +40,7 @@ import AppKit
         addressField.placeholderString = "Search Google or enter a URL"
         addressField.isBordered = false
         addressField.drawsBackground = false
-        addressField.font = .systemFont(ofSize: 13)
+        addressField.font = WebbyTypography.font(ofSize: 13)
         addressField.translatesAutoresizingMaskIntoConstraints = false
         contentHost.translatesAutoresizingMaskIntoConstraints = false
         let root = NSView()

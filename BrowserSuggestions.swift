@@ -1,12 +1,157 @@
 import AppKit
 
-struct BrowserSuggestion: Equatable {
-    enum Kind: Equatable { case pinned, bookmark, history, cookie }
+struct BrowserSuggestion: Equatable, Sendable {
+    enum Kind: Equatable, Sendable { case pinned, bookmark, history, cookie }
     let title: String
     let url: String
     let kind: Kind
     var profileID: UUID? = nil
     var profileName: String? = nil
+}
+
+// Value-only snapshots cross the actor boundary; AppKit/WebKit objects stay on
+// the main actor. Indexing, URL parsing, sorting and ranking run on this actor.
+struct SuggestionSearchSource: Sendable {
+    let id:UUID
+    let identity:ObjectIdentifier
+    let revision:Int
+    let name:String
+    let bookmarks:[BrowserLink]
+    let history:[BrowserLink]
+    let pins:[BrowserLink]
+    let cookies:[String]
+}
+struct SuggestionSearchResult: Sendable {
+    let items:[BrowserSuggestion]
+    let routes:[String:UUID]
+}
+actor BrowserSuggestionIndex {
+    private struct Record {
+        let title:String, url:String, titleKey:String, urlKey:String, host:String
+        let kind:BrowserSuggestion.Kind
+        let asciiSearch:Data?
+        let titleByteCount:Int
+        var visited:Date
+        init?(_ link:BrowserLink,kind:BrowserSuggestion.Kind,preparedHost:String?=nil) {
+            let lowerURL=link.url.lowercased()
+            guard lowerURL.hasPrefix("http://") || lowerURL.hasPrefix("https://"),let host=preparedHost ?? URL(string:link.url)?.host else{return nil}
+            title=link.title;url=link.url;titleKey=link.title.lowercased();urlKey=lowerURL
+            titleByteCount=titleKey.utf8.count
+            asciiSearch=titleKey.utf8.allSatisfy{$0<128} && lowerURL.utf8.allSatisfy{$0<128} ? Data((titleKey+"\0"+lowerURL).utf8):nil
+            self.host=host.lowercased();self.kind=kind;visited=link.visitedAt ?? .distantPast
+        }
+    }
+    private struct Prepared {
+        let identity:ObjectIdentifier, revision:Int
+        let bookmarks:[Record],history:[Record],byURL:[String:Record]
+    }
+    private var profiles:[UUID:Prepared]=[:]
+    private var hosts:[String:String]=[:]
+    private struct RoutingRevision:Equatable {let identity:ObjectIdentifier;let revision:Int}
+    private var routingRevision:[RoutingRevision]=[]
+    private var cachedRoutes:[String:UUID]=[:]
+    private func record(_ link:BrowserLink,kind:BrowserSuggestion.Kind)->Record? {
+        let lower=link.url.lowercased()
+        let count=lower.hasPrefix("https://") ? 8:lower.hasPrefix("http://") ? 7:0
+        guard count>0 else{return nil}
+        let origin=String(lower.prefix(count))+lower.dropFirst(count).prefix{!"/?#".contains($0)}
+        let host:String
+        if let cached=hosts[origin] {host=cached}
+        else {
+            guard let parsed=URL(string:link.url)?.host else{return nil}
+            host=parsed
+            if hosts.count<2048 {hosts[origin]=host}
+        }
+        return Record(link,kind:kind,preparedHost:host)
+    }
+
+    func search(_ query:String,sources:[SuggestionSearchSource],fuse:Bool)->SuggestionSearchResult {
+        assert(!Thread.isMainThread,"Suggestion work must not run on the UI thread")
+        for source in sources {
+            if profiles[source.id]?.identity != source.identity || profiles[source.id]?.revision != source.revision {
+                let old=profiles[source.id]
+                var byURL:[String:Record]=[:]
+                let records=source.history.compactMap { link -> Record? in
+                    var record:Record?
+                    if let cached=old?.byURL[link.url],cached.title==link.title {record=cached;record?.visited=link.visitedAt ?? .distantPast}
+                    else {record=self.record(link,kind:.history)}
+                    if let record {byURL[link.url]=record}
+                    return record
+                }.sorted{$0.visited>$1.visited}
+                profiles[source.id]=Prepared(identity:source.identity,revision:source.revision,
+                    bookmarks:source.bookmarks.compactMap{record($0,kind:.bookmark)},history:records,byURL:byURL)
+            }
+        }
+        if profiles.count>16 {for id in Array(profiles.keys) where !sources.contains(where:{$0.id==id}) {profiles.removeValue(forKey:id)}}
+        if Task.isCancelled {return .init(items:[],routes:[:])}
+        var routes:[String:UUID]=[:]
+        if fuse {
+            let revision=sources.map{RoutingRevision(identity:$0.identity,revision:$0.revision)}
+            if revision==routingRevision {routes=cachedRoutes}
+            else {
+                var dates:[String:Date]=[:],ambiguous=Set<String>()
+                for source in sources {for record in profiles[source.id]?.history ?? [] {
+                    if let date=dates[record.host] {
+                        if record.visited>date {dates[record.host]=record.visited;routes[record.host]=source.id;ambiguous.remove(record.host)}
+                        else if date==record.visited && routes[record.host] != source.id {ambiguous.insert(record.host)}
+                    } else {dates[record.host]=record.visited;routes[record.host]=source.id}
+                }}
+                for host in ambiguous {routes.removeValue(forKey:host)}
+                routingRevision=revision;cachedRoutes=routes
+            }
+        }
+        let asciiQuery=query.utf8.allSatisfy{$0<128} ? Data(query.utf8):nil
+        var ranked:[(item:BrowserSuggestion,rank:Int,date:Date)]=[],seen=Set<String>()
+        func append(_ record:Record,_ source:SuggestionSearchSource) {
+            if !query.isEmpty && ranked.count==8 {
+                let kind:Int
+                switch record.kind {case .pinned:kind=0;case .bookmark:kind=1;case .history:kind=2;case .cookie:kind=3}
+                let bestPossible=(record.host==query ? 0:record.host.hasPrefix(query) ? 1:2)*10+kind
+                let worst=ranked[7]
+                if bestPossible>worst.rank || (bestPossible==worst.rank && (record.kind != .history || record.visited<=worst.date)) {return}
+            }
+            if !query.isEmpty {
+                if let bytes=record.asciiSearch,let needle=asciiQuery {
+                    guard bytes.range(of:needle) != nil else{return}
+                } else if !record.titleKey.contains(query) && !record.urlKey.contains(query) {return}
+            }
+            let identity=record.urlKey+(fuse ? "|"+source.id.uuidString:"")
+            guard !seen.contains(identity) else{return}
+            let titlePrefix:Bool
+            if let bytes=record.asciiSearch,let needle=asciiQuery {titlePrefix=needle.count<=record.titleByteCount && bytes.starts(with:needle)}
+            else {titlePrefix=record.titleKey.hasPrefix(query)}
+            let match=record.host==query ? 0:record.host.hasPrefix(query) ? 1:titlePrefix ? 2:3
+            let kind:Int
+            switch record.kind {case .pinned:kind=0;case .bookmark:kind=1;case .history:kind=2;case .cookie:kind=3}
+            let rank=query.isEmpty ? kind:match*10+kind
+            func precedes(_ other:(item:BrowserSuggestion,rank:Int,date:Date))->Bool {
+                rank<other.rank || (rank==other.rank && record.kind == .history && record.visited>other.date)
+            }
+            if ranked.count==8 && !precedes(ranked[7]) {return}
+            seen.insert(identity)
+            let item=BrowserSuggestion(title:record.title,url:record.url,kind:record.kind,profileID:source.id,profileName:fuse ? source.name:nil)
+            let index=ranked.firstIndex{precedes($0)} ?? ranked.count
+            ranked.insert((item,rank,record.visited),at:index)
+            if ranked.count>8 {ranked.removeLast()}
+        }
+        for source in sources {
+            for link in source.pins {if let record=record(link,kind:.pinned) {append(record,source)}}
+        }
+        for source in sources {for record in profiles[source.id]?.bookmarks ?? [] {append(record,source)}}
+        for source in sources {
+            for (index,record) in (profiles[source.id]?.history ?? []).enumerated() {
+                if index%64==0 && Task.isCancelled {return .init(items:[],routes:[:])}
+                if query.isEmpty && ranked.count==8 && (ranked[7].rank<2 || (ranked[7].rank==2 && record.visited<=ranked[7].date)) {break}
+                append(record,source)
+            }
+        }
+        if !query.isEmpty {
+            for source in sources {for host in source.cookies {
+                if let record=Record(.init(title:host,url:"https://"+host,visitedAt:nil),kind:.cookie) {append(record,source)}
+            }}
+        }
+        return .init(items:ranked.map{$0.item},routes:routes)
+    }
 }
 
 // Fuse routing uses history metadata only. WebKit credentials stay in the
@@ -72,12 +217,12 @@ private final class SuggestionRow: NSView {
         icon.contentTintColor = accent
         icon.imageScaling = .scaleProportionallyDown
         headline.stringValue = item.title
-        headline.font = .systemFont(ofSize: 14, weight: featured ? .semibold : .medium)
+        headline.font = WebbyTypography.font(ofSize: 14, weight: featured ? .semibold : .medium)
         headline.textColor = .labelColor
         headline.lineBreakMode = .byTruncatingTail
         detail.stringValue = (URL(string: item.url)?.host ?? item.url)
             + (item.profileName.map { " · " + $0 } ?? "")
-        detail.font = .systemFont(ofSize: 11)
+        detail.font = WebbyTypography.font(ofSize: 11)
         detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail
         arrow.image = NSImage(systemSymbolName: "arrow.turn.down.left", accessibilityDescription: nil)
@@ -88,6 +233,17 @@ private final class SuggestionRow: NSView {
         addSubview(detail)
         addSubview(arrow)
         restyle()
+    }
+
+    func update(item:BrowserSuggestion,index:Int,accent:NSColor) {
+        self.accent=accent;featured=index==0;hovered=false;selected=false;hasFavicon=false
+        setAccessibilityLabel("\(item.title), \(item.url)");toolTip=item.url
+        selectionGlow.colors=[accent.withAlphaComponent(0.24).cgColor,NSColor.white.withAlphaComponent(0.07).cgColor,accent.withAlphaComponent(0.10).cgColor]
+        icon.image=NSImage(systemSymbolName:Self.symbol(for:item.kind),accessibilityDescription:nil)
+        headline.stringValue=item.title
+        headline.font=WebbyTypography.font(ofSize:14,weight:featured ? .semibold:.medium)
+        detail.stringValue=(URL(string:item.url)?.host ?? item.url)+(item.profileName.map{" · "+$0} ?? "")
+        needsLayout=true;restyle()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -125,6 +281,7 @@ private final class SuggestionRow: NSView {
     }
 
     func setSelected(_ value: Bool, featureWhenIdle: Bool) {
+        if selected != value {Motion.change(self,character:.panel)}
         selected = value
         featured = featureWhenIdle
         restyle()
@@ -168,6 +325,8 @@ private final class SuggestionRow: NSView {
     private var scroll: NSScrollView?
     private var document: NSView?
     private var rows: [SuggestionRow] = []
+    private var rowPool:[SuggestionRow]=[]
+    private var selectionValid=false
     private var suggestions: [BrowserSuggestion] = []
     private var frameObserver: NSObjectProtocol?
     private var resizeObserver: NSObjectProtocol?
@@ -195,6 +354,7 @@ private final class SuggestionRow: NSView {
     }
 
     func close() {
+        if let panel {Motion.depart(panel,character:.panel)}
         (anchor as? GlassAddressSurface)?.setSuggestionsAttached(false)
         outline.removeFromSuperlayer()
         entranceAura.removeFromSuperlayer()
@@ -203,9 +363,12 @@ private final class SuggestionRow: NSView {
         panel = nil
         scroll = nil
         document = nil
+        rows.forEach{$0.removeFromSuperview()}
+        rowPool=rows
         rows.removeAll()
         suggestions.removeAll()
         selectedIndex = -1
+        selectionValid=false
         anchor = nil
         container = nil
         if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
@@ -223,9 +386,10 @@ private final class SuggestionRow: NSView {
         let opening = panel == nil
         self.anchor = anchor
         self.container = container
-        applyTheme(BrowserTheme.profile)
+        if opening {applyTheme(BrowserTheme.profile)}
         (anchor as? GlassAddressSurface)?.setSuggestionsAttached(true)
         let next = Array(items.prefix(8))
+        selectionValid=true
         if !opening, suggestions == next {
             selectedIndex = 0
             for (index, row) in rows.enumerated() { row.setSelected(index == 0, featureWhenIdle: false) }
@@ -271,7 +435,7 @@ private final class SuggestionRow: NSView {
     }
 
     func move(_ delta: Int) {
-        guard !suggestions.isEmpty else { return }
+        guard selectionValid,!suggestions.isEmpty else { return }
         selectedIndex = min(suggestions.count - 1, max(0, selectedIndex + delta))
         for (index, row) in rows.enumerated() {
             row.setSelected(index == selectedIndex, featureWhenIdle: selectedIndex < 0 && index == 0)
@@ -281,8 +445,13 @@ private final class SuggestionRow: NSView {
         }
     }
 
+    func invalidateSelection() {
+        selectionValid=false;selectedIndex = -1
+        for row in rows {row.setSelected(false,featureWhenIdle:false)}
+    }
+
     func selected() -> BrowserSuggestion? {
-        suggestions.indices.contains(selectedIndex) ? suggestions[selectedIndex] : nil
+        selectionValid && suggestions.indices.contains(selectedIndex) ? suggestions[selectedIndex] : nil
     }
 
     func rememberFavicon(_ image: NSImage, for pageURL: URL) {
@@ -364,8 +533,11 @@ private final class SuggestionRow: NSView {
 
     private func rebuildRows() {
         let accent = BrowserTheme.color(BrowserTheme.profile.palette.accent)
+        let reusable=rows.isEmpty ? rowPool:rows
         rows = suggestions.enumerated().map { index, item in
-            let row = SuggestionRow(item: item, index: index, accent: accent)
+            let row:SuggestionRow
+            if reusable.indices.contains(index) {row=reusable[index];row.update(item:item,index:index,accent:accent)}
+            else {row=SuggestionRow(item:item,index:index,accent:accent)}
             row.setSelected(index == selectedIndex, featureWhenIdle: false)
             row.onClick = { [weak self] in self?.choose(at: index) }
             if let url = URL(string: item.url), let host = url.host?.lowercased() {
@@ -376,8 +548,10 @@ private final class SuggestionRow: NSView {
             }
             return row
         }
-        let content = NSView()
-        for row in rows { content.addSubview(row) }
+        for row in reusable where !rows.contains(where:{$0 === row}) {row.removeFromSuperview()}
+        rowPool=[]
+        let content = document ?? NSView()
+        for row in rows where row.superview !== content { content.addSubview(row) }
         document = content
         scroll?.documentView = content
     }
@@ -478,7 +652,7 @@ private final class SuggestionRow: NSView {
     }
 
     private func choose(at index: Int) {
-        guard suggestions.indices.contains(index) else { return }
+        guard selectionValid,suggestions.indices.contains(index) else { return }
         let item = suggestions[index]
         close()
         onChoose?(item)

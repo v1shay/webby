@@ -1,0 +1,9 @@
+{
+  "hiddenWallpaperTicksIn2Seconds" : 8,
+  "optimization" : "-O",
+  "pausedGIFTicksIn1Second" : 4,
+  "resizePreserved" : true,
+  "resumedGIF" : true,
+  "visibleGIFTimerTicksIn1Second" : 21,
+  "visibleStillTicksIn2Seconds" : 9
+}

@@ -31,8 +31,9 @@ struct BrowserNavigationTiming {
         edited,
         // Protect embedded apps rather than guessing about cross-origin editor state.
         embedded: !!document.querySelector('iframe, frame'),
-        media: !!document.pictureInPictureElement || !!document.fullscreenElement ||
-          [...document.querySelectorAll('audio,video')].some(m => !m.paused && !m.ended),
+        media: !!document.pictureInPictureElement || !!document.fullscreenElement || !!document.webkitFullscreenElement ||
+          [...document.querySelectorAll('audio,video')].some(m =>
+            (!m.paused && !m.ended) || m.webkitPresentationMode === 'picture-in-picture' || m.webkitPresentationMode === 'fullscreen'),
         form: !!document.querySelector('input[type=file]') ||
           [...document.querySelectorAll('input,textarea,select')].some(e => {
             if (e instanceof HTMLSelectElement) return [...e.options].some(o => o.selected !== o.defaultSelected);
@@ -143,5 +144,41 @@ struct BrowserNavigationTiming {
               let source=try? String(contentsOf:url) else {return}
         configuration.userContentController.add(handler,contentWorld:world,name:"browserChromeTone")
         configuration.userContentController.addUserScript(WKUserScript(source:source,injectionTime:.atDocumentEnd,forMainFrameOnly:true,in:world))
+    }
+}
+
+
+// UI code captures value snapshots only. Encoding and persistence share a serial
+// utility queue; newer revisions supersede pending writes. Shutdown can drain it.
+final class BrowserSnapshotWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "local.webby.session-writer", qos: .utility)
+    private let lock = NSLock()
+    private var revision: UInt64 = 0
+
+    func save<Value: Encodable>(_ snapshot: Value, defaults: UserDefaults = .standard,
+                               key: String, wait: Bool = false) {
+        lock.lock(); revision &+= 1; let ticket = revision; lock.unlock()
+        let write = { [self] in
+            lock.lock(); let current = ticket == revision; lock.unlock()
+            guard current, let data = try? JSONEncoder().encode(snapshot) else { return }
+            lock.lock(); defer { lock.unlock() }
+            guard ticket == revision else { return }
+            defaults.set(data, forKey: key)
+        }
+        if wait { queue.sync(execute: write) } else { queue.async(execute: write) }
+    }
+
+    func flush() { queue.sync {} }
+}
+
+
+// Soft target, not a promise about per-site memory: WebKit owns renderer heaps.
+// Large machines retain a larger working set; user protections always take precedence.
+enum BrowserWorkingSet {
+    static func residentTarget(physicalMemory: UInt64) -> Int {
+        max(12, min(48, Int(physicalMemory / (1024 * 1024 * 1024))))
+    }
+    static func discardBatch(loaded: Int, physicalMemory: UInt64, pressure: Bool) -> Int {
+        pressure ? 4 : min(4, max(2, loaded - residentTarget(physicalMemory: physicalMemory)))
     }
 }

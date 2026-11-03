@@ -1,0 +1,13 @@
+const fs=require('fs'), vm=require('vm'), assert=require('assert');
+let listeners={},timers=new Map(),id=0,posts=[];
+const window={webkit:{messageHandlers:{browserLinkPreview:{postMessage:p=>posts.push(p)}}}};window.top=window;
+const context={window,location:{href:'https://example.com/'},document:{addEventListener:(name,fn)=>listeners[name]=fn},setTimeout:(fn,delay)=>{assert.equal(delay,2000);timers.set(++id,fn);return id},clearTimeout:id=>timers.delete(id)};
+vm.runInNewContext(fs.readFileSync(require('path').join(__dirname,'../LinkPreview.js'),'utf8'),context);
+const link={href:'https://example.org/video',closest:()=>link,getBoundingClientRect:()=>({left:1,bottom:2,width:10}),contains:()=>false};
+listeners.pointerover({target:link});assert.equal(timers.size,1);
+window.__webbySetLinkPreviewsEnabled(false);assert.equal(timers.size,0);
+listeners.pointerover({target:link});assert.equal(timers.size,0);assert.equal(posts.length,0);
+window.__webbySetLinkPreviewsEnabled(true);listeners.pointerover({target:link});
+for(const fn of timers.values())fn();timers.clear();assert.equal(posts.length,1);
+listeners.pointerout({relatedTarget:null});listeners.pointerover({target:link});listeners.pointerout({relatedTarget:null});assert.equal(timers.size,0);
+console.log('PASS: disabling cancels pending glances, prevents hover loads, re-enabling works, pointer exit cancels');

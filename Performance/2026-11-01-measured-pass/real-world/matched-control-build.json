@@ -1,0 +1,19 @@
+{
+  "compilerArguments": [
+    "swiftc",
+    "-O",
+    "-parse-as-library",
+    "-framework",
+    "AppKit",
+    "-framework",
+    "WebKit"
+  ],
+  "sourceSHA256": "bb9a556b41085ccae4083cf00457ef2bb5406dd1d9734dd1a2a6ea229b81f1be",
+  "binarySHA256": "80c34c68b6c21cc35c0013db4bc8e294dfaa0a539309b4ddcb9a35ebbd22d16d",
+  "viewport": {
+    "width": 1472,
+    "height": 930
+  },
+  "recordedHost": "minimal native WK",
+  "navigationErrorField": "Sentinel text means no delegate-based error capture; not an actual failure count."
+}

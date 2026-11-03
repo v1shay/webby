@@ -1,0 +1,13 @@
+{
+  "hiddenWallpaperTicksIn2Seconds" : 0,
+  "latestProfileRendered" : false,
+  "latestWallpaperSetRendered" : false,
+  "optimization" : "-O",
+  "pausedGIFTicksIn1Second" : 0,
+  "profileSwitchOverlappedDecode" : true,
+  "resizePreserved" : true,
+  "resumedGIF" : true,
+  "switchingPassed" : false,
+  "visibleGIFTimerTicksIn1Second" : 21,
+  "visibleStillTicksIn2Seconds" : 0
+}

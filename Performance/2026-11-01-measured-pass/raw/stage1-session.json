@@ -1,0 +1,21 @@
+{
+  "coalescingAndShutdownPassed" : true,
+  "optimization" : "-O",
+  "samples" : [
+    {
+      "mainThreadAfterP95Ms" : 0.014333316357806325,
+      "mainThreadBeforeP95Ms" : 0.79150000237859786,
+      "pages" : 80
+    },
+    {
+      "mainThreadAfterP95Ms" : 0.0060833408497273922,
+      "mainThreadBeforeP95Ms" : 1.938625006005168,
+      "pages" : 800
+    },
+    {
+      "mainThreadAfterP95Ms" : 0.0089583336375653744,
+      "mainThreadBeforeP95Ms" : 11.702416668413207,
+      "pages" : 5000
+    }
+  ]
+}

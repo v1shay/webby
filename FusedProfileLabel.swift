@@ -6,7 +6,7 @@ import AppKit
     private let fusedPaint = CAGradientLayer()
     private let fusedMask = CATextLayer()
     private var isFused = false
-    private let fuseFont = NSFont.systemFont(ofSize: 16, weight: .bold)
+    private let fuseFont = WebbyTypography.font(ofSize: 16, weight: .bold)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -25,7 +25,7 @@ import AppKit
         drawsBackground = false
         alignment = .center
         lineBreakMode = .byTruncatingTail
-        font = .systemFont(ofSize: 11, weight: .semibold)
+        font = WebbyTypography.font(ofSize: 11, weight: .semibold)
         textColor = .secondaryLabelColor
         wantsLayer = true
         // Colors sampled from the user's sky gradient: blue, mist, warm gold,
@@ -75,7 +75,7 @@ import AppKit
         fusedPaint.removeAllAnimations()
         fusedPaint.removeFromSuperlayer()
         stringValue = name
-        font = .systemFont(ofSize: 11, weight: .semibold)
+        font = WebbyTypography.font(ofSize: 11, weight: .semibold)
         textColor = .secondaryLabelColor
         fusedPaint.opacity = 0
         if animated && changed && Motion.enabled {

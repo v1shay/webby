@@ -3,3 +3,7 @@ Webby.app/
 WebbyIconPreview.png
 *.log
 *.xcuserstate
+
+# Python-generated caches
+__pycache__/
+*.py[cod]

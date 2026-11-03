@@ -1,0 +1,14 @@
+{
+  "excludedRun": "control-minimal-wk.json",
+  "reason": "1472x972 viewport; main runs are 1472x930",
+  "replacement": "control-minimal-wk-matched.json",
+  "replacementViewport": {
+    "width": 1472,
+    "height": 930
+  },
+  "replacementHost": "Standalone minimal WK, optimized -O; no Webby injection, fonts or rules",
+  "primaryRunsUnaffected": true,
+  "primarySamples": 48,
+  "validDiagnosticSamples": 24,
+  "externalControlsAreNotCausalSpeedupProof": true
+}

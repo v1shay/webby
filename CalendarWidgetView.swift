@@ -11,6 +11,7 @@ import AppKit
     private var message = "Loading your calendar…"
     private var days: [(NSRect, Date)] = []
     private var eventRows: [(NSRect, Date)] = []
+    private let brand=NSImageView()
     private let previous = NSButton(title: "‹", target: nil, action: nil)
     private let next = NSButton(title: "›", target: nil, action: nil)
     private let today = NSButton(title: "Today", target: nil, action: nil)
@@ -18,8 +19,10 @@ import AppKit
     override var isFlipped: Bool { true }
     override init(frame: NSRect) {
         super.init(frame: frame)
+        brand.image=WidgetBrandImages.googleCalendar;brand.imageScaling = .scaleProportionallyUpOrDown
+        brand.toolTip="Google Calendar";brand.setAccessibilityLabel("Google Calendar");addSubview(brand)
         for button in [previous, next, today] {
-            button.isBordered = false; button.font = .systemFont(ofSize: button === today ? 10 : 21, weight: .medium)
+            button.isBordered = false; button.font = WebbyTypography.font(ofSize: button === today ? 10 : 21, weight: .medium)
             button.contentTintColor = .white; button.target = self; addSubview(button)
         }
         previous.action = #selector(back); next.action = #selector(forward); today.action = #selector(goToday)
@@ -29,7 +32,8 @@ import AppKit
         if self.snapshot != snapshot, Motion.enabled, !isHiddenOrHasHiddenAncestor,
            window?.occlusionState.contains(.visible) == true {
             wantsLayer = true
-            let fade = CATransition(); fade.type = .fade; fade.duration = 0.22
+            let fade = CATransition();fade.duration = 0.22
+            if let previous=self.snapshot,!cal.isDate(previous.month,equalTo:snapshot.month,toGranularity:.month) {fade.type = .push;fade.subtype=snapshot.month>previous.month ? .fromRight:.fromLeft}else{fade.type = .fade}
             fade.timingFunction = CAMediaTimingFunction(name:.easeInEaseOut)
             layer?.add(fade,forKey:"calendarRefresh")
         }
@@ -54,7 +58,10 @@ import AppKit
     override func layout() {
         super.layout()
         let compact = bounds.width < 145 || bounds.height < 105
-        for button in [previous, next, today] { button.isHidden = compact }
+        today.isHidden=compact
+        previous.isHidden=compact || bounds.width<240;next.isHidden=previous.isHidden
+        let side:CGFloat=compact ? 12:22
+        brand.frame=NSRect(x:4,y:compact ? bounds.height*0.12:11,width:side,height:side)
         previous.frame = NSRect(x: bounds.width - 112, y: 5, width: 22, height: 28)
         next.frame = NSRect(x: bounds.width - 87, y: 5, width: 22, height: 28)
         today.frame = NSRect(x: bounds.width - 62, y: 7, width: 50, height: 24)
@@ -62,7 +69,7 @@ import AppKit
     private func text(_ value: String, in rect: NSRect, size: CGFloat, weight: NSFont.Weight = .regular,
                       color: NSColor = .white, align: NSTextAlignment = .left) {
         let style = NSMutableParagraphStyle(); style.lineBreakMode = .byTruncatingTail; style.alignment = align
-        (value as NSString).draw(in: rect, withAttributes: [.font: NSFont.systemFont(ofSize: size, weight: weight),
+        (value as NSString).draw(in: rect, withAttributes: [.font: WebbyTypography.font(ofSize: size, weight: weight),
                                                            .foregroundColor: color, .paragraphStyle: style])
     }
     private func format(_ date: Date, _ pattern: String) -> String {
@@ -77,7 +84,7 @@ import AppKit
         super.draw(dirtyRect); days = []; eventRows = []
         let w = bounds.width, h = bounds.height
         if w < 145 || h < 105 {
-            text(format(Date(), "EEE").uppercased(), in: NSRect(x: 4, y: h*0.12, width: w-8, height: 17), size: 11, weight: .semibold, color: .systemOrange, align: .center)
+            text(format(Date(), "EEE").uppercased(), in: NSRect(x: 20, y: h*0.12, width: max(1,w-24), height: 17), size: 9, weight: .semibold, color: .systemOrange, align: .center)
             text(format(Date(), "d"), in: NSRect(x: 4, y: h*0.28, width: w-8, height: h*0.58), size: min(42, h*0.5), weight: .light, align: .center)
             if !events(on: cal.startOfDay(for: Date())).isEmpty {
                 NSColor.systemCyan.setFill(); NSBezierPath(ovalIn: NSRect(x: w/2-2, y: h-8, width: 4, height: 4)).fill()
@@ -85,7 +92,7 @@ import AppKit
             return
         }
         let grid = w >= 290 && h >= 295
-        text(grid ? format(month, "MMMM yyyy") : (showsSelectedDay ? format(selected, "EEE, MMM d") : "Upcoming"), in: NSRect(x: 4, y: 11, width: max(30, w-125), height: 25), size: 15, weight: .semibold)
+        text(grid ? format(month, "MMMM yyyy") : (showsSelectedDay ? format(selected, "EEE, MMM d") : "Upcoming"), in: NSRect(x: 34, y: 11, width: max(20, w-34-(w<240 ? 68:125)), height: 25), size: 15, weight: .semibold)
         var top: CGFloat = 49
         if grid {
             let first = cal.date(from: cal.dateComponents([.year, .month], from: month))!
@@ -113,7 +120,7 @@ import AppKit
                     NSBezierPath(roundedRect: indicator, xRadius: 7, yRadius: 7).fill()
                 }
                 let number = String(cal.component(.day, from: day))
-                let font = NSFont.systemFont(ofSize: 11, weight: isSelected ? .semibold : .regular)
+                let font = WebbyTypography.font(ofSize: 11, weight: isSelected ? .semibold : .regular)
                 let textHeight = (number as NSString).size(withAttributes: [.font: font]).height
                 let numberRect = NSRect(x: rect.minX, y: indicator.midY - textHeight/2, width: rect.width, height: textHeight)
                 text(number, in: numberRect, size: 11, weight: isSelected ? .semibold : .regular,
@@ -153,7 +160,7 @@ import AppKit
         let point = convert(event.locationInWindow, from: nil)
         if let (_,date)=eventRows.first(where:{$0.0.contains(point)}) {openDay?(date);return}
         if let (_, date) = days.first(where: { $0.0.contains(point) }) {
-            if cal.isDate(date, equalTo: month, toGranularity: .month) { selected = date; showsSelectedDay=true; needsDisplay = true }
+            if cal.isDate(date, equalTo: month, toGranularity: .month) { Motion.change(self,character:.widget);selected = date; showsSelectedDay=true; needsDisplay = true }
             else { changeMonth?(date) }
         } else { openDay?(selected) }
     }

@@ -1,0 +1,914 @@
+<?xml version="1.0"?>
+
+<trace-toc>
+    <run number="1">
+        <info>
+            <target>
+                <device uuid="CD3FDD9A-743A-5C34-B047-9079E514DCBC" model="Mac" name="vishays macbook air" os-version="14.2 (23C30050t)" platform="macOS"/>
+                <process arguments="http://127.0.0.1:58274 /private/tmp/webby-measured-pass/baseline-instrumented.json" return-exit-status="0" name="Webby" pid="13264" termination-reason="SIGKILL"/>
+            </target>
+            <summary>
+                <start-date>2026-11-01T15:24:08.417-08:00</start-date>
+                <end-date>2026-11-01T15:24:58.587-08:00</end-date>
+                <duration>50.170009</duration>
+                <end-reason>Time limit reached</end-reason>
+                <instruments-version>15.3 (15F31d)</instruments-version>
+                <template-name>Animation Hitches</template-name>
+                <recording-mode>Deferred</recording-mode>
+                <time-limit>50 seconds</time-limit>
+                <intruments-recording-settings>
+                    <instrument name="Hangs">
+                        <array>
+                            <dictionary>
+                                <key name="Reporting Threshold">Include All Potential Interaction Delays (&gt;33 ms)</key>
+                            </dictionary>
+                        </array>
+                    </instrument>
+                </intruments-recording-settings>
+            </summary>
+        </info>
+        <processes>
+            <process name="trustd" path="/usr/libexec/trustd" pid="1612"/>
+            <process name="dasd" path="/usr/libexec/dasd" pid="374"/>
+            <process name="auditd" path="/usr/sbin/auditd" pid="367"/>
+            <process name="accessoryd" path="/System/Library/PrivateFrameworks/CoreAccessories.framework/Support/accessoryd" pid="1142"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="11571"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="12701"/>
+            <process name="talagent" path="/System/Library/CoreServices/talagent" pid="730"/>
+            <process name="ospredictiond" path="/usr/libexec/ospredictiond" pid="621"/>
+            <process name="iconservicesagent" path="/System/Library/CoreServices/iconservicesagent" pid="758"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="734"/>
+            <process name="Notion Helper (Renderer)" path="/Applications/Notion.app/Contents/Frameworks/Notion Helper (Renderer).app" pid="6828"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="959"/>
+            <process name="dmd" path="/usr/libexec/dmd" pid="726"/>
+            <process name="nesessionmanager" path="/usr/libexec/nesessionmanager" pid="370"/>
+            <process name="wifivelocityd" path="/usr/libexec/wifivelocityd" pid="1097"/>
+            <process name="mdmclient" path="mdmclient" pid="13048"/>
+            <process name="diagnosticextensionsd" path="/usr/libexec/diagnosticextensionsd" pid="1298"/>
+            <process name="webpushd" path="/System/Cryptexes/App/usr/libexec/webpushd" pid="4169"/>
+            <process name="fmfd" path="/usr/libexec/fmfd" pid="834"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="10044"/>
+            <process name="sentryd" path="/usr/local/libexec/sentryd" pid="1832"/>
+            <process name="lockoutagent" path="/System/Library/CoreServices/lockoutagent" pid="701"/>
+            <process name="ManagedConfigurationFilesSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/ManagedConfigurationFilesSubscriber.xpc" pid="25322"/>
+            <process name="seld" path="/usr/libexec/seld" pid="4176"/>
+            <process name="com.apple.quicklook.ThumbnailsAgent" path="/System/Library/Frameworks/QuickLookThumbnailing.framework/Support/com.apple.quicklook.ThumbnailsAgent" pid="873"/>
+            <process name="awdd" path="/System/Library/PrivateFrameworks/WirelessDiagnostics.framework/Support/awdd" pid="747"/>
+            <process name="AccountSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/AccountSubscriber.xpc" pid="25319"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="13279"/>
+            <process name="BiomeAgent" path="/System/Library/PrivateFrameworks/BiomeStreams.framework/Support/BiomeAgent" pid="876"/>
+            <process name="SoftwareUpdateSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/SoftwareUpdateSubscriber.xpc" pid="1508"/>
+            <process name="storekitagent" path="/System/Library/Frameworks/StoreKit.framework/Support/storekitagent" pid="18310"/>
+            <process name="gamecontrolleragentd" path="/usr/libexec/gamecontrolleragentd" pid="977"/>
+            <process name="ANEStorageMaintainer" path="/System/Library/PrivateFrameworks/AppleNeuralEngine.framework/XPCServices/ANEStorageMaintainer.xpc" pid="6026"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="10230"/>
+            <process name="nfcd" path="/usr/libexec/nfcd" pid="1919"/>
+            <process name="Unknown" path="" pid="13282"/>
+            <process name="SimulatorTrampoline" path="/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/XPCServices/SimulatorTrampoline.xpc" pid="1276"/>
+            <process name="authd" path="/System/Library/Frameworks/Security.framework/Versions/A/XPCServices/authd.xpc" pid="475"/>
+            <process name="contactsd" path="/System/Library/Frameworks/Contacts.framework/Support/contactsd" pid="821"/>
+            <process name="com.apple.dock.external.extra.arm64" path="/System/Library/CoreServices/Dock.app/Contents/XPCServices/com.apple.dock.external.extra.arm64.xpc" pid="871"/>
+            <process name="git" path="git" pid="13293"/>
+            <process name="MTLCompilerService" path="/System/Library/Frameworks/Metal.framework/Versions/A/XPCServices/MTLCompilerService.xpc" pid="4464"/>
+            <process name="mobiletimerd" path="/System/Library/PrivateFrameworks/MobileTimer.framework/Executables/mobiletimerd" pid="722"/>
+            <process name="com.apple.ColorSyncXPCAgent" path="/System/Library/Frameworks/ColorSync.framework/Versions/A/XPCServices/com.apple.ColorSyncXPCAgent.xpc" pid="664"/>
+            <process name="top" path="top" pid="13273"/>
+            <process name="ScreenSharingSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/ScreenSharingSubscriber.xpc" pid="25316"/>
+            <process name="com.apple.SiriTTSService.TrialProxy" path="/System/Library/PrivateFrameworks/SiriTTSService.framework/Versions/A/XPCServices/com.apple.SiriTTSService.TrialProxy.xpc" pid="1349"/>
+            <process name="extensionkitservice" path="/System/Library/Frameworks/ExtensionFoundation.framework/Versions/A/XPCServices/extensionkitservice.xpc" pid="849"/>
+            <process name="livabilityd" path="/AppleInternal/Library/Frameworks/LivabilityKit.framework/Support/livabilityd" pid="1207"/>
+            <process name="nbagent" path="/System/Library/PrivateFrameworks/Noticeboard.framework/Versions/A/Resources/nbagent.app" pid="32689"/>
+            <process name="recentsd" path="/System/Library/PrivateFrameworks/CoreRecents.framework/Versions/A/Support/recentsd" pid="2708"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="552"/>
+            <process name="triald_system" path="/usr/libexec/triald_system" pid="1255"/>
+            <process name="ChatGPT" path="/Applications/ChatGPT.app" pid="8297"/>
+            <process name="smcif" path="/usr/local/bin/smcif" pid="66241"/>
+            <process name="avconferenced" path="/usr/libexec/avconferenced" pid="837"/>
+            <process name="vm_stat" path="vm_stat" pid="13267"/>
+            <process name="Codex (Service)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Service).app" pid="9933"/>
+            <process name="CMFSyncAgent" path="/System/Library/PrivateFrameworks/CommunicationsFilter.framework/CMFSyncAgent" pid="929"/>
+            <process name="node" path="node" pid="11198"/>
+            <process name="gamecontrollerd" path="/usr/libexec/gamecontrollerd" pid="691"/>
+            <process name="vStats" path="vStats" pid="12736"/>
+            <process name="WallpaperVideoExtension" path="/System/Library/ExtensionKit/Extensions/WallpaperVideoExtension.app" pid="850"/>
+            <process name="SharingXPCHelper" path="/System/Library/PrivateFrameworks/SharingXPCServices.framework/Versions/A/XPCServices/SharingXPCHelper.xpc" pid="56076"/>
+            <process name="Browser Helper (Renderer)" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper (Renderer).app" pid="7134"/>
+            <process name="coreauthd" path="/System/Library/Frameworks/LocalAuthentication.framework/Support/coreauthd" pid="755"/>
+            <process name="Codex (Renderer)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Renderer).app" pid="8976"/>
+            <process name="colorsync.displayservices" path="/usr/libexec/colorsync.displayservices" pid="663"/>
+            <process name="donotdisturbd" path="/System/Library/PrivateFrameworks/DoNotDisturbServer.framework/Support/donotdisturbd" pid="763"/>
+            <process name="BTLEServerAgent" path="/usr/sbin/BTLEServerAgent" pid="1132"/>
+            <process name="browser_crashpad_handler" path="" pid="96170"/>
+            <process name="cfprefsd" path="/usr/sbin/cfprefsd" pid="584"/>
+            <process name="tccd" path="/System/Library/PrivateFrameworks/TCC.framework/Support/tccd" pid="739"/>
+            <process name="Codex (Renderer)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Renderer).app" pid="9874"/>
+            <process name="diskimagesiod" path="/usr/libexec/diskimagesiod" pid="33998"/>
+            <process name="assistant_cdmd" path="/System/Library/PrivateFrameworks/ContinuousDialogManagerService.framework/assistant_cdmd" pid="779"/>
+            <process name="webfilterDNSd" path="/System/Library/PrivateFrameworks/WebContentAnalysis.framework/Versions/A/Resources/webfilterDNSd" pid="1111"/>
+            <process name="ControlCenter" path="/System/Library/CoreServices/ControlCenter.app" pid="771"/>
+            <process name="adprivacyd" path="/usr/libexec/adprivacyd" pid="1297"/>
+            <process name="softwareupdated" path="/System/Library/CoreServices/Software Update.app/Contents/Resources/softwareupdated" pid="529"/>
+            <process name="SafariLaunchAgent" path="/System/Cryptexes/App/usr/libexec/SafariLaunchAgent" pid="1047"/>
+            <process name="Family" path="/System/Library/CoreServices/Family.app" pid="94884"/>
+            <process name="com.apple.siri.embeddedspeech" path="/System/Library/PrivateFrameworks/CoreEmbeddedSpeechRecognition.framework/Versions/A/XPCServices/com.apple.siri.embeddedspeech.xpc" pid="1010"/>
+            <process name="com.apple.geod" path="/System/Library/PrivateFrameworks/GeoServices.framework/Versions/A/XPCServices/com.apple.geod.xpc" pid="816"/>
+            <process name="sociallayerd" path="/System/Library/PrivateFrameworks/SocialLayer.framework/sociallayerd.app" pid="798"/>
+            <process name="AssetCache" path="/usr/libexec/AssetCache/AssetCache" pid="926"/>
+            <process name="Codex (Service)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Service).app" pid="8334"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="377"/>
+            <process name="com.apple.dt.instruments.dtarbiter" path="/private/var/db/com.apple.xpc.roleaccountd.staging/exec/16777236.61456450.xpc/Contents/MacOS/com.apple.dt.instruments.dtarbiter" pid="13257"/>
+            <process name="CoreLocationAgent" path="/System/Library/CoreServices/CoreLocationAgent.app" pid="709"/>
+            <process name="neagent" path="/usr/libexec/neagent" pid="827"/>
+            <process name="XProtectBridgeService" path="/System/Library/PrivateFrameworks/XprotectFramework.framework/Versions/A/XPCServices/XProtectBridgeService.xpc" pid="688"/>
+            <process name="backgroundassets.user" path="/usr/libexec/backgroundassets.user" pid="1314"/>
+            <process name="ArchiveService" path="/System/Library/PrivateFrameworks/DesktopServicesPriv.framework/Versions/A/XPCServices/ArchiveService.xpc" pid="18696"/>
+            <process name="KernelEventAgent" path="/usr/sbin/KernelEventAgent" pid="384"/>
+            <process name="launchd.development" path="/usr/appleinternal/sbin/launchd.development" pid="1"/>
+            <process name="commerce" path="/System/Library/PrivateFrameworks/CommerceKit.framework/Versions/A/Resources/commerce" pid="846"/>
+            <process name="writeconfig" path="/System/Library/PrivateFrameworks/SystemAdministration.framework/XPCServices/writeconfig.xpc" pid="96529"/>
+            <process name="mdbulkimport" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdbulkimport" pid="1613"/>
+            <process name="codex" path="/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex" pid="8399"/>
+            <process name="XProtectPluginService" path="/Library/Apple/System/Library/CoreServices/XProtect.app/Contents/XPCServices/XProtectPluginService.xpc" pid="5697"/>
+            <process name="kai-unified" path="kai-unified" pid="13307"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="10048"/>
+            <process name="DTServiceHub" path="/Applications/Xcode.app/Contents/SharedFrameworks/DVTInstrumentsFoundation.framework/Versions/A/Resources/DTServiceHub" pid="13256"/>
+            <process name="storagekitd" path="/usr/libexec/storagekitd" pid="570"/>
+            <process name="taskgated" path="/usr/libexec/taskgated" pid="63854"/>
+            <process name="endpointsecurityd" path="/usr/libexec/endpointsecurityd" pid="332"/>
+            <process name="dprivacyd" path="/usr/libexec/dprivacyd" pid="565"/>
+            <process name="voicebankingd" path="/System/Library/PrivateFrameworks/TextToSpeechVoiceBankingSupport.framework/Support/voicebankingd" pid="1342"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="8532"/>
+            <process name="ThemeWidgetControlViewService" path="/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/ThemeWidgetControlViewService.xpc" pid="6862"/>
+            <process name="wifianalyticsd" path="/usr/libexec/wifianalyticsd" pid="609"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="1345"/>
+            <process name="DockHelper" path="/System/Library/CoreServices/Dock.app/Contents/XPCServices/DockHelper.xpc" pid="2292"/>
+            <process name="mmaintenanced" path="/usr/libexec/mmaintenanced" pid="40559"/>
+            <process name="PodcastContentService" path="/System/Library/PrivateFrameworks/PodcastServices.framework/XPCServices/PodcastContentService.xpc" pid="25494"/>
+            <process name="ThemeWidgetControlViewService" path="/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/ThemeWidgetControlViewService.xpc" pid="57282"/>
+            <process name="com.apple.CodeSigningHelper" path="/System/Library/Frameworks/Security.framework/Versions/A/XPCServices/com.apple.CodeSigningHelper.xpc" pid="540"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="3091"/>
+            <process name="financed" path="/System/Library/Frameworks/FinanceKit.framework/financed" pid="1052"/>
+            <process name="com.apple.sbd" path="/System/Library/PrivateFrameworks/CloudServices.framework/Helpers/com.apple.sbd" pid="980"/>
+            <process name="intents_helper" path="/System/Library/Frameworks/Intents.framework/XPCServices/intents_helper.xpc" pid="820"/>
+            <process name="amstoold" path="/usr/local/bin/amstoold" pid="947"/>
+            <process name="StatusKitAgent" path="/System/Library/PrivateFrameworks/StatusKit.framework/StatusKitAgent" pid="791"/>
+            <process name="accessoryupdaterd" path="/System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/Support/accessoryupdaterd" pid="98122"/>
+            <process name="Notion Helper" path="/Applications/Notion.app/Contents/Frameworks/Notion Helper.app" pid="6827"/>
+            <process name="VTDecoderXPCService" path="/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc" pid="5662"/>
+            <process name="Keychain Circle Notification" path="/System/Library/CoreServices/Keychain Circle Notification.app" pid="859"/>
+            <process name="com.apple.geod" path="/System/Library/PrivateFrameworks/GeoServices.framework/Versions/A/XPCServices/com.apple.geod.xpc" pid="580"/>
+            <process name="mds_stores" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds_stores" pid="541"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="8871"/>
+            <process name="kai-unified" path="kai-unified" pid="13287"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="12893"/>
+            <process name="identityservicesd" path="/System/Library/PrivateFrameworks/IDS.framework/identityservicesd.app" pid="744"/>
+            <process name="trustd" path="/usr/libexec/trustd" pid="403"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="11620"/>
+            <process name="secinitd" path="/usr/libexec/secinitd" pid="582"/>
+            <process name="ContainerMetadataExtractor" path="/System/Library/PrivateFrameworks/iCloudDriveService.framework/XPCServices/ContainerMetadataExtractor.xpc" pid="874"/>
+            <process name="SpeechSynthesisServerXPC" path="/System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/SpeechSynthesis.framework/Versions/A/XPCServices/SpeechSynthesisServerXPC.xpc" pid="19255"/>
+            <process name="CVMServer" path="/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/CVMServer" pid="4155"/>
+            <process name="griddatad" path="/usr/libexec/griddatad" pid="33465"/>
+            <process name="trustd" path="/usr/libexec/trustd" pid="98132"/>
+            <process name="UARPUpdaterServiceHID" path="/System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceHID.xpc" pid="30321"/>
+            <process name="com.apple.dt.instruments.dtsecurity" path="/private/var/db/com.apple.xpc.roleaccountd.staging/exec/16777236.61456459.xpc/Contents/MacOS/com.apple.dt.instruments.dtsecurity" pid="13262"/>
+            <process name="pkill" path="pkill" pid="13269"/>
+            <process name="git" path="git" pid="13294"/>
+            <process name="AssetCacheLocatorService" path="/System/Library/PrivateFrameworks/AssetCacheServices.framework/Versions/A/XPCServices/AssetCacheLocatorService.xpc" pid="925"/>
+            <process name="AMPArtworkAgent" path="/System/Library/PrivateFrameworks/AMPLibrary.framework/Versions/A/Support/AMPArtworkAgent" pid="25496"/>
+            <process name="wifip2pd" path="/usr/libexec/wifip2pd" pid="485"/>
+            <process name="ctkd" path="/System/Library/Frameworks/CryptoTokenKit.framework/ctkd" pid="752"/>
+            <process name="livabilityd" path="/AppleInternal/Library/Frameworks/LivabilityKit.framework/Support/livabilityd" pid="1209"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="12517"/>
+            <process name="ps" path="ps" pid="13284"/>
+            <process name="osanalyticshelper" path="/System/Library/CoreServices/osanalyticshelper" pid="517"/>
+            <process name="cdpd" path="/System/Library/PrivateFrameworks/CoreCDP.framework/Versions/A/Resources/cdpd" pid="839"/>
+            <process name="secinitd" path="/usr/libexec/secinitd" pid="627"/>
+            <process name="GameControllerConfigService" path="/System/Library/PrivateFrameworks/GameControllerFoundation.framework/Versions/A/XPCServices/GameControllerConfigService.xpc" pid="62449"/>
+            <process name="weatherd" path="/System/Library/PrivateFrameworks/WeatherDaemon.framework/weatherd" pid="1296"/>
+            <process name="com.apple.photos.ImageConversionService" path="/System/Library/PrivateFrameworks/MediaConversionService.framework/Versions/A/XPCServices/com.apple.photos.ImageConversionService.xpc" pid="1878"/>
+            <process name="apsd" path="/System/Library/PrivateFrameworks/ApplePushService.framework/apsd" pid="362"/>
+            <process name="browser_crashpad_handler" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/browser_crashpad_handler" pid="8322"/>
+            <process name="node" path="/opt/homebrew/Cellar/node/26.0.0/bin/node" pid="82513"/>
+            <process name="XProtect" path="/Library/Apple/System/Library/CoreServices/XProtect.app" pid="5706"/>
+            <process name="fseventsd" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd" pid="323"/>
+            <process name="kai-unified" path="/Users/vishayagarwal/Documents/ChatGPT/notchdex/.build/Kai Unified-0.12.28-65-backup-20261031-223915.app/Contents/MacOS/kai-unified" pid="30871"/>
+            <process name="kdc" path="/System/Library/PrivateFrameworks/Heimdal.framework/Helpers/kdc" pid="375"/>
+            <process name="webprivacyd" path="/System/Library/PrivateFrameworks/WebPrivacy.framework/Versions/A/webprivacyd" pid="4160"/>
+            <process name="trustdFileHelper" path="/usr/libexec/trustdFileHelper" pid="461"/>
+            <process name="PerfPowerServices" path="/usr/libexec/PerfPowerServices" pid="37807"/>
+            <process name="logd_reporter" path="/usr/libexec/logd_reporter" pid="33466"/>
+            <process name="git" path="git" pid="13296"/>
+            <process name="usbmuxd" path="/Library/Apple/System/Library/PrivateFrameworks/MobileDevice.framework/Versions/A/Resources/usbmuxd" pid="365"/>
+            <process name="biometrickitd" path="/usr/libexec/biometrickitd" pid="460"/>
+            <process name="CallHistorySyncHelper" path="/System/Library/PrivateFrameworks/CallHistory.framework/Support/CallHistorySyncHelper" pid="31392"/>
+            <process name="Codex (Renderer)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Renderer).app" pid="9873"/>
+            <process name="rapportd" path="/usr/libexec/rapportd" pid="703"/>
+            <process name="cfprefsd" path="/usr/sbin/cfprefsd" pid="98131"/>
+            <process name="git" path="git" pid="13301"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="5665"/>
+            <process name="ReportCrash" path="/System/Library/CoreServices/ReportCrash" pid="479"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="13275"/>
+            <process name="tccd" path="/System/Library/PrivateFrameworks/TCC.framework/Support/tccd" pid="398"/>
+            <process name="securityd" path="/usr/sbin/securityd" pid="366"/>
+            <process name="iconservicesd" path="/System/Library/CoreServices/iconservicesd" pid="349"/>
+            <process name="cloudd" path="/System/Library/PrivateFrameworks/CloudKitDaemon.framework/Support/cloudd" pid="954"/>
+            <process name="lockdownmoded" path="/System/Library/PrivateFrameworks/LockdownMode.framework/Versions/A/XPCServices/lockdownmoded" pid="1055"/>
+            <process name="node" path="node" pid="11196"/>
+            <process name="suggestd" path="/System/Library/PrivateFrameworks/CoreSuggestions.framework/Versions/A/Support/suggestd" pid="799"/>
+            <process name="vStats" path="vStats" pid="13271"/>
+            <process name="SimLaunchHost.arm64" path="/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/XPCServices/SimLaunchHost.arm64.xpc" pid="1275"/>
+            <process name="com.apple.MobileSoftwareUpdate.CleanupPreparePathService" path="/System/Library/PrivateFrameworks/MobileSoftwareUpdate.framework/Versions/A/XPCServices/com.apple.MobileSoftwareUpdate.CleanupPreparePathService.xpc" pid="608"/>
+            <process name="RemotePairingDataVaultHelper" path="/Library/Apple/System/Library/PrivateFrameworks/RemotePairing.framework/Versions/A/Resources/bin/RemotePairingDataVaultHelper" pid="4170"/>
+            <process name="storedownloadd" path="/System/Library/PrivateFrameworks/CommerceKit.framework/Versions/A/Resources/storedownloadd" pid="1178"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="13276"/>
+            <process name="PerfPowerTelemetryClientRegistrationService" path="/System/Library/PrivateFrameworks/PowerLog.framework/Versions/A/XPCServices/PerfPowerTelemetryClientRegistrationService.xpc" pid="435"/>
+            <process name="mtrecorder.internal" path="/usr/local/libexec/mtrecorder.internal" pid="660"/>
+            <process name="sharedfilelistd" path="/System/Library/CoreServices/sharedfilelistd" pid="754"/>
+            <process name="diskimagesiod" path="/usr/libexec/diskimagesiod" pid="16122"/>
+            <process name="notifyd" path="/usr/sbin/notifyd" pid="388"/>
+            <process name="installd" path="/System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/Resources/installd" pid="1183"/>
+            <process name="lsd" path="/usr/libexec/lsd" pid="463"/>
+            <process name="AirPlayUIAgent" path="/System/Library/CoreServices/AirPlayUIAgent.app" pid="1028"/>
+            <process name="com.apple.CoreSimulator.CoreSimulatorService" path="/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/XPCServices/com.apple.CoreSimulator.CoreSimulatorService.xpc" pid="1261"/>
+            <process name="AccessibilityVisualsAgent" path="/System/Library/PrivateFrameworks/AccessibilitySupport.framework/Versions/A/Resources/AccessibilityVisualsAgent.app" pid="86917"/>
+            <process name="ContinuityCaptureAgent" path="/usr/libexec/ContinuityCaptureAgent" pid="695"/>
+            <process name="UniversalControl" path="/System/Library/CoreServices/UniversalControl.app" pid="867"/>
+            <process name="browser_crashpad_handler" path="" pid="830"/>
+            <process name="bootinstalld" path="/usr/libexec/bootinstalld" pid="669"/>
+            <process name="UARPUpdaterServiceLegacyAudio" path="/System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceLegacyAudio.xpc" pid="30315"/>
+            <process name="security" path="security" pid="13292"/>
+            <process name="heard" path="/System/Library/PrivateFrameworks/HearingCore.framework/heard" pid="800"/>
+            <process name="com.apple.AppStoreDaemon.StorePrivilegedTaskService" path="/System/Library/PrivateFrameworks/AppStoreDaemon.framework/Versions/A/XPCServices/com.apple.AppStoreDaemon.StorePrivilegedTaskService.xpc" pid="1187"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="10047"/>
+            <process name="iCloudNotificationAgent" path="/System/Library/PrivateFrameworks/iCloudNotification.framework/iCloudNotificationAgent" pid="835"/>
+            <process name="csnameddatad" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/CarbonCore.framework/Versions/A/XPCServices/csnameddatad.xpc" pid="478"/>
+            <process name="CGPDFService" path="/System/Library/Frameworks/CoreGraphics.framework/Versions/A/XPCServices/CGPDFService.xpc" pid="19348"/>
+            <process name="syslogd" path="/usr/sbin/syslogd" pid="355"/>
+            <process name="CacheDeleteSampleService" path="/usr/local/libexec/CacheDeleteSampleService" pid="1182"/>
+            <process name="com.apple.geod" path="/System/Library/PrivateFrameworks/GeoServices.framework/Versions/A/XPCServices/com.apple.geod.xpc" pid="98129"/>
+            <process name="PAH_Extension" path="/System/Library/Input Methods/PressAndHold.app/Contents/PlugIns/PAH_Extension.app" pid="902"/>
+            <process name="Notion Helper (Renderer)" path="/Applications/Notion.app/Contents/Frameworks/Notion Helper (Renderer).app" pid="6831"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="8899"/>
+            <process name="system_profiler" path="system_profiler" pid="13288"/>
+            <process name="Codex (Service)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Service).app" pid="8337"/>
+            <process name="SystemUIServer" path="/System/Library/CoreServices/SystemUIServer.app" pid="772"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="543"/>
+            <process name="replayd" path="/usr/libexec/replayd" pid="797"/>
+            <process name="secinitd" path="/usr/libexec/secinitd" pid="708"/>
+            <process name="ManagementTestSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/ManagementTestSubscriber.xpc" pid="1509"/>
+            <process name="git" path="git" pid="13295"/>
+            <process name="media-indexer" path="/System/Library/PrivateFrameworks/AssistantServices.framework/Versions/A/XPCServices/media-indexer.xpc" pid="25492"/>
+            <process name="InteractiveLegacyProfilesSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/InteractiveLegacyProfilesSubscriber.xpc" pid="25315"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="13286"/>
+            <process name="Codex (Renderer)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Renderer).app" pid="9875"/>
+            <process name="agent-server" path="/Applications/Dia.app/Contents/Resources/agent-server-resources/dist/agent-server" pid="6759"/>
+            <process name="networkserviceproxy" path="/usr/libexec/networkserviceproxy" pid="716"/>
+            <process name="com.apple.audio.DriverHelper" path="/System/Library/Frameworks/CoreAudio.framework/Versions/A/XPCServices/com.apple.audio.DriverHelper.xpc" pid="569"/>
+            <process name="bare-modifier-monitor" path="" pid="8541"/>
+            <process name="PlugInLibraryService" path="/System/Library/Frameworks/NetFS.framework/Versions/A/XPCServices/PlugInLibraryService.xpc" pid="40103"/>
+            <process name="PlugInLibraryService" path="/System/Library/Frameworks/NetFS.framework/Versions/A/XPCServices/PlugInLibraryService.xpc" pid="64738"/>
+            <process name="useractivityd" path="/System/Library/PrivateFrameworks/UserActivity.framework/Agents/useractivityd" pid="831"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="18695"/>
+            <process name="com.apple.BKAgentService" path="/System/Library/PrivateFrameworks/BookKit.framework/Versions/A/XPCServices/com.apple.BKAgentService.xpc" pid="25495"/>
+            <process name="siriactionsd" path="/System/Library/PrivateFrameworks/VoiceShortcuts.framework/Versions/A/Support/siriactionsd" pid="715"/>
+            <process name="keybagd" path="/usr/libexec/keybagd" pid="341"/>
+            <process name="ctkahp" path="/System/Library/Frameworks/CryptoTokenKit.framework/ctkahp.bundle/Contents/MacOS/ctkahp" pid="1038"/>
+            <process name="WiFiVelocityAgent" path="/usr/libexec/WiFiVelocityAgent" pid="1090"/>
+            <process name="corespotlightd" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/corespotlightd" pid="718"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="12521"/>
+            <process name="filecoordinationd" path="/usr/sbin/filecoordinationd" pid="782"/>
+            <process name="knowledge-agent" path="/usr/libexec/knowledge-agent" pid="4110"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="29313"/>
+            <process name="bird" path="/System/Library/PrivateFrameworks/CloudDocsDaemon.framework/Versions/A/Support/bird" pid="714"/>
+            <process name="avatarsd" path="/System/Library/PrivateFrameworks/AvatarPersistence.framework/Support/avatarsd" pid="6722"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="1350"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="8872"/>
+            <process name="NotificationCenter" path="/System/Library/CoreServices/NotificationCenter.app" pid="770"/>
+            <process name="PlugInLibraryService" path="/System/Library/Frameworks/NetFS.framework/Versions/A/XPCServices/PlugInLibraryService.xpc" pid="40109"/>
+            <process name="coreduetd" path="/usr/libexec/coreduetd" pid="354"/>
+            <process name="atlasdeviced" path="/usr/local/libexec/atlasdeviced" pid="359"/>
+            <process name="com.apple.CloudPhotosConfiguration" path="/System/Library/PrivateFrameworks/CloudPhotoServices.framework/Versions/A/XPCServices/com.apple.CloudPhotosConfiguration.xpc" pid="3398"/>
+            <process name="containermanagerd" path="/usr/libexec/containermanagerd" pid="589"/>
+            <process name="Python" path="/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app" pid="10755"/>
+            <process name="tzd" path="/usr/libexec/tzd" pid="1416"/>
+            <process name="calaccessd" path="/System/Library/PrivateFrameworks/CalendarDaemon.framework/Support/calaccessd" pid="787"/>
+            <process name="QuickLookSatellite" path="/System/Library/Frameworks/QuickLook.framework/Versions/A/XPCServices/QuickLookSatellite.xpc" pid="2707"/>
+            <process name="securityd_service" path="/usr/libexec/securityd_service" pid="687"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="10253"/>
+            <process name="suhelperd" path="/System/Library/CoreServices/Software Update.app/Contents/Resources/suhelperd" pid="575"/>
+            <process name="Browser Helper (Renderer)" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper (Renderer).app" pid="6796"/>
+            <process name="XProtectUpdateService" path="/System/Library/PrivateFrameworks/XprotectFramework.framework/Versions/A/XPCServices/XProtectUpdateService.xpc" pid="6169"/>
+            <process name="audioclocksyncd" path="/usr/libexec/audioclocksyncd" pid="573"/>
+            <process name="chronod" path="/System/Library/PrivateFrameworks/ChronoCore.framework/Support/chronod" pid="8927"/>
+            <process name="node_repl" path="node_repl" pid="11250"/>
+            <process name="logind" path="/System/Library/CoreServices/logind" pid="382"/>
+            <process name="Notion Helper (Renderer)" path="/Applications/Notion.app/Contents/Frameworks/Notion Helper (Renderer).app" pid="6829"/>
+            <process name="nbstated" path="/System/Library/PrivateFrameworks/Noticeboard.framework/Versions/A/Resources/nbstated" pid="32690"/>
+            <process name="studentd" path="/usr/libexec/studentd" pid="3405"/>
+            <process name="biomed" path="/System/Library/PrivateFrameworks/BiomeStreams.framework/Support/biomed" pid="335"/>
+            <process name="appleaccountd" path="/usr/libexec/appleaccountd" pid="1337"/>
+            <process name="PlugInLibraryService" path="/System/Library/Frameworks/NetFS.framework/Versions/A/XPCServices/PlugInLibraryService.xpc" pid="34004"/>
+            <process name="Notion Helper (Renderer)" path="/Applications/Notion.app/Contents/Frameworks/Notion Helper (Renderer).app" pid="6830"/>
+            <process name="PlugInLibraryService" path="/System/Library/Frameworks/NetFS.framework/Versions/A/XPCServices/PlugInLibraryService.xpc" pid="9982"/>
+            <process name="AppSSODaemon" path="/System/Library/PrivateFrameworks/AppSSO.framework/Support/AppSSODaemon" pid="783"/>
+            <process name="ASConfigurationSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/ASConfigurationSubscriber.xpc" pid="25324"/>
+            <process name="loginitemregisterd" path="/usr/libexec/loginitemregisterd" pid="84558"/>
+            <process name="followupd" path="/System/Library/PrivateFrameworks/CoreFollowUp.framework/Versions/A/Support/followupd" pid="767"/>
+            <process name="com.apple.Safari.SafeBrowsing.Service" path="/System/Library/PrivateFrameworks/SafariSafeBrowsing.framework/Versions/A/com.apple.Safari.SafeBrowsing.Service" pid="4171"/>
+            <process name="Cloudflare WARP" path="/Applications/Cloudflare WARP.app" pid="94828"/>
+            <process name="promotedcontentd" path="/usr/libexec/promotedcontentd" pid="1239"/>
+            <process name="mediaremoted" path="/System/Library/PrivateFrameworks/MediaRemote.framework/Support/mediaremoted" pid="324"/>
+            <process name="hidd" path="/usr/libexec/hidd" pid="487"/>
+            <process name="CategoriesService" path="/System/Library/PrivateFrameworks/Categories.framework/Versions/A/XPCServices/CategoriesService.xpc" pid="2706"/>
+            <process name="Browser Helper (Renderer)" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper (Renderer).app" pid="7135"/>
+            <process name="MessagesBlastDoorService" path="/System/Library/PrivateFrameworks/MessagesBlastDoorSupport.framework/Versions/A/XPCServices/MessagesBlastDoorService.xpc" pid="5673"/>
+            <process name="XprotectService" path="/System/Library/PrivateFrameworks/XprotectFramework.framework/Versions/A/XPCServices/XprotectService.xpc" pid="762"/>
+            <process name="git" path="git" pid="13299"/>
+            <process name="SidecarRelay" path="/usr/libexec/SidecarRelay" pid="1357"/>
+            <process name="gh" path="gh" pid="13290"/>
+            <process name="sharingd" path="/usr/libexec/sharingd" pid="765"/>
+            <process name="coreaudiod" path="/usr/sbin/coreaudiod" pid="426"/>
+            <process name="secinitd" path="/usr/libexec/secinitd" pid="494"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="581"/>
+            <process name="findmylocateagent" path="/usr/libexec/findmylocateagent" pid="922"/>
+            <process name="CategoriesService" path="/System/Library/PrivateFrameworks/Categories.framework/Versions/A/XPCServices/CategoriesService.xpc" pid="16992"/>
+            <process name="io.tailscale.ipn.macsys.network-extension" path="/Library/SystemExtensions/76B512B9-EF55-450E-81BA-BE3C69A217F0/io.tailscale.ipn.macsys.network-extension.systemextension/Contents/MacOS/io.tailscale.ipn.macsys.network-extension" pid="85503"/>
+            <process name="amsaccountsd" path="/System/Library/PrivateFrameworks/AppleMediaServices.framework/Versions/A/Resources/amsaccountsd" pid="857"/>
+            <process name="ScreenSharingSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/ScreenSharingSubscriber.xpc" pid="1501"/>
+            <process name="corebrightnessd" path="/usr/libexec/corebrightnessd" pid="390"/>
+            <process name="XProtect" path="/Library/Apple/System/Library/CoreServices/XProtect.app" pid="620"/>
+            <process name="extensionkitservice" path="/System/Library/Frameworks/ExtensionFoundation.framework/Versions/A/XPCServices/extensionkitservice.xpc" pid="1301"/>
+            <process name="git" path="git" pid="13300"/>
+            <process name="fairplaydeviceidentityd" path="/usr/libexec/fairplaydeviceidentityd" pid="1410"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="10232"/>
+            <process name="aneuserd" path="/usr/libexec/aneuserd" pid="666"/>
+            <process name="backgroundtaskmanagementd" path="/System/Library/PrivateFrameworks/BackgroundTaskManagement.framework/Versions/A/Resources/backgroundtaskmanagementd" pid="466"/>
+            <process name="Browser Helper" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper.app" pid="6760"/>
+            <process name="systemstatusd" path="/System/Library/PrivateFrameworks/SystemStatusServer.framework/Support/systemstatusd" pid="483"/>
+            <process name="opendirectoryd" path="/usr/libexec/opendirectoryd" pid="360"/>
+            <process name="QuickLookUIService" path="/System/Library/Frameworks/QuickLookUI.framework/Versions/A/XPCServices/QuickLookUIService.xpc" pid="16990"/>
+            <process name="watchdogd" path="/usr/libexec/watchdogd" pid="344"/>
+            <process name="VTEncoderXPCService" path="/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTEncoderXPCService.xpc" pid="9234"/>
+            <process name="SafariBookmarksSyncAgent" path="/System/Cryptexes/App/System/Library/CoreServices/SafariSupport.bundle/Contents/MacOS/SafariBookmarksSyncAgent" pid="1367"/>
+            <process name="AppleSpell" path="/System/Library/Services/AppleSpell.service/Contents/MacOS/AppleSpell" pid="58804"/>
+            <process name="XprotectService" path="/System/Library/PrivateFrameworks/XprotectFramework.framework/Versions/A/XPCServices/XprotectService.xpc" pid="16120"/>
+            <process name="pboard" path="/usr/libexec/pboard" pid="725"/>
+            <process name="spotlightknowledged" path="/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged" pid="40438"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="10233"/>
+            <process name="PasscodeSettingsSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/PasscodeSettingsSubscriber.xpc" pid="1504"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="28899"/>
+            <process name="AuthenticationServicesAgent" path="/System/Cryptexes/App/usr/libexec/AuthenticationServicesAgent" pid="3036"/>
+            <process name="cfprefsd" path="/usr/sbin/cfprefsd" pid="397"/>
+            <process name="mediaremoteagent" path="/System/Library/PrivateFrameworks/MediaRemote.framework/Support/mediaremoteagent" pid="828"/>
+            <process name="mdworker" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker" pid="1417"/>
+            <process name="autofsd" path="/usr/libexec/autofsd" pid="372"/>
+            <process name="translationd" path="/System/Library/PrivateFrameworks/Translation.framework/translationd" pid="4162"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="10045"/>
+            <process name="com.apple.AmbientDisplayAgent" path="/System/Library/PrivateFrameworks/AmbientDisplay.framework/Versions/A/XPCServices/com.apple.AmbientDisplayAgent.xpc" pid="3872"/>
+            <process name="secd" path="/usr/libexec/secd" pid="712"/>
+            <process name="xctrace" path="/Applications/Xcode.app/Contents/Developer/usr/bin/xctrace" pid="13249"/>
+            <process name="containermanagerd_system" path="/usr/libexec/containermanagerd_system" pid="492"/>
+            <process name="UserNotificationCenter" path="/System/Library/CoreServices/UserNotificationCenter.app" pid="989"/>
+            <process name="csnameddatad" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/CarbonCore.framework/Versions/A/XPCServices/csnameddatad.xpc" pid="706"/>
+            <process name="WallpaperAgent" path="/System/Library/CoreServices/WallpaperAgent.app" pid="781"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="11572"/>
+            <process name="syncdefaultsd" path="/System/Library/PrivateFrameworks/SyncedDefaults.framework/Support/syncdefaultsd" pid="743"/>
+            <process name="VTDecoderXPCService" path="/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc" pid="1879"/>
+            <process name="codex-code-mode-host" path="/Users/vishayagarwal/.codex/packages/app-server-daemon/releases/0.166.0-aarch64-apple-darwin/bin/codex-code-mode-host" pid="30067"/>
+            <process name="AssetCacheLocatorService" path="/System/Library/PrivateFrameworks/AssetCacheServices.framework/Versions/A/XPCServices/AssetCacheLocatorService.xpc" pid="1837"/>
+            <process name="keychainsharingmessagingd" path="/usr/libexec/keychainsharingmessagingd" pid="3037"/>
+            <process name="node" path="/Users/vishayagarwal/Library/Application Support/Codex/artifact-sessions/runtime-generations/generation-WHTyLH/runtime/bin/node" pid="8696"/>
+            <process name="assistantd" path="/System/Library/PrivateFrameworks/AssistantServices.framework/Versions/A/Support/assistantd" pid="713"/>
+            <process name="com.apple.SiriTTSService.TrialProxy" path="/System/Library/PrivateFrameworks/SiriTTSService.framework/Versions/A/XPCServices/com.apple.SiriTTSService.TrialProxy.xpc" pid="1356"/>
+            <process name="analyticsd" path="/System/Library/PrivateFrameworks/CoreAnalytics.framework/Support/analyticsd" pid="432"/>
+            <process name="uninstalld" path="/System/Library/PrivateFrameworks/Uninstall.framework/Versions/A/Resources/uninstalld" pid="322"/>
+            <process name="corespeechd" path="/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd" pid="1007"/>
+            <process name="com.apple.siri-distributed-evaluation" path="/System/Library/PrivateFrameworks/DistributedEvaluation.framework/Versions/A/XPCServices/com.apple.siri-distributed-evaluation.xpc" pid="1196"/>
+            <process name="com.apple.audio.ComponentTagHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.ComponentTagHelper.xpc" pid="1008"/>
+            <process name="ScreenTimeAgent" path="/System/Library/PrivateFrameworks/ScreenTimeCore.framework/Versions/A/ScreenTimeAgent" pid="707"/>
+            <process name="mDNSResponder" path="/usr/sbin/mDNSResponder" pid="433"/>
+            <process name="kernel.development.t8122" path="kernel.development.t8122" pid="0"/>
+            <process name="APFSUserAgent" path="/System/Library/CoreServices/APFSUserAgent" pid="699"/>
+            <process name="siriknowledged" path="/usr/libexec/siriknowledged" pid="723"/>
+            <process name="networkdiagnosticsd" path="/usr/libexec/networkdiagnosticsd" pid="361"/>
+            <process name="memoryanalyticsd" path="/usr/libexec/memoryanalyticsd" pid="619"/>
+            <process name="triald" path="/usr/libexec/triald" pid="819"/>
+            <process name="fairplayd" path="/System/Library/PrivateFrameworks/CoreFP.framework/Versions/A/fairplayd" pid="1129"/>
+            <process name="knowledgeconstructiond" path="/System/Library/PrivateFrameworks/IntelligencePlatformCore.framework/Versions/A/knowledgeconstructiond" pid="40609"/>
+            <process name="sysmond" path="/usr/libexec/sysmond" pid="675"/>
+            <process name="MessagesBlastDoorService" path="/System/Library/PrivateFrameworks/MessagesBlastDoorSupport.framework/Versions/A/XPCServices/MessagesBlastDoorService.xpc" pid="37225"/>
+            <process name="sysextd" path="/System/Library/Frameworks/SystemExtensions.framework/Versions/A/Helpers/sysextd" pid="527"/>
+            <process name="MTLCompilerService" path="/System/Library/Frameworks/Metal.framework/Versions/A/XPCServices/MTLCompilerService.xpc" pid="6936"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="525"/>
+            <process name="top" path="top" pid="13306"/>
+            <process name="akd" path="/System/Library/PrivateFrameworks/AuthKit.framework/Versions/A/Support/akd" pid="774"/>
+            <process name="com.apple.SafariServices" path="/System/Cryptexes/OS/System/Library/Frameworks/SafariServices.framework/Versions/A/XPCServices/com.apple.SafariServices.xpc" pid="19344"/>
+            <process name="accountsd" path="/System/Library/Frameworks/Accounts.framework/Versions/A/Support/accountsd" pid="731"/>
+            <process name="nearbyd" path="/usr/libexec/nearbyd" pid="749"/>
+            <process name="com.apple.Safari.History" path="/System/Cryptexes/App/usr/libexec/com.apple.Safari.History" pid="4152"/>
+            <process name="mdworker" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker" pid="1418"/>
+            <process name="AMPLibraryAgent" path="/System/Library/PrivateFrameworks/AMPLibrary.framework/Versions/A/Support/AMPLibraryAgent" pid="25493"/>
+            <process name="Notion Helper (Renderer)" path="/Applications/Notion.app/Contents/Frameworks/Notion Helper (Renderer).app" pid="6875"/>
+            <process name="ChatGPT for Chrome" path="" pid="6755"/>
+            <process name="InteractiveLegacyProfilesSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/InteractiveLegacyProfilesSubscriber.xpc" pid="1497"/>
+            <process name="apfsd" path="/usr/libexec/apfsd" pid="455"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="12715"/>
+            <process name="fontd" path="/System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/ATS.framework/Versions/A/Support/fontd" pid="748"/>
+            <process name="airportd" path="/usr/libexec/airportd" pid="440"/>
+            <process name="passd" path="/System/Library/PrivateFrameworks/PassKitCore.framework/passd" pid="4161"/>
+            <process name="launchservicesd" path="/System/Library/CoreServices/launchservicesd" pid="363"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="12519"/>
+            <process name="StocksWidget" path="/System/Applications/Stocks.app/Contents/PlugIns/StocksWidget.app" pid="8931"/>
+            <process name="NewsTag" path="/System/Applications/News.app/Contents/PlugIns/NewsTag.app" pid="8935"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="10073"/>
+            <process name="BackgroundTaskManagementAgent" path="/System/Library/PrivateFrameworks/BackgroundTaskManagement.framework/Support/BackgroundTaskManagementAgent.app" pid="30875"/>
+            <process name="metrickitd" path="/usr/libexec/metrickitd" pid="1833"/>
+            <process name="softwareupdated" path="/System/Library/PrivateFrameworks/MobileSoftwareUpdate.framework/Support/softwareupdated" pid="342"/>
+            <process name="spindump" path="/usr/sbin/spindump" pid="898"/>
+            <process name="SecuritySubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/SecuritySubscriber.xpc" pid="25314"/>
+            <process name="AudioComponentRegistrar" path="/System/Library/Frameworks/AudioToolbox.framework/AudioComponentRegistrar" pid="804"/>
+            <process name="mds" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds" pid="348"/>
+            <process name="tailspind" path="/usr/libexec/tailspind" pid="451"/>
+            <process name="appstoreagent" path="/System/Library/PrivateFrameworks/AppStoreDaemon.framework/Support/appstoreagent" pid="1181"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="13229"/>
+            <process name="ciphermld" path="/usr/libexec/ciphermld" pid="4193"/>
+            <process name="Browser Helper (Renderer)" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper (Renderer).app" pid="6788"/>
+            <process name="node_repl" path="node_repl" pid="11201"/>
+            <process name="WindowServer" path="/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer" pid="396"/>
+            <process name="CategoriesService" path="/System/Library/PrivateFrameworks/Categories.framework/Versions/A/XPCServices/CategoriesService.xpc" pid="1286"/>
+            <process name="automationmode-writer" path="/System/Library/PrivateFrameworks/AutomationMode.framework/automationmode-writer" pid="1256"/>
+            <process name="automountd" path="/usr/libexec/automountd" pid="792"/>
+            <process name="tipsd" path="/usr/libexec/tipsd" pid="25277"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="3045"/>
+            <process name="ThemeWidgetControlViewService" path="/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/ThemeWidgetControlViewService.xpc" pid="6769"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="465"/>
+            <process name="mobileassetd" path="/usr/libexec/mobileassetd" pid="498"/>
+            <process name="AirPlayXPCHelper" path="/usr/libexec/AirPlayXPCHelper" pid="391"/>
+            <process name="familycircled" path="/System/Library/PrivateFrameworks/FamilyCircle.framework/Versions/A/Resources/familycircled" pid="753"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="8790"/>
+            <process name="git" path="git" pid="13291"/>
+            <process name="systemstats" path="/usr/sbin/systemstats" pid="327"/>
+            <process name="moosed" path="/System/Volumes/Diags/AppleInternal/Diags/moosed" pid="320"/>
+            <process name="simdiskimaged" path="/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simdiskimaged" pid="1263"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="56078"/>
+            <process name="backupd" path="/System/Library/CoreServices/backupd.bundle/Contents/Resources/backupd" pid="532"/>
+            <process name="IMTranscoderAgent" path="/System/Library/PrivateFrameworks/IMTranscoding.framework/XPCServices/IMTranscoderAgent.xpc" pid="8938"/>
+            <process name="amfid" path="/usr/libexec/amfid" pid="337"/>
+            <process name="VTDecoderXPCService" path="/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc" pid="852"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="12520"/>
+            <process name="XProtectPluginService" path="/Library/Apple/System/Library/CoreServices/XProtect.app/Contents/XPCServices/XProtectPluginService.xpc" pid="1246"/>
+            <process name="Codex (Service)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Service).app" pid="8400"/>
+            <process name="mlruntimed" path="/usr/libexec/mlruntimed" pid="1200"/>
+            <process name="VTDecoderXPCService" path="/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc" pid="64735"/>
+            <process name="ProtectedCloudKeySyncing" path="/System/Library/PrivateFrameworks/ProtectedCloudStorage.framework/Helpers/ProtectedCloudKeySyncing" pid="858"/>
+            <process name="ctkahp" path="/System/Library/Frameworks/CryptoTokenKit.framework/ctkahp.bundle/Contents/MacOS/ctkahp" pid="1040"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="1353"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="13274"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="10046"/>
+            <process name="homeenergyd" path="/System/iOSSupport/System/Library/PrivateFrameworks/HomeEnergyDaemon.framework/Support/homeenergyd" pid="5658"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="8755"/>
+            <process name="git" path="git" pid="13303"/>
+            <process name="QuickLookSatellite" path="/System/Library/Frameworks/QuickLook.framework/Versions/A/XPCServices/QuickLookSatellite.xpc" pid="2709"/>
+            <process name="aned" path="/usr/libexec/aned" pid="457"/>
+            <process name="com.apple.SiriTTSService.TrialProxy" path="/System/Library/PrivateFrameworks/SiriTTSService.framework/Versions/A/XPCServices/com.apple.SiriTTSService.TrialProxy.xpc" pid="6797"/>
+            <process name="TextInputMenuAgent" path="/System/Library/CoreServices/TextInputMenuAgent.app" pid="1034"/>
+            <process name="microstackshot" path="/usr/libexec/microstackshot" pid="31449"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="8866"/>
+            <process name="PowerChime" path="/System/Library/CoreServices/PowerChime.app" pid="1934"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="29062"/>
+            <process name="ThemeWidgetControlViewService" path="/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/ThemeWidgetControlViewService.xpc" pid="8586"/>
+            <process name="nsurlsessiond" path="/usr/libexec/nsurlsessiond" pid="702"/>
+            <process name="usernoted" path="/usr/sbin/usernoted" pid="704"/>
+            <process name="audioaccessoryd" path="/System/Library/CoreServices/audioaccessoryd" pid="1031"/>
+            <process name="installcoordinationd" path="/System/Library/PrivateFrameworks/InstallCoordination.framework/Support/installcoordinationd" pid="1185"/>
+            <process name="corekdld" path="/System/Library/PrivateFrameworks/CoreKDL.framework/Support/corekdld" pid="689"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="11573"/>
+            <process name="vm_stat" path="vm_stat" pid="13281"/>
+            <process name="com.apple.tonelibraryd" path="/System/Library/PrivateFrameworks/ToneLibrary.framework/Versions/A/XPCServices/com.apple.tonelibraryd.xpc" pid="9821"/>
+            <process name="sleep" path="sleep" pid="13272"/>
+            <process name="Box Helper" path="/Library/Application Support/Box/Box/Autoupdater/Box Helper.app" pid="1021"/>
+            <process name="coreautha" path="/System/Library/Frameworks/LocalAuthentication.framework/Support/coreautha.bundle/Contents/MacOS/coreautha" pid="3038"/>
+            <process name="usernotificationsd" path="/System/Library/PrivateFrameworks/UserNotificationsCore.framework/Support/usernotificationsd" pid="719"/>
+            <process name="open" path="open" pid="13270"/>
+            <process name="stickersd" path="/System/Library/PrivateFrameworks/Stickers.framework/Support/stickersd" pid="64725"/>
+            <process name="betaenrollmentd" path="/usr/libexec/betaenrollmentd" pid="1361"/>
+            <process name="CallHistoryPluginHelper" path="/System/Library/PrivateFrameworks/CallHistory.framework/Support/CallHistoryPluginHelper" pid="1004"/>
+            <process name="deleted" path="/System/Library/PrivateFrameworks/CacheDelete.framework/deleted" pid="710"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="1495"/>
+            <process name="remotepairingdeviced" path="/usr/local/libexec/remotepairingdeviced" pid="622"/>
+            <process name="SecurityAgent" path="/System/Library/Frameworks/Security.framework/Versions/A/MachServices/SecurityAgent.bundle/Contents/MacOS/SecurityAgent" pid="3043"/>
+            <process name="WindowManager" path="/System/Library/CoreServices/WindowManager.app" pid="729"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="11574"/>
+            <process name="audiomxd" path="/usr/libexec/audiomxd" pid="1155"/>
+            <process name="codex" path="/Users/vishayagarwal/.codex/packages/app-server-daemon/releases/0.166.0-aarch64-apple-darwin/bin/codex" pid="3959"/>
+            <process name="CategoriesService" path="/System/Library/PrivateFrameworks/Categories.framework/Versions/A/XPCServices/CategoriesService.xpc" pid="845"/>
+            <process name="callservicesd" path="/System/Library/PrivateFrameworks/TelephonyUtilities.framework/callservicesd" pid="742"/>
+            <process name="contextstored" path="/System/Library/PrivateFrameworks/CoreDuetContext.framework/Versions/A/Resources/contextstored" pid="402"/>
+            <process name="nsurlsessiond" path="/usr/libexec/nsurlsessiond" pid="452"/>
+            <process name="diskimagesiod" path="/usr/libexec/diskimagesiod" pid="19327"/>
+            <process name="fontworker" path="/System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/ATS.framework/Versions/A/Support/fontworker" pid="756"/>
+            <process name="Codex (Renderer)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Renderer).app" pid="8883"/>
+            <process name="mdbulkimport" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdbulkimport" pid="1003"/>
+            <process name="Browser Helper" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper.app" pid="6744"/>
+            <process name="intents_helper" path="/System/Library/Frameworks/Intents.framework/XPCServices/intents_helper.xpc" pid="8960"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="13278"/>
+            <process name="pgrep" path="pgrep" pid="13268"/>
+            <process name="AMPDeviceDiscoveryAgent" path="/System/Library/PrivateFrameworks/AMPDevices.framework/Versions/A/Support/AMPDeviceDiscoveryAgent" pid="793"/>
+            <process name="periodic-wrapper" path="/usr/libexec/periodic-wrapper" pid="567"/>
+            <process name="Sora" path="/Users/vishayagarwal/Documents/Codex/2026-10-10/i-want-to-build-a-screen/outputs/Sora/build/Sora.app" pid="884"/>
+            <process name="linkd" path="/usr/libexec/linkd" pid="721"/>
+            <process name="Dock" path="/System/Library/CoreServices/Dock.app" pid="769"/>
+            <process name="ScopedBookmarkAgent" path="/System/Library/CoreServices/ScopedBookmarkAgent" pid="842"/>
+            <process name="diskimagesiod" path="/usr/libexec/diskimagesiod" pid="19321"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="612"/>
+            <process name="VTDecoderXPCService" path="/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc" pid="19317"/>
+            <process name="cfprefsd" path="/usr/sbin/cfprefsd" pid="628"/>
+            <process name="remotepairingd" path="/Library/Apple/System/Library/PrivateFrameworks/RemotePairing.framework/Versions/A/XPCServices/remotepairingd.xpc" pid="4168"/>
+            <process name="UserEventAgent" path="/usr/libexec/UserEventAgent" pid="690"/>
+            <process name="CSExattrCryptoService" path="/System/Library/PrivateFrameworks/CSExattrCrypto.framework/Versions/A/XPCServices/CSExattrCryptoService.xpc" pid="18694"/>
+            <process name="CategoriesService" path="/System/Library/PrivateFrameworks/Categories.framework/Versions/A/XPCServices/CategoriesService.xpc" pid="823"/>
+            <process name="rtclocalbackendd" path="/AppleInternal/Library/Frameworks/RTCLocalBackend.framework/Support/rtclocalbackendd" pid="1005"/>
+            <process name="taptoradard" path="/AppleInternal/Library/Frameworks/TapToRadarDaemon.framework/Support/taptoradard" pid="1054"/>
+            <process name="cryptexd" path="/usr/libexec/cryptexd" pid="643"/>
+            <process name="oahd" path="/usr/libexec/rosetta/oahd" pid="808"/>
+            <process name="PasscodeSettingsSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/PasscodeSettingsSubscriber.xpc" pid="25318"/>
+            <process name="homed" path="/System/Library/PrivateFrameworks/HomeKitDaemon.framework/Support/homed" pid="764"/>
+            <process name="MTLCompilerService" path="/System/Library/Frameworks/Metal.framework/Versions/A/XPCServices/MTLCompilerService.xpc" pid="863"/>
+            <process name="BTLEServer" path="/usr/sbin/BTLEServer" pid="624"/>
+            <process name="systemstats" path="/usr/sbin/systemstats" pid="678"/>
+            <process name="loginwindow" path="/System/Library/CoreServices/loginwindow.app" pid="399"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="13280"/>
+            <process name="PasswordBreachAgent" path="/System/Cryptexes/App/usr/libexec/PasswordBreachAgent" pid="1835"/>
+            <process name="newsd" path="/System/Library/PrivateFrameworks/NewsDaemon.framework/newsd" pid="5664"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="13277"/>
+            <process name="EscrowSecurityAlert" path="/System/Library/CoreServices/EscrowSecurityAlert.app" pid="25276"/>
+            <process name="ViewBridgeAuxiliary" path="/System/Library/PrivateFrameworks/ViewBridge.framework/Versions/A/XPCServices/ViewBridgeAuxiliary.xpc" pid="790"/>
+            <process name="online-auth-agent" path="/usr/libexec/online-auth-agent" pid="564"/>
+            <process name="dataaccessd" path="/System/Library/PrivateFrameworks/DataAccess.framework/Support/dataaccessd" pid="1360"/>
+            <process name="agent-server" path="/Applications/Dia.app/Contents/Resources/agent-server-resources/dist/agent-server" pid="6778"/>
+            <process name="fileproviderd" path="/System/Library/Frameworks/FileProvider.framework/Support/fileproviderd" pid="735"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="8867"/>
+            <process name="containermanagerd" path="/usr/libexec/containermanagerd" pid="98140"/>
+            <process name="Browser Helper" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper.app" pid="6789"/>
+            <process name="Browser Helper (Renderer)" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper (Renderer).app" pid="6754"/>
+            <process name="git" path="git" pid="13297"/>
+            <process name="AccountSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/AccountSubscriber.xpc" pid="1507"/>
+            <process name="mapssyncd" path="/System/Library/PrivateFrameworks/MapsSync.framework/mapssyncd" pid="31503"/>
+            <process name="PlugInLibraryService" path="/System/Library/Frameworks/NetFS.framework/Versions/A/XPCServices/PlugInLibraryService.xpc" pid="941"/>
+            <process name="searchpartyd" path="/usr/libexec/searchpartyd" pid="631"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="6025"/>
+            <process name="top" path="top" pid="13266"/>
+            <process name="CategoriesService" path="/System/Library/PrivateFrameworks/Categories.framework/Versions/A/XPCServices/CategoriesService.xpc" pid="868"/>
+            <process name="locationd" path="/usr/libexec/locationd" pid="369"/>
+            <process name="UIKitSystem" path="/System/Library/CoreServices/UIKitSystem.app" pid="843"/>
+            <process name="diskimagesiod" path="/usr/libexec/diskimagesiod" pid="1266"/>
+            <process name="mobileactivationd" path="/usr/libexec/mobileactivationd" pid="1121"/>
+            <process name="AppleCredentialManagerDaemon" path="/System/Library/PrivateFrameworks/AppleCredentialManager.framework/AppleCredentialManagerDaemon" pid="378"/>
+            <process name="contactsdonationagent" path="/System/Library/PrivateFrameworks/ContactsDonation.framework/Versions/A/Support/contactsdonationagent" pid="6731"/>
+            <process name="idleassetsd" path="/System/Library/PrivateFrameworks/TVIdleServices.framework/idleassetsd" pid="788"/>
+            <process name="colorsyncd" path="/usr/libexec/colorsyncd" pid="665"/>
+            <process name="CursorUIViewService" path="/System/Library/PrivateFrameworks/TextInputUIMacHelper.framework/Versions/A/XPCServices/CursorUIViewService.xpc" pid="1046"/>
+            <process name="appleh13camerad" path="/usr/sbin/appleh13camerad" pid="587"/>
+            <process name="rcd" path="/System/Library/CoreServices/rcd.app" pid="2704"/>
+            <process name="ps" path="ps" pid="13285"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="13283"/>
+            <process name="MTLAssetUpgraderD" path="/usr/libexec/MTLAssetUpgraderD" pid="760"/>
+            <process name="revisiond" path="/System/Library/PrivateFrameworks/GenerationalStorage.framework/Versions/A/Support/revisiond" pid="383"/>
+            <process name="SubmitDiagInfo" path="/System/Library/CoreServices/SubmitDiagInfo" pid="901"/>
+            <process name="mdwrite" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdwrite" pid="5674"/>
+            <process name="ParentalControls" path="/System/Library/PrivateFrameworks/FamilyControls.framework/Versions/A/Resources/ParentalControls.app" pid="58718"/>
+            <process name="LinkedNotesUIService" path="/System/Library/PrivateFrameworks/PaperKit.framework/Contents/LinkedNotesUIService.app" pid="2793"/>
+            <process name="cloudphotod" path="/System/Library/PrivateFrameworks/CloudPhotoLibrary.framework/Versions/A/Support/cloudphotod" pid="1238"/>
+            <process name="findmydeviced" path="/usr/libexec/findmydeviced" pid="458"/>
+            <process name="universalaccessd" path="/usr/sbin/universalaccessd" pid="724"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="31391"/>
+            <process name="appleeventsd" path="/System/Library/CoreServices/appleeventsd" pid="667"/>
+            <process name="Notion Helper" path="/Applications/Notion.app/Contents/Frameworks/Notion Helper.app" pid="6826"/>
+            <process name="colorsync.useragent" path="/System/Library/Frameworks/ColorSync.framework/Support/colorsync.useragent" pid="3875"/>
+            <process name="SoftwareUpdateNotificationManager" path="/System/Library/PrivateFrameworks/SoftwareUpdate.framework/Versions/A/Resources/SoftwareUpdateNotificationManager.app" pid="1174"/>
+            <process name="Browser Helper" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper.app" pid="6790"/>
+            <process name="axassetsd" path="/System/Library/PrivateFrameworks/AXAssetLoader.framework/Support/axassetsd" pid="824"/>
+            <process name="containermanagerd" path="/usr/libexec/containermanagerd" pid="732"/>
+            <process name="ReportCrash" path="/System/Library/CoreServices/ReportCrash" pid="1249"/>
+            <process name="powerdatad" path="/usr/libexec/powerdatad" pid="1930"/>
+            <process name="ViewBridgeAuxiliary" path="/System/Library/PrivateFrameworks/ViewBridge.framework/Versions/A/XPCServices/ViewBridgeAuxiliary.xpc" pid="668"/>
+            <process name="UARPUpdaterServiceDisplay" path="/System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceDisplay.xpc" pid="30314"/>
+            <process name="coresymbolicationd" path="/System/Library/PrivateFrameworks/CoreSymbolication.framework/coresymbolicationd" pid="555"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="490"/>
+            <process name="helpd" path="helpd" pid="6764"/>
+            <process name="bare-modifier-monitor" path="" pid="1071"/>
+            <process name="com.apple.dock.extra" path="/System/Library/CoreServices/Dock.app/Contents/XPCServices/com.apple.dock.extra.xpc" pid="1002"/>
+            <process name="CategoriesService" path="/System/Library/PrivateFrameworks/Categories.framework/Versions/A/XPCServices/CategoriesService.xpc" pid="940"/>
+            <process name="geodMachServiceBridge" path="/System/Library/PrivateFrameworks/GeoServices.framework/geodMachServiceBridge" pid="1180"/>
+            <process name="RemoteManagementAgent" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/RemoteManagementAgent" pid="25312"/>
+            <process name="OSDUIHelper" path="/System/Library/CoreServices/OSDUIHelper.app" pid="2673"/>
+            <process name="xpcroleaccountd" path="/usr/libexec/xpcroleaccountd" pid="13258"/>
+            <process name="node_repl" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" pid="10231"/>
+            <process name="SafariNotificationAgent" path="/System/Cryptexes/App/usr/libexec/SafariNotificationAgent" pid="4164"/>
+            <process name="intelligentroutingd" path="/usr/libexec/intelligentroutingd" pid="801"/>
+            <process name="Dia" path="/Applications/Dia.app" pid="6740"/>
+            <process name="maild" path="/System/Library/PrivateFrameworks/EmailDaemon.framework/Versions/A/maild" pid="1056"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="1340"/>
+            <process name="Browser Helper" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper.app" pid="6746"/>
+            <process name="CommCenter" path="/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter" pid="698"/>
+            <process name="icdd" path="/System/Library/Image Capture/Support/icdd" pid="1020"/>
+            <process name="com.apple.FaceTime.FTConversationService" path="/System/Library/PrivateFrameworks/TelephonyUtilities.framework/XPCServices/com.apple.FaceTime.FTConversationService.xpc" pid="813"/>
+            <process name="systemsoundserverd" path="/usr/sbin/systemsoundserverd" pid="738"/>
+            <process name="MTLCompilerService" path="/System/Library/Frameworks/Metal.framework/Versions/A/XPCServices/MTLCompilerService.xpc" pid="864"/>
+            <process name="com.apple.dt.instruments.dtsecurity" path="/private/var/db/com.apple.xpc.roleaccountd.staging/exec/16777236.61456459.xpc/Contents/MacOS/com.apple.dt.instruments.dtsecurity" pid="13265"/>
+            <process name="webfilterproxyd" path="/System/Library/PrivateFrameworks/WebContentAnalysis.framework/Versions/A/Resources/webfilterproxyd" pid="1096"/>
+            <process name="contentlinkingd" path="/System/Library/PrivateFrameworks/Synapse.framework/Support/contentlinkingd" pid="4174"/>
+            <process name="QLPreviewGenerationExtension" path="/System/Library/Frameworks/QuickLookUI.framework/Versions/A/PlugIns/QLPreviewGenerationExtension.app" pid="19254"/>
+            <process name="Codex (Renderer)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Renderer).app" pid="9293"/>
+            <process name="localizationswitcherd" path="/System/Library/PrivateFrameworks/IntlPreferences.framework/Support/localizationswitcherd" pid="785"/>
+            <process name="com.apple.siri.embeddedspeech" path="/System/Library/PrivateFrameworks/CoreEmbeddedSpeechRecognition.framework/Versions/A/XPCServices/com.apple.siri.embeddedspeech.xpc" pid="1247"/>
+            <process name="symptomsd" path="/usr/libexec/symptomsd" pid="474"/>
+            <process name="imklaunchagent" path="/System/Library/Frameworks/InputMethodKit.framework/Versions/A/Resources/imklaunchagent" pid="894"/>
+            <process name="curl" path="curl" pid="13305"/>
+            <process name="itunescloudd" path="/System/Library/PrivateFrameworks/iTunesCloud.framework/Support/itunescloudd" pid="865"/>
+            <process name="Codex (Renderer)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Renderer).app" pid="8488"/>
+            <process name="DiskUnmountWatcher" path="/System/Library/PrivateFrameworks/KerberosHelper/Helpers/DiskUnmountWatcher" pid="16548"/>
+            <process name="syspolicyd" path="/usr/libexec/syspolicyd" pid="393"/>
+            <process name="amsengagementd" path="/System/Library/PrivateFrameworks/AppleMediaServicesUI.framework/amsengagementd" pid="861"/>
+            <process name="logd" path="/usr/libexec/logd" pid="317"/>
+            <process name="IntelligencePlatformComputeService" path="/System/Library/PrivateFrameworks/IntelligencePlatformCompute.framework/Versions/A/XPCServices/IntelligencePlatformComputeService.xpc" pid="1124"/>
+            <process name="codex-code-mode-host" path="/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex-code-mode-host" pid="9495"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="642"/>
+            <process name="node_repl" path="node_repl" pid="11197"/>
+            <process name="node" path="/opt/homebrew/Cellar/node/26.0.0/bin/node" pid="82524"/>
+            <process name="PlugInLibraryService" path="/System/Library/Frameworks/NetFS.framework/Versions/A/XPCServices/PlugInLibraryService.xpc" pid="5672"/>
+            <process name="Finder" path="/System/Library/CoreServices/Finder.app" pid="16989"/>
+            <process name="bluetoothuserd" path="/usr/libexec/bluetoothuserd" pid="822"/>
+            <process name="fbahelperd" path="/System/Library/CoreServices/Applications/Feedback Assistant.app/Contents/Library/LaunchServices/fbahelperd" pid="1362"/>
+            <process name="diagnostics_agent" path="/System/Library/CoreServices/diagnostics_agent" pid="1033"/>
+            <process name="UARPUpdaterServiceUSBPD" path="/System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceUSBPD.xpc" pid="98123"/>
+            <process name="com.apple.ColorSyncXPCAgent" path="/System/Library/Frameworks/ColorSync.framework/Versions/A/XPCServices/com.apple.ColorSyncXPCAgent.xpc" pid="3873"/>
+            <process name="ANEStorageMaintainer" path="/System/Library/PrivateFrameworks/AppleNeuralEngine.framework/XPCServices/ANEStorageMaintainer.xpc" pid="7074"/>
+            <process name="bluetoothd" path="/usr/sbin/bluetoothd" pid="387"/>
+            <process name="Browser Helper" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper.app" pid="6745"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="10229"/>
+            <process name="com.apple.DictionaryServiceHelper" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/DictionaryServices.framework/Versions/A/XPCServices/com.apple.DictionaryServiceHelper.xpc" pid="2719"/>
+            <process name="diskimagescontroller" path="/System/Library/PrivateFrameworks/DiskImages2.framework/Versions/A/XPCServices/diskimagescontroller.xpc" pid="1265"/>
+            <process name="codex" path="/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex" pid="8812"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="685"/>
+            <process name="mdworker_shared" path="mdworker_shared" pid="12718"/>
+            <process name="ndoagent" path="/System/Library/PrivateFrameworks/NewDeviceOutreach.framework/ndoagent" pid="1295"/>
+            <process name="bare-modifier-monitor" path="" pid="32288"/>
+            <process name="WiFiCloudAssetsXPCService" path="/System/Library/PrivateFrameworks/WiFiPolicy.framework/XPCServices/WiFiCloudAssetsXPCService.xpc" pid="1284"/>
+            <process name="Browser Helper (Renderer)" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper (Renderer).app" pid="6939"/>
+            <process name="WirelessRadioManagerd" path="/usr/sbin/WirelessRadioManagerd" pid="574"/>
+            <process name="secinitd" path="/usr/libexec/secinitd" pid="98130"/>
+            <process name="transparencyd" path="/usr/libexec/transparencyd" pid="750"/>
+            <process name="sirittsd" path="/System/Library/PrivateFrameworks/SiriTTSService.framework/sirittsd" pid="1009"/>
+            <process name="reversetemplated" path="/System/Library/PrivateFrameworks/CoreSuggestions.framework/Versions/A/Support/reversetemplated" pid="8136"/>
+            <process name="com.apple.hiservices-xpcservice" path="/System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/HIServices.framework/Versions/A/XPCServices/com.apple.hiservices-xpcservice.xpc" pid="676"/>
+            <process name="IMAutomaticHistoryDeletionAgent" path="/System/Library/PrivateFrameworks/IMDPersistence.framework/IMAutomaticHistoryDeletionAgent.app" pid="5743"/>
+            <process name="LegacyProfilesSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/LegacyProfilesSubscriber.xpc" pid="25317"/>
+            <process name="AppSSOAgent" path="/System/Library/PrivateFrameworks/AppSSO.framework/Support/AppSSOAgent.app" pid="778"/>
+            <process name="runningboardd" path="/usr/libexec/runningboardd" pid="400"/>
+            <process name="MiniSearch" path="/Users/vishayagarwal/Documents/ChatGPT/New project 2/MiniSearch/build/MiniSearch.app" pid="13046"/>
+            <process name="proactived" path="/usr/libexec/proactived" pid="1364"/>
+            <process name="VTDecoderXPCService" path="/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc" pid="5676"/>
+            <process name="sysdiagnosed" path="/usr/libexec/sysdiagnosed" pid="25326"/>
+            <process name="TrustedPeersHelper" path="/System/Library/Frameworks/Security.framework/Versions/A/XPCServices/TrustedPeersHelper.xpc" pid="746"/>
+            <process name="sandboxd" path="/usr/libexec/sandboxd" pid="389"/>
+            <process name="WiFiCloudAssetsXPCService" path="/System/Library/PrivateFrameworks/WiFiPolicy.framework/XPCServices/WiFiCloudAssetsXPCService.xpc" pid="497"/>
+            <process name="audioanalyticsd" path="/usr/libexec/audioanalyticsd" pid="577"/>
+            <process name="com.apple.geod" path="/System/Library/PrivateFrameworks/GeoServices.framework/Versions/A/XPCServices/com.apple.geod.xpc" pid="623"/>
+            <process name="ASPCarryLog" path="/usr/libexec/ASPCarryLog" pid="1830"/>
+            <process name="com.apple.CharacterPicker.FileService" path="/System/Library/PrivateFrameworks/CharacterPicker.framework/Versions/A/XPCServices/com.apple.CharacterPicker.FileService.xpc" pid="899"/>
+            <process name="MessagesBlastDoorService" path="/System/Library/PrivateFrameworks/MessagesBlastDoorSupport.framework/Versions/A/XPCServices/MessagesBlastDoorService.xpc" pid="8934"/>
+            <process name="Codex (Renderer)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Renderer).app" pid="8397"/>
+            <process name="IOMFB_bics_daemon" path="/usr/libexec/IOMFB_bics_daemon" pid="334"/>
+            <process name="configd" path="/usr/libexec/configd" pid="330"/>
+            <process name="UsageTrackingAgent" path="/System/Library/PrivateFrameworks/UsageTracking.framework/Versions/A/UsageTrackingAgent" pid="745"/>
+            <process name="com.apple.accessibility.mediaaccessibilityd" path="/System/Library/Frameworks/MediaAccessibility.framework/Versions/A/XPCServices/com.apple.accessibility.mediaaccessibilityd.xpc" pid="4156"/>
+            <process name="ManagementTestSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/ManagementTestSubscriber.xpc" pid="25321"/>
+            <process name="CloudflareWARP" path="/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP" pid="638"/>
+            <process name="Notion Helper" path="/Applications/Notion.app/Contents/Frameworks/Notion Helper.app" pid="6825"/>
+            <process name="MessagesBlastDoorService" path="/System/Library/PrivateFrameworks/MessagesBlastDoorSupport.framework/Versions/A/XPCServices/MessagesBlastDoorService.xpc" pid="8939"/>
+            <process name="progressd" path="/System/Library/Frameworks/ClassKit.framework/Versions/A/progressd" pid="1190"/>
+            <process name="parsecd" path="/System/Library/PrivateFrameworks/CoreParsec.framework/parsecd" pid="802"/>
+            <process name="cfprefsd" path="/usr/sbin/cfprefsd" pid="686"/>
+            <process name="universalAccessAuthWarn" path="/System/Library/PrivateFrameworks/UniversalAccess.framework/Versions/A/Resources/universalAccessAuthWarn.app" pid="923"/>
+            <process name="devicecheckd" path="/System/Library/PrivateFrameworks/DeviceCheckInternal.framework/devicecheckd" pid="2176"/>
+            <process name="mDNSResponderHelper" path="/usr/sbin/mDNSResponderHelper" pid="482"/>
+            <process name="PowerUIAgent" path="/usr/libexec/PowerUIAgent" pid="423"/>
+            <process name="system_installd" path="/System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/Resources/system_installd" pid="1184"/>
+            <process name="SecuritySubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/SecuritySubscriber.xpc" pid="1494"/>
+            <process name="coreauthd" path="/System/Library/Frameworks/LocalAuthentication.framework/Support/coreauthd" pid="684"/>
+            <process name="adid" path="/System/Library/PrivateFrameworks/CoreADI.framework/Versions/A/adid" pid="838"/>
+            <process name="UserEventAgent" path="/usr/libexec/UserEventAgent" pid="319"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="4192"/>
+            <process name="remotemanagementd" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/remotemanagementd" pid="1493"/>
+            <process name="ContextStoreAgent" path="/System/Library/PrivateFrameworks/CoreDuetContext.framework/Versions/A/Resources/ContextStoreAgent" pid="784"/>
+            <process name="peopled" path="/System/Library/PrivateFrameworks/People.framework/peopled" pid="1363"/>
+            <process name="Codex (Renderer)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Renderer).app" pid="8972"/>
+            <process name="coreservicesd" path="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/CarbonCore.framework/Versions/A/Support/coreservicesd" pid="401"/>
+            <process name="biomesyncd" path="/usr/libexec/biomesyncd" pid="847"/>
+            <process name="pkd" path="/usr/libexec/pkd" pid="741"/>
+            <process name="CrashReporterSupportHelper" path="/System/Library/CoreServices/CrashReporterSupportHelper" pid="1324"/>
+            <process name="kernelmanagerd" path="/usr/libexec/kernelmanagerd" pid="350"/>
+            <process name="Box Autoupdater" path="/Library/Application Support/Box/Box/Autoupdater/Box Autoupdater.app" pid="640"/>
+            <process name="com.apple.geod" path="/System/Library/PrivateFrameworks/GeoServices.framework/Versions/A/XPCServices/com.apple.geod.xpc" pid="625"/>
+            <process name="bare-modifier-monitor" path="/Applications/ChatGPT.app/Contents/Resources/native/bare-modifier-monitor" pid="8385"/>
+            <process name="nehelper" path="/usr/libexec/nehelper" pid="454"/>
+            <process name="git" path="git" pid="13298"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="8868"/>
+            <process name="ManagedConfigurationFilesSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/ManagedConfigurationFilesSubscriber.xpc" pid="1512"/>
+            <process name="CoreDeviceService" path="/Library/Developer/PrivateFrameworks/CoreDevice.framework/Versions/A/XPCServices/CoreDeviceService.xpc" pid="13254"/>
+            <process name="backupd-helper" path="/System/Library/CoreServices/backupd.bundle/Contents/Resources/backupd-helper" pid="422"/>
+            <process name="com.apple.ColorSyncXPCAgent" path="/System/Library/Frameworks/ColorSync.framework/Versions/A/XPCServices/com.apple.ColorSyncXPCAgent.xpc" pid="3876"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="1006"/>
+            <process name="CredentialProviderExtensionHelper" path="/System/Cryptexes/OS/System/Library/PrivateFrameworks/SafariFoundation.framework/Versions/A/XPCServices/CredentialProviderExtensionHelper.xpc" pid="26805"/>
+            <process name="PlugInLibraryService" path="/System/Library/Frameworks/NetFS.framework/Versions/A/XPCServices/PlugInLibraryService.xpc" pid="456"/>
+            <process name="logd_helper" path="/usr/libexec/logd_helper" pid="394"/>
+            <process name="com.apple.hiservices-xpcservice" path="/System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/HIServices.framework/Versions/A/XPCServices/com.apple.hiservices-xpcservice.xpc" pid="733"/>
+            <process name="git" path="git" pid="13304"/>
+            <process name="netbiosd" path="/usr/sbin/netbiosd" pid="33452"/>
+            <process name="Notion" path="/Applications/Notion.app" pid="6824"/>
+            <process name="com.apple.AccountPolicyHelper" path="/System/Library/PrivateFrameworks/AccountPolicy.framework/XPCServices/com.apple.AccountPolicyHelper.xpc" pid="673"/>
+            <process name="ctkd" path="/System/Library/Frameworks/CryptoTokenKit.framework/ctkd" pid="953"/>
+            <process name="mdmclient" path="mdmclient" pid="13047"/>
+            <process name="askpermissiond" path="/System/Library/PrivateFrameworks/AskPermission.framework/Versions/A/Resources/askpermissiond" pid="1027"/>
+            <process name="Codex (Service)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Service).app" pid="8420"/>
+            <process name="Spotlight" path="/System/Library/CoreServices/Spotlight.app" pid="780"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="12518"/>
+            <process name="AudioComponentRegistrar" path="/System/Library/Frameworks/AudioToolbox.framework/AudioComponentRegistrar" pid="571"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="1347"/>
+            <process name="browser_crashpad_handler" path="" pid="8497"/>
+            <process name="remindd" path="/usr/libexec/remindd" pid="94889"/>
+            <process name="photolibraryd" path="/System/Library/PrivateFrameworks/PhotoLibraryServices.framework/Versions/A/Support/photolibraryd" pid="840"/>
+            <process name="Tailscale" path="/Applications/Tailscale.app" pid="85437"/>
+            <process name="IMDPersistenceAgent" path="/System/Library/PrivateFrameworks/IMDPersistence.framework/XPCServices/IMDPersistenceAgent.xpc" pid="817"/>
+            <process name="AssetCacheTetheratorService" path="/System/Library/PrivateFrameworks/AssetCacheServicesExtensions.framework/Versions/A/XPCServices/AssetCacheTetheratorService.xpc" pid="927"/>
+            <process name="codex" path="/Users/vishayagarwal/.codex/packages/app-server-daemon/releases/0.166.0-aarch64-apple-darwin/bin/codex" pid="3965"/>
+            <process name="WiFiAgent" path="/System/Library/CoreServices/WiFiAgent.app" pid="844"/>
+            <process name="mdfind" path="mdfind" pid="13302"/>
+            <process name="LegacyProfilesSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/LegacyProfilesSubscriber.xpc" pid="1502"/>
+            <process name="remoted" path="/usr/libexec/remoted" pid="339"/>
+            <process name="spindump_agent" path="/usr/libexec/spindump_agent" pid="900"/>
+            <process name="countryd" path="/usr/libexec/countryd" pid="662"/>
+            <process name="Webby" path="/Users/vishayagarwal/Documents/Codex/2026-09-29/can-y/outputs/Webby.app" pid="13264"/>
+            <process name="swcd" path="/usr/libexec/swcd" pid="720"/>
+            <process name="ManagedSettingsAgent" path="/System/Library/Frameworks/ManagedSettings.framework/Versions/A/ManagedSettingsAgent" pid="766"/>
+            <process name="rtcreportingd" path="/usr/libexec/rtcreportingd" pid="597"/>
+            <process name="ManagedClient" path="ManagedClient" pid="13049"/>
+            <process name="captiveagent" path="/usr/libexec/captiveagent" pid="583"/>
+            <process name="gamepolicyd" path="/usr/libexec/gamepolicyd" pid="795"/>
+            <process name="diagnosticd" path="/usr/libexec/diagnosticd" pid="1836"/>
+            <process name="lskdd" path="/System/Library/PrivateFrameworks/CoreLSKD.framework/Versions/A/lskdd" pid="15352"/>
+            <process name="cloudd" path="/System/Library/PrivateFrameworks/CloudKitDaemon.framework/Support/cloudd" pid="751"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="5685"/>
+            <process name="GSSCred" path="/System/Library/Frameworks/GSS.framework/Helpers/GSSCred" pid="677"/>
+            <process name="ThemeWidgetControlViewService" path="/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/ThemeWidgetControlViewService.xpc" pid="1014"/>
+            <process name="PhotosReliveWidget" path="/System/Applications/Photos.app/Contents/PlugIns/PhotosReliveWidget.app" pid="8930"/>
+            <process name="diskarbitrationd" path="/usr/libexec/diskarbitrationd" pid="351"/>
+            <process name="HIDSensingAccessProvider" path="/AppleInternal/Library/Frameworks/HIDSensingInternalSupport.framework/Versions/A/XPCServices/HIDSensingAccessProvider.xpc" pid="524"/>
+            <process name="node" path="/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node" pid="11576"/>
+            <process name="CoreServicesUIAgent" path="/System/Library/CoreServices/CoreServicesUIAgent.app" pid="693"/>
+            <process name="findmybeaconingd" path="/usr/libexec/findmybeaconingd" pid="576"/>
+            <process name="naturallanguaged" path="/usr/libexec/naturallanguaged" pid="1198"/>
+            <process name="securityd_system" path="/usr/libexec/securityd_system" pid="563"/>
+            <process name="trustd" path="/usr/libexec/trustd" pid="629"/>
+            <process name="trustd" path="/usr/libexec/trustd" pid="586"/>
+            <process name="symptomsd-diag" path="/usr/libexec/symptomsd-diag" pid="670"/>
+            <process name="VTDecoderXPCService" path="/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc" pid="19450"/>
+            <process name="proactiveeventtrackerd" path="/usr/libexec/proactiveeventtrackerd" pid="7072"/>
+            <process name="taptoradard" path="/AppleInternal/Library/Frameworks/TapToRadarDaemon.framework/Support/taptoradard" pid="1067"/>
+            <process name="thermalmonitord" path="/usr/libexec/thermalmonitord" pid="358"/>
+            <process name="com.apple.audio.SandboxHelper" path="/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc" pid="33870"/>
+            <process name="timed" path="/usr/libexec/timed" pid="364"/>
+            <process name="distnoted" path="/usr/sbin/distnoted" pid="477"/>
+            <process name="wallpaperexportd" path="/usr/libexec/wallpaperexportd" pid="789"/>
+            <process name="ThemeWidgetControlViewService" path="/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/ThemeWidgetControlViewService.xpc" pid="1057"/>
+            <process name="node" path="node" pid="11199"/>
+            <process name="deleted_helper" path="/System/Library/PrivateFrameworks/CacheDelete.framework/deleted_helper" pid="773"/>
+            <process name="mediaanalysisd" path="/System/Library/PrivateFrameworks/MediaAnalysis.framework/Versions/A/mediaanalysisd" pid="62976"/>
+            <process name="Codex (Service)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Service).app" pid="8344"/>
+            <process name="SoftwareUpdateSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/SoftwareUpdateSubscriber.xpc" pid="25320"/>
+            <process name="TextInputSwitcher" path="/System/Library/CoreServices/TextInputSwitcher.app" pid="1042"/>
+            <process name="system_profiler" path="system_profiler" pid="13289"/>
+            <process name="powerd" path="/System/Library/CoreServices/powerd.bundle/powerd" pid="333"/>
+            <process name="UVCAssistant" path="/System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/UVCAssistant.systemextension/Contents/MacOS/UVCAssistant" pid="588"/>
+            <process name="Codex (Renderer)" path="/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/156.0.8078.79/Helpers/Codex (Renderer).app" pid="8398"/>
+            <process name="ContextService" path="/System/Library/PrivateFrameworks/ContextKit.framework/Versions/A/XPCServices/ContextService.xpc" pid="805"/>
+            <process name="com.apple.CloudDocs.iCloudDriveFileProvider" path="/System/Library/PrivateFrameworks/CloudDocs.framework/PlugIns/com.apple.CloudDocs.iCloudDriveFileProvider.appex/Contents/MacOS/com.apple.CloudDocs.iCloudDriveFileProvider" pid="870"/>
+            <process name="photoanalysisd" path="/System/Library/PrivateFrameworks/PhotoAnalysis.framework/Versions/A/Support/photoanalysisd" pid="1253"/>
+            <process name="com.apple.cmio.registerassistantservice" path="/System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/com.apple.cmio.registerassistantservice" pid="392"/>
+            <process name="smd" path="/usr/libexec/smd" pid="318"/>
+            <process name="extensionkitservice" path="/System/Library/Frameworks/ExtensionFoundation.framework/Versions/A/XPCServices/extensionkitservice.xpc" pid="8928"/>
+            <process name="lsd" path="/usr/libexec/lsd" pid="696"/>
+            <process name="containermanagerd" path="/usr/libexec/containermanagerd" pid="630"/>
+            <process name="pbs" path="/System/Library/CoreServices/pbs" pid="825"/>
+            <process name="ASConfigurationSubscriber" path="/System/Library/PrivateFrameworks/RemoteManagement.framework/XPCServices/ASConfigurationSubscriber.xpc" pid="1513"/>
+            <process name="usermanagerd" path="/usr/libexec/usermanagerd" pid="385"/>
+            <process name="intelligenceplatformd" path="/System/Library/PrivateFrameworks/IntelligencePlatformCore.framework/Versions/A/intelligenceplatformd" pid="1852"/>
+            <process name="Browser Helper (Renderer)" path="/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Versions/A/Helpers/Browser Helper (Renderer).app" pid="6819"/>
+            <process name="imagent" path="/System/Library/PrivateFrameworks/IMCore.framework/imagent.app" pid="815"/>
+            <process name="trustd" path="/usr/libexec/trustd" pid="736"/>
+            <process name="keyboardservicesd" path="/usr/libexec/keyboardservicesd" pid="1199"/>
+            <process name="parentalcontrolsd" path="/System/Library/PrivateFrameworks/FamilyControls.framework/Versions/A/Resources/parentalcontrolsd" pid="1045"/>
+        </processes>
+        <data>
+            <table codes="&quot;0x85,0x3&quot; &quot;0x85,0x90&quot; &quot;0x85,0xA9&quot;" schema="kdebug"/>
+            <table codes="&quot;0x85,0x1&quot; &quot;0x85,0x2&quot; &quot;0x85,0x8&quot; &quot;0x85,0x30&quot; &quot;0x85,0xc0&quot; &quot;0x85,0xc1&quot; &quot;0x31,0xca&quot;" schema="kdebug-strings"/>
+            <table codes="&quot;33,0x11&quot;" schema="kdebug-strings" target="SINGLE"/>
+            <table codes="&quot;0x1f,0x05&quot;" schema="kdebug-strings" target="SINGLE"/>
+            <table codes="&quot;0x2b,0x2b&quot;" schema="kdebug"/>
+            <table codes="&quot;0x1,0x30&quot;" schema="kdebug" callstack="user" target="SINGLE"/>
+            <table codes="&quot;0x1,0x9&quot; &quot;0x1,0x5&quot;" schema="kdebug"/>
+            <table codes="&quot;0x7,0x0&quot;" schema="kdebug"/>
+            <table codes="&quot;0x1,0x40&quot;" schema="kdebug"/>
+            <table codes="&quot;0x85,0xc2&quot;" schema="kdebug"/>
+            <table codes="&quot;0x85,0xc0&quot; &quot;0x85,0xc1&quot; &quot;0x31,0xca&quot;" schema="kdebug"/>
+            <table codes="&quot;0x85,0x1&quot; &quot;0x85,0x8&quot;" schema="kdebug" callstack="user"/>
+            <table codes="&quot;0x31,0xb0&quot; &quot;0x31,0xd0&quot;" schema="kdebug"/>
+            <table codes="&quot;0x85,0x9&quot; &quot;0x85,0x18&quot;" schema="kdebug" callstack="user"/>
+            <table schema="context-switch" target-pid="SINGLE"/>
+            <table schema="display-compositor-events-interval"/>
+            <table codes="&quot;0x85,0x2&quot;" schema="kdebug" callstack="user"/>
+            <table codes="&quot;0x85,0xAF&quot; &quot;0x34,0x11&quot; &quot;0x34,0x0f&quot;" schema="kdebug"/>
+            <table codes="&quot;0x2b,0xdc&quot;" schema="kdebug" target="SINGLE"/>
+            <table codes="&quot;0x2d,*&quot;" schema="kdebug" callstack="user" target="SINGLE"/>
+            <table codes="&quot;0x1,0x25&quot;" schema="kdebug" target="SINGLE"/>
+            <table codes="&quot;0x07,0x00&quot;" schema="kdebug" target="SINGLE"/>
+            <table codes="&quot;0x07,0x00&quot; &quot;0x1f,0x05&quot;" schema="kdebug" target="SINGLE"/>
+            <table codes="&quot;0x85,0x20&quot; &quot;0x31,0x80&quot;" schema="kdebug"/>
+            <table codes="&quot;0x2b,0x65&quot;" schema="kdebug"/>
+            <table codes="&quot;0x31,0xca&quot;" schema="kdebug" target="SINGLE"/>
+            <table schema="display-surface-queue"/>
+            <table codes="&quot;0x2b,0x87&quot;" schema="kdebug" target="SINGLE"/>
+            <table schema="hitches-hid-input"/>
+            <table codes="&quot;0x31,0xd1&quot;" schema="kdebug"/>
+            <table schema="metal-object-label"/>
+            <table callstack="user" target="SINGLE" schema="time-sample" sample-rate-micro-seconds="1000" all-thread-states="NO"/>
+            <table schema="syscall" target-pid="SINGLE"/>
+            <table schema="hitches-hid-dispatch-interval"/>
+            <table codes="&quot;0x31,0xca&quot;" schema="kdebug"/>
+            <table schema="metal-gpu-execution-points"/>
+            <table schema="displayed-surfaces-interval" target-pid="SINGLE"/>
+            <table track-id-base="2000" schema="metal-object-dependency-chain-display"/>
+            <table schema="developer-thread-name-update"/>
+            <table schema="hitches-lifetime-interval"/>
+            <table schema="tid-pid-mapping"/>
+            <table codes="&quot;0x31,0xd0&quot;" schema="kdebug"/>
+            <table codes="&quot;0x2b,0xd8&quot;" schema="kdebug"/>
+            <table codes="&quot;0x2b,0x87&quot;" schema="kdebug"/>
+            <table schema="metal-gpu-info"/>
+            <table codes="&quot;0x2b,0xd8&quot;" schema="kdebug" target="SINGLE"/>
+            <table schema="hitches-hid-signal"/>
+            <table codes="&quot;0x1,0xc&quot; &quot;0x4,0xc&quot;" schema="kdebug" callstack="user" target="SINGLE"/>
+            <table codes="&quot;0x1f,0x7&quot;" schema="kdebug" target="SINGLE"/>
+            <table schema="virtual-memory" target-pid="SINGLE"/>
+            <table codes="&quot;33,0x11&quot;" schema="kdebug" target="SINGLE"/>
+            <table codes="&quot;0x34,0x11&quot; &quot;0x34,0x0f&quot;" schema="kdebug"/>
+            <table schema="dyld-library-load" target-pid="SINGLE"/>
+            <table enable-priority-inversion-detection="0" target-pid="SINGLE" message-type="Fault" schema="os-log" category="&quot;Hang Risk&quot; &quot;Severe Hang Risk&quot; CFNetwork Contacts CoreML" subsystem="&quot;com.apple.runtime-issues&quot;"/>
+            <table codes="&quot;0x85,0x30&quot;" schema="kdebug"/>
+            <table schema="runloop-events" target-pid="SINGLE"/>
+            <table schema="time-info"/>
+            <table schema="hitches-ca-commit-interval" target-pid="SINGLE"/>
+            <table schema="device-display-info"/>
+            <table schema="metal-command-buffer-completed"/>
+            <table target-pid="SINGLE" schema="hang-risks" detect-priority-inversions="0"/>
+            <table schema="metal-ar-events"/>
+            <table schema="thread-narrative"/>
+            <table content="metal-connection-chains" schema="visual-chain" target-pid="SINGLE"/>
+            <table schema="display-vsyncs-interval"/>
+            <table schema="device-thermal-state-intervals"/>
+            <table schema="hitches-summary"/>
+            <table hangs-threshold="33" schema="potential-hangs" target-pid="SINGLE"/>
+            <table schema="hitches-render-interval"/>
+            <table schema="cpu-narrative"/>
+            <table content="metal-connections" schema="visual-connection" target-pid="SINGLE"/>
+            <table schema="display-events-interval"/>
+            <table schema="metal-visual-highlight-chain-display"/>
+            <table schema="display-compositor-interval" target-pid="SINGLE"/>
+            <table schema="tick" frequency="1"/>
+            <table schema="tick" frequency="10"/>
+            <table schema="tick"/>
+            <table schema="life-cycle-period" target-pid="SINGLE"/>
+            <table target-pid="SINGLE" context-switch-sampling="0" high-frequency-sampling="0" schema="time-profile" record-waiting-threads="0" needs-kernel-callstack="0"/>
+            <table schema="thread-snapshot"/>
+            <table schema="thread-state" target-pid="SINGLE"/>
+            <table subsystem="&quot;com.apple.ConditionInducer.LowSeverity&quot;" schema="os-signpost" category="InduceCondition"/>
+            <table schema="device-gpu-info"/>
+            <table schema="cpu-state" target-pid="SINGLE"/>
+            <table schema="hitches-gpu-interval"/>
+            <table schema="thread-name"/>
+            <table schema="metal-io-surface-access"/>
+            <table schema="syscall-name-map"/>
+            <table schema="displayed-surfaces-per-second"/>
+            <table schema="display-surface-swap"/>
+            <table schema="metal-gpu-submission-to-command-buffer-id"/>
+            <table schema="metal-known-compositor-process"/>
+            <table schema="metal-gpu-intervals" target-pid="ALL"/>
+            <table schema="hitches-commit-interval"/>
+            <table schema="metal-command-buffer-frame-assignment"/>
+            <table codes="&quot;0x85,0x92&quot; &quot;0x85,0x93&quot; &quot;0x85,0xae&quot; &quot;0x06,0x1b&quot; &quot;0x2b,0x24&quot;" schema="kdebug"/>
+        </data>
+        <tracks/>
+    </run>
+</trace-toc>

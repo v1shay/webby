@@ -19,6 +19,11 @@ rule_dir="$app/Contents/Resources/ContentRules"
 mkdir -p "$app/Contents/MacOS"
 mkdir -p "$module_cache"
 mkdir -p "$rule_dir"
+mkdir -p "$app/Contents/Resources/WidgetBrands"
+cp "$script_dir/WidgetBrands/"* "$app/Contents/Resources/WidgetBrands/"
+mkdir -p "$app/Contents/Resources/Fonts/Geist"
+cp "$script_dir/Fonts/Geist/"* "$app/Contents/Resources/Fonts/Geist/"
+cp "$script_dir/GeistPage.js" "$app/Contents/Resources/GeistPage.js"
 mkdir -p "$app/Contents/Resources/Sounds"
 cp "$script_dir/Sounds/"*.wav "$app/Contents/Resources/Sounds/"
 mkdir -p "$app/Contents/Resources/Pets"
@@ -28,6 +33,7 @@ cp "$script_dir/ASCIIArtworks.json" "$app/Contents/Resources/ASCIIArtworks.json"
 cp "$script_dir/ASCIIEngine.js" "$app/Contents/Resources/ASCIIEngine.js"
 cp "$script_dir/VideoControls.js" "$app/Contents/Resources/VideoControls.js"
 cp "$script_dir/PasswordFieldProbe.js" "$app/Contents/Resources/PasswordFieldProbe.js"
+cp "$script_dir/ChatGPTWidget.js" "$app/Contents/Resources/ChatGPTWidget.js"
 cp "$script_dir/ChromeTone.js" "$app/Contents/Resources/ChromeTone.js"
 cp "$script_dir/LinkPreview.js" "$app/Contents/Resources/LinkPreview.js"
 cp "$script_dir/GooglePromptFilter.js" "$app/Contents/Resources/GooglePromptFilter.js"
@@ -53,7 +59,7 @@ background_target="$script_dir/../work/code-background-target"
 mkdir -p "$app/Contents/Resources/CodeBackground"
 cp "$script_dir/Vendor/CodeBackground/Monocode-MIT.txt" "$script_dir/Vendor/CodeBackground/NOTICE.md" "$script_dir/Vendor/CodeBackground/ThirdPartyLicenses.txt" "$app/Contents/Resources/CodeBackground/"
 
-swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$module_cache" -framework AppKit -framework WebKit -framework AVFoundation -framework Security -framework CryptoKit -framework IOKit -framework JavaScriptCore -framework Carbon \
+swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$module_cache" -framework AppKit -framework WebKit -framework AVFoundation -framework Security -framework CryptoKit -framework IOKit -framework JavaScriptCore -framework Carbon -framework WidgetKit \
   "$script_dir/PlainWebKitBrowser.swift" \
   "$script_dir/BrowserGlass.swift" \
   "$script_dir/GlassPageInjector.swift" \
@@ -81,6 +87,12 @@ swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$m
   "$script_dir/BrowserApp.swift" \
   "$script_dir/NativeTerminal.swift" \
   "$script_dir/LightweightIDE.swift" \
+  "$script_dir/CodeWorkbench.swift" \
+  "$script_dir/IDEIdentity.swift" \
+  "$script_dir/GitHubWidgets.swift" \
+  "$script_dir/CodexAppWidgets.swift" \
+  "$script_dir/DesktopWidgets/Shared.swift" \
+  "$script_dir/DesktopWidgets/Host.swift" \
   "$script_dir/IndicatorScenes.swift" \
   "$script_dir/NotchIndicatorEngine.swift" \
   "$module_cache/PTYLauncher.o" \
@@ -106,10 +118,14 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>NSLocationWhenInUseUsageDescription</key><string>Allow a website you choose to use your location.</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>Web pages</string><key>CFBundleTypeRole</key><string>Viewer</string><key>CFBundleURLSchemes</key><array><string>http</string><string>https</string></array></dict></array>
+  <key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>HTML Document</string><key>CFBundleTypeRole</key><string>Viewer</string><key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>public.html</string><string>public.xhtml</string></array></dict></array>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
 
+if [ -n "${WEBBY_BUILD_ICON_SOURCE:-}" ]; then
+  cp "$WEBBY_BUILD_ICON_SOURCE" "$app/Contents/Resources/Webby.icns"
+else
 iconset="$module_cache/Webby.iconset"
 mkdir -p "$iconset"
 "$app/Contents/MacOS/Webby" --render-icon "$iconset/icon_512x512@2x.png"
@@ -122,5 +138,9 @@ for size in 16 32 128 256; do
 done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/Webby.icns"
 
-codesign --force --sign "system local code signing" "$app"
+fi
+
+sh "$script_dir/DesktopWidgets/build-extension.sh" "$app"
+
+codesign --force --sign "${WEBBY_SIGN_IDENTITY:-system local code signing}" "$app"
 echo "$app"

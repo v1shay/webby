@@ -1,18 +1,41 @@
 import AppKit
 
 @MainActor final class WidgetCanvasScrollView: NSScrollView {
+    // The homepage is a fixed canvas; nested lists still receive their own
+    // scrolling. The same class also hosts tabs, which must remain scrollable.
+    override func scrollWheel(with event:NSEvent) {
+        guard !(documentView is WidgetCanvas) else{return}
+        super.scrollWheel(with:event)
+    }
+
     override func layout() {
         super.layout()
         guard let canvas = documentView as? WidgetCanvas else { return }
         let wanted = contentView.bounds.size
         guard wanted.width > 80, wanted.height > 80 else { return }
+        horizontalScrollElasticity = .none;verticalScrollElasticity = .none
         if canvas.frame.size != wanted { canvas.setFrameSize(wanted) }
+        if contentView.bounds.origin != .zero {contentView.scroll(to:.zero)}
     }
 }
 
 enum WebbyWidget: String, CaseIterable, Codable {
-    case calendar, gmail, drive, weather, stocks, codex, note
+    case calendar, gmail, drive, weather, stocks, codex, chatgpt, ide, note
     case music, systemMonitor, downloads, clipboard, calculator, battery
+    case githubPRs, githubContributions, githubRecent, githubRepos, githubIssues, githubStars, githubNews, codexUsage
+
+    var githubKind: GitHubWidgetKind? {
+        switch self {
+        case .githubPRs: .prs
+        case .githubContributions: .contributions
+        case .githubRecent: .recent
+        case .githubRepos: .repos
+        case .githubIssues: .issues
+        case .githubStars: .stars
+        case .githubNews: .news
+        default: nil
+        }
+    }
 
     var title: String {
         switch self {
@@ -21,7 +44,10 @@ enum WebbyWidget: String, CaseIterable, Codable {
         case .drive: "Drive"
         case .weather: "Weather"
         case .stocks: "Stocks"
-        case .codex: "Codex"
+        case .codex: "Codex Chats"
+        case .codexUsage: "Codex Usage"
+        case .chatgpt: "ChatGPT"
+        case .ide: "IDE"
         case .note: "Quick Note"
         case .music: "Music"
         case .systemMonitor: "System Monitor"
@@ -29,6 +55,8 @@ enum WebbyWidget: String, CaseIterable, Codable {
         case .clipboard: "Clipboard"
         case .calculator: "Calculator"
         case .battery: "Battery"
+        case .githubPRs, .githubContributions, .githubRecent, .githubRepos, .githubIssues, .githubStars, .githubNews:
+            "GitHub · " + (githubKind?.title ?? "")
         }
     }
 
@@ -40,6 +68,9 @@ enum WebbyWidget: String, CaseIterable, Codable {
         case .weather: "cloud.sun.fill"
         case .stocks: "chart.line.uptrend.xyaxis"
         case .codex: "chevron.left.forwardslash.chevron.right"
+        case .codexUsage: "gauge.with.dots.needle.33percent"
+        case .chatgpt: "bubble.left.fill"
+        case .ide: "folder"
         case .note: "square.and.pencil"
         case .music: "music.note"
         case .systemMonitor: "waveform.path.ecg"
@@ -47,6 +78,8 @@ enum WebbyWidget: String, CaseIterable, Codable {
         case .clipboard: "clipboard"
         case .calculator: "function"
         case .battery: "battery.100percent"
+        case .githubPRs, .githubContributions, .githubRecent, .githubRepos, .githubIssues, .githubStars, .githubNews:
+            githubKind?.symbol ?? "book.closed"
         }
     }
 
@@ -66,6 +99,127 @@ private struct WidgetPlacement: Codable {
     var y: CGFloat
     var width: CGFloat
     var height: CGFloat
+    var referenceWidth: CGFloat? = nil
+    var referenceHeight: CGFloat? = nil
+}
+
+// Canvas coordinates are flipped: minimum Y is the top edge.
+enum WidgetAlignment {
+    static func fit(_ proposed: NSRect, in bounds: NSRect) -> NSRect {
+        let width = min(max(0, bounds.width), max(min(64, bounds.width), proposed.width))
+        let height = min(max(0, bounds.height), max(min(64, bounds.height), proposed.height))
+        return NSRect(x: min(max(bounds.minX, proposed.minX), bounds.maxX - width),
+                      y: min(max(bounds.minY, proposed.minY), bounds.maxY - height), width: width, height: height)
+    }
+    static func legacyTranslation(_ reference:NSSize,frames:[NSRect])->CGFloat {
+        let edge=frames.map(\.maxX).max() ?? 0
+        // The old format subtracted (viewportWidth-1010)/2. Repeated saved
+        // right edges identify that original viewport when startup recorded a
+        // smaller one. Undo that coordinate convention once, as a whole group.
+        guard reference.width<=1010,edge>max(1010,reference.width)+0.5,
+              frames.filter({abs($0.maxX-edge)<2}).count>=2 else{return 0}
+        return edge-1010
+    }
+    static func repairedReference(_ reference:NSSize,frames:[NSRect])->NSSize {
+        // A startup viewport is not a valid basis when saved widgets extend
+        // beyond it. Recover the existing layout extent without moving a card.
+        NSSize(width:max(reference.width,(frames.map(\.maxX).max() ?? 0)+legacyTranslation(reference,frames:frames)),height:max(reference.height,frames.map(\.maxY).max() ?? 0))
+    }
+    static func anchored(_ saved:NSRect,reference:NSSize,in bounds:NSRect)->NSRect {
+        guard reference.width>0,reference.height>0 else{return fit(saved,in:bounds)}
+        let original=fit(saved,in:NSRect(origin:.zero,size:reference))
+        let size=fit(NSRect(origin:.zero,size:saved.size),in:bounds).size
+        func coordinate(_ low:CGFloat,_ length:CGFloat,_ extent:CGFloat,_ newLength:CGFloat,_ newExtent:CGFloat)->CGFloat {
+            // Only a real center snap is centered. Everything else keeps its
+            // side and translates by the exact viewport delta. Choosing the
+            // nearest of three anchors made neighboring cards move differently.
+            let centerOffset=low+length/2-extent/2
+            if abs(centerOffset)<=8 {return low+(newExtent-extent)/2+(length-newLength)/2}
+            if centerOffset<0 {return low}
+            return low+(newExtent-extent)+(length-newLength)
+        }
+        return fit(NSRect(x:bounds.minX+coordinate(original.minX,original.width,reference.width,size.width,bounds.width),
+                          y:bounds.minY+coordinate(original.minY,original.height,reference.height,size.height,bounds.height),width:size.width,height:size.height),in:bounds)
+    }
+    // Solve each axis as connected occupied intervals. Nearby cards share one
+    // translation; only the empty space between separate groups absorbs a
+    // viewport change. A group is clamped once, never card by card.
+    static func arrangement(_ frames:[NSRect],reference:NSSize,in bounds:NSRect)->[NSRect] {
+        guard !frames.isEmpty,reference.width>0,reference.height>0 else{return frames.map{fit($0,in:bounds)}}
+        var result=frames
+        for horizontal in [true,false] {
+            func low(_ r:NSRect)->CGFloat {horizontal ? r.minX:r.minY}
+            func high(_ r:NSRect)->CGFloat {horizontal ? r.maxX:r.maxY}
+            let extent=horizontal ? reference.width:reference.height
+            let newExtent=horizontal ? bounds.width:bounds.height
+            let origin=horizontal ? bounds.minX:bounds.minY
+            let sorted=frames.indices.sorted{low(frames[$0])<low(frames[$1])}
+            var groups:[[Int]]=[]
+            var end = -CGFloat.infinity
+            for index in sorted {
+                if groups.isEmpty || low(frames[index])>end+48 {groups.append([index]);end=high(frames[index])}
+                else {groups[groups.count-1].append(index);end=max(end,high(frames[index]))}
+            }
+            // An occupied chain can bridge the entire screen. Split it at
+            // its largest real gap so a top cluster cannot steal the bottom
+            // cluster's anchor (and vice versa for left/right).
+            groups=groups.flatMap { group -> [[Int]] in
+                guard let first=group.first,low(frames[first])<=12,
+                      (group.map{high(frames[$0])}.max() ?? 0)>=extent-12 else{return [group]}
+                var edge=high(frames[first]),gap:CGFloat=0,cut:Int?=nil
+                for offset in group.indices.dropFirst() {
+                    let index=group[offset],space=low(frames[index])-edge
+                    if space>gap {gap=space;cut=offset}
+                    edge=max(edge,high(frames[index]))
+                }
+                guard let cut else{return [group]}
+                return [Array(group[..<cut]),Array(group[cut...])]
+            }
+            for group in groups {
+                let start=group.map{low(frames[$0])}.min()!
+                let finish=group.map{high(frames[$0])}.max()!
+                let center=(start+finish)/2
+                let delta=newExtent-extent
+                let desired:CGFloat = abs(center-extent/2)<=8 ? delta/2:(center<extent/2 ? 0:delta)
+                // If the whole group fits, preserve every internal offset exactly.
+                // On genuinely undersized windows, retain individual reachability.
+                let shift=finish-start<=newExtent ? min(max(desired,-start),newExtent-finish):desired
+                for index in group {
+                    if horizontal {result[index].origin.x=frames[index].minX+shift+origin}
+                    else {result[index].origin.y=frames[index].minY+shift+origin}
+                }
+            }
+        }
+        return result.map{fit($0,in:bounds)}
+    }
+    static func paddedBounds(_ bounds:NSRect)->NSRect {
+        bounds.insetBy(dx:min(12,max(0,(bounds.width-64)/2)),dy:min(12,max(0,(bounds.height-64)/2)))
+    }
+    static func paddedArrangement(_ frames:[NSRect],reference:NSSize,in bounds:NSRect)->[NSRect] {
+        let source=paddedBounds(NSRect(origin:.zero,size:reference))
+        return arrangement(frames.map{$0.offsetBy(dx:-source.minX,dy:-source.minY)},
+                           reference:source.size,in:paddedBounds(bounds))
+    }
+    static func adjusted(_ proposed: NSRect, in bounds: NSRect, resizing: Bool) -> NSRect {
+        var result = fit(proposed, in: bounds)
+        if resizing {
+            let x = min(max(bounds.minX, proposed.minX), bounds.maxX - min(64, bounds.width))
+            let y = min(max(bounds.minY, proposed.minY), bounds.maxY - min(64, bounds.height))
+            result = NSRect(x: x, y: y,
+                            width: min(bounds.maxX - x, max(min(64, bounds.width), proposed.width)),
+                            height: min(bounds.maxY - y, max(min(64, bounds.height), proposed.height)))
+            if abs(result.maxX - bounds.maxX) <= 8 { result.size.width = bounds.maxX - result.minX }
+            if abs(result.maxY - bounds.maxY) <= 8 { result.size.height = bounds.maxY - result.minY }
+        } else {
+            func snap(_ value: CGFloat, _ candidates: [CGFloat]) -> CGFloat {
+                let nearest = candidates.min { abs($0 - value) < abs($1 - value) } ?? value
+                return abs(nearest - value) <= 8 ? nearest : value
+            }
+            result.origin.x = snap(result.minX, [bounds.minX, bounds.midX - result.width / 2, bounds.maxX - result.width])
+            result.origin.y = snap(result.minY, [bounds.minY, bounds.midY - result.height / 2, bounds.maxY - result.height])
+        }
+        return fit(result, in: bounds)
+    }
 }
 
 @MainActor final class WidgetCanvas: NSView {
@@ -75,13 +229,16 @@ private struct WidgetPlacement: Codable {
     var didRebuild: ((UUID) -> Void)?
     var calendarMonthChanged: ((Date) -> Void)?
     var calendarDayOpened: ((Date) -> Void)?
-    var submitCodex: ((String) -> Void)?
+    var openIDEProject: ((URL?) -> Void)?
+    var openGitHubURL: ((URL) -> Void)?
+    var submitChatGPT: ((String,[ChatGPTWidgetImage]) -> Void)?
     var calculatorCalculated: ((String) -> Void)?
     var musicCommand: ((MusicCommand) -> Void)?
     private var profile = UUID()
     private var placements: [WidgetPlacement] = []
     private var cards: [WebbyWidget: GlassWidgetCard] = [:]
     private var draggingCard: GlassWidgetCard?
+    private let alignmentGuides = CAShapeLayer()
     private var horizontalInset: CGFloat { max(0, (bounds.width - 1010) / 2) }
 
     override var isFlipped: Bool { true }
@@ -89,6 +246,10 @@ private struct WidgetPlacement: Codable {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        alignmentGuides.strokeColor = NSColor.systemTeal.withAlphaComponent(0.85).cgColor
+        alignmentGuides.fillColor = nil; alignmentGuides.lineWidth = 1
+        alignmentGuides.lineDashPattern = [4, 4]; alignmentGuides.zPosition = 1000
+        alignmentGuides.isHidden = true; layer?.addSublayer(alignmentGuides)
         NotificationCenter.default.addObserver(self, selector: #selector(updateGlassOpacity), name: .browserWidgetGlassChanged, object: nil)
     }
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -99,6 +260,7 @@ private struct WidgetPlacement: Codable {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func show(profile: UUID) {
+        draggingCard?.cancelInteraction(); draggingCard = nil; hideAlignmentGuides()
         self.profile = profile
         let key = storageKey
         if let data = UserDefaults.standard.data(forKey: key),
@@ -132,12 +294,17 @@ private struct WidgetPlacement: Codable {
         rebuild()
     }
 
+    override func viewDidHide() {
+        super.viewDidHide()
+        draggingCard?.cancelInteraction(); draggingCard = nil; hideAlignmentGuides()
+    }
+
     func has(_ kind: WebbyWidget) -> Bool { cards[kind] != nil }
 
     func addWidget(_ kind: WebbyWidget) {
         guard !has(kind) else { return }
-        let width: CGFloat = 260
-        let height: CGFloat = 190
+        let width: CGFloat = kind == .ide || kind.githubKind != nil || kind == .codex || kind == .codexUsage ? 380 : 260
+        let height: CGFloat = kind == .codex || kind == .codexUsage ? 280 : kind == .ide || kind.githubKind != nil ? 230 : 190
         let maxX = max(12, bounds.width - horizontalInset - width - 12)
         let maxY = max(12, bounds.height - height - 12)
         var chosen = NSPoint(x: 12, y: 12)
@@ -171,7 +338,8 @@ private struct WidgetPlacement: Codable {
             let row = index / columns
             placements[index].width = min(placements[index].width, cellWidth - 12)
             placements[index].height = min(placements[index].height, cellHeight - 12)
-            placements[index].x = 12 + CGFloat(column) * cellWidth - horizontalInset
+            placements[index].x = 12 + CGFloat(column) * cellWidth
+            placements[index].referenceWidth = bounds.width;placements[index].referenceHeight = bounds.height
             placements[index].y = 12 + CGFloat(row) * cellHeight
         }
         save()
@@ -223,24 +391,38 @@ private struct WidgetPlacement: Codable {
     }
 
     private func rebuild() {
-        for card in cards.values { card.removeFromSuperview() }
+        migrateAnchors()
+        let previous=cards.filter{$0.value.glassProfile==profile}
+        for (kind,card) in cards where previous[kind]==nil {card.removeFromSuperview()}
+        let geometry=Motion.capture(Array(cards.values),in:self)
+        for (kind,card) in previous where !placements.contains(where:{$0.kind==kind}) {Motion.depart(card,character:.widget);card.removeFromSuperview()}
         cards.removeAll()
+        defer {Motion.settle(geometry,views:Array(cards.values),in:self,character:.widget)}
         for placement in placements {
-            let card = GlassWidgetCard(kind: placement.kind,
+            let card = previous[placement.kind] ?? GlassWidgetCard(kind: placement.kind,
                                        frame: NSRect(x: placement.x + horizontalInset, y: placement.y,
                                                      width: placement.width, height: placement.height))
+            card.frame=reachableFrame(for: placement)
             if placement.kind == .calendar {
                 card.calendarView.changeMonth = { [weak self] date in self?.calendarMonthChanged?(date) }
                 card.calendarView.openDay = { [weak self] date in self?.calendarDayOpened?(date) }
             }
             card.activate = { [weak self] in self?.activate?(placement.kind) }
-            card.submitCodex = { [weak self] prompt in self?.submitCodex?(prompt) }
+            card.openIDEProject = { [weak self] url in self?.openIDEProject?(url) }
+            let githubProfile = profile
+            card.openGitHubURL = { [weak self] url in
+                guard let self,self.profile == githubProfile else { return }
+                self.openGitHubURL?(url)
+            }
+            card.submitChatGPT = { [weak self] text,images in self?.submitChatGPT?(text,images) }
             card.musicCommand = { [weak self] command in self?.musicCommand?(command) }
             card.calculatorCalculated = { [weak self] line in self?.calculatorCalculated?(line) }
             card.remove = { [weak self] in self?.removeWidget(placement.kind) }
             card.didMoveOrResize = { [weak self] frame in
                 guard let self, let index = self.placements.firstIndex(where: { $0.kind == placement.kind }) else { return }
-                self.placements[index].x = frame.minX - self.horizontalInset
+                self.rebaseArrangement()
+                self.placements[index].x = frame.minX
+                self.placements[index].referenceWidth = self.bounds.width;self.placements[index].referenceHeight = self.bounds.height
                 self.placements[index].y = frame.minY
                 self.placements[index].width = frame.width
                 self.placements[index].height = frame.height
@@ -248,6 +430,8 @@ private struct WidgetPlacement: Codable {
                 self.enclosingScrollView?.needsLayout = true
             }
             card.glassProfile = profile
+            if placement.kind.githubKind != nil { card.prepareGitHub(profile: profile) }
+            if placement.kind == .codex || placement.kind == .codexUsage { card.prepareCodex(profile:profile) }
             card.setGlassOpacity(BrowserGlass.widgetOpacity(profile: profile, kind: placement.kind.rawValue))
             if placement.kind == .weather || placement.kind == .stocks {
                 let key=placement.kind == .weather ? "webbyWeatherCity." : "webbyStockSymbol."
@@ -264,26 +448,102 @@ private struct WidgetPlacement: Codable {
         didRebuild?(profile)
     }
 
+    private func migrateAnchors() {
+        guard bounds.width>80,bounds.height>80 else{return}
+        let backup="webbyWidgetAnchorBackup.v1.\(profile.uuidString)"
+        if UserDefaults.standard.data(forKey:backup)==nil,let data=try? JSONEncoder().encode(placements) {UserDefaults.standard.set(data,forKey:backup)}
+        var changed=false
+        let legacy=placements.filter{$0.referenceWidth==nil || $0.referenceHeight==nil}
+        let legacyFrames=legacy.map{NSRect(x:$0.x+horizontalInset,y:$0.y,width:$0.width,height:$0.height)}
+        let legacyReference=WidgetAlignment.repairedReference(bounds.size,frames:legacyFrames)
+        let legacyOffset=WidgetAlignment.legacyTranslation(bounds.size,frames:legacyFrames)
+        for index in placements.indices where placements[index].referenceWidth == nil || placements[index].referenceHeight == nil {
+            placements[index].x += horizontalInset+legacyOffset
+            placements[index].referenceWidth=legacyReference.width;placements[index].referenceHeight=legacyReference.height;changed=true
+        }
+        let groups=Dictionary(grouping:placements.indices){index in "\(placements[index].referenceWidth ?? 0)x\(placements[index].referenceHeight ?? 0)"}
+        for indices in groups.values {
+            guard let first=indices.first,let width=placements[first].referenceWidth,let height=placements[first].referenceHeight else{continue}
+            let frames=indices.map{NSRect(x:placements[$0].x,y:placements[$0].y,width:placements[$0].width,height:placements[$0].height)}
+            let originalReference=NSSize(width:width,height:height)
+            let fixed=WidgetAlignment.repairedReference(originalReference,frames:frames)
+            let offset=WidgetAlignment.legacyTranslation(originalReference,frames:frames)
+            if fixed.width>width+0.5 || fixed.height>height+0.5 {
+                for index in indices {placements[index].x+=offset;placements[index].referenceWidth=fixed.width;placements[index].referenceHeight=fixed.height}
+                changed=true
+            }
+        }
+        if changed {save()}
+    }
+    private func arrangedFrames()->[NSRect] {
+        // Normalize older cards edited at different viewport sizes into one
+        // reference before solving their shared spatial relationships.
+        let reference=NSSize(width:placements.compactMap(\.referenceWidth).max() ?? bounds.width,
+                             height:placements.compactMap(\.referenceHeight).max() ?? bounds.height)
+        let frames=placements.map { placement -> NSRect in
+            let saved=NSRect(x:placement.x,y:placement.y,width:placement.width,height:placement.height)
+            guard let width=placement.referenceWidth,let height=placement.referenceHeight else {
+                return saved.offsetBy(dx:horizontalInset,dy:0)
+            }
+            return WidgetAlignment.anchored(saved,reference:NSSize(width:width,height:height),in:NSRect(origin:.zero,size:reference))
+        }
+        return WidgetAlignment.paddedArrangement(frames,reference:reference,in:bounds)
+    }
     private func reachableFrame(for placement: WidgetPlacement) -> NSRect {
-        let width = placement.width
-        let height = placement.height
-        let visibleX = min(32, width)
-        let visibleY = min(32, height)
-        let x = min(max(visibleX - width, placement.x + horizontalInset), bounds.width - visibleX)
-        let y = min(max(visibleY - height, placement.y), bounds.height - visibleY)
-        return NSRect(x: x, y: y, width: width, height: height)
+        guard let index=placements.firstIndex(where:{$0.kind==placement.kind}) else{return .zero}
+        return arrangedFrames()[index]
+    }
+
+    private func rebaseArrangement() {
+        let frames=arrangedFrames()
+        for index in placements.indices {
+            placements[index].x=frames[index].minX;placements[index].y=frames[index].minY
+            placements[index].width=frames[index].width;placements[index].height=frames[index].height
+            placements[index].referenceWidth=bounds.width;placements[index].referenceHeight=bounds.height
+        }
+    }
+
+    fileprivate func showAlignmentGuides(for frame: NSRect) {
+        let edges=WidgetAlignment.paddedBounds(bounds)
+        let path = CGMutablePath()
+        let tolerance: CGFloat = 0.5
+        for x in [edges.minX, edges.midX, edges.maxX] {
+            let aligned = x == bounds.midX ? abs(frame.midX - x) < tolerance :
+                min(abs(frame.minX - x), abs(frame.maxX - x)) < tolerance
+            if aligned { let visibleX = min(bounds.maxX - 0.5, max(bounds.minX + 0.5, x)); path.move(to: CGPoint(x: visibleX, y: bounds.minY)); path.addLine(to: CGPoint(x: visibleX, y: bounds.maxY)) }
+        }
+        for y in [edges.minY, edges.midY, edges.maxY] {
+            let aligned = y == bounds.midY ? abs(frame.midY - y) < tolerance :
+                min(abs(frame.minY - y), abs(frame.maxY - y)) < tolerance
+            if aligned { let visibleY = min(bounds.maxY - 0.5, max(bounds.minY + 0.5, y)); path.move(to: CGPoint(x: bounds.minX, y: visibleY)); path.addLine(to: CGPoint(x: bounds.maxX, y: visibleY)) }
+        }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        alignmentGuides.frame = bounds; alignmentGuides.path = path; alignmentGuides.isHidden = false
+        CATransaction.commit()
+    }
+    fileprivate func hideAlignmentGuides() {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        alignmentGuides.isHidden = true; alignmentGuides.path = nil
+        CATransaction.commit()
     }
 
     override func layout() {
         super.layout()
-        // Saved positions may come from a larger window. Keep a grab area
-        // visible without confining the whole widget to the viewport.
-        for (kind, card) in cards {
-            if card.isInteracting { continue }
-            if let placement = placements.first(where: { $0.kind == kind }) {
-                card.frame = reachableFrame(for: placement)
-            }
+        if !cards.values.contains(where:{$0.isInteracting}) {migrateAnchors()}
+        // Saved coordinates never change during a layout switch. Only the
+        // viewport translation is presented, so switching back is reversible.
+        let frames=arrangedFrames()
+        for (index,placement) in placements.enumerated() {
+            guard let card=cards[placement.kind],!card.isInteracting else{continue}
+            card.frame=frames[index]
         }
+    }
+
+    func captureViewportLayout(in root:NSView)->Motion.Geometry {
+        Motion.capture(Array(cards.values),in:root)
+    }
+    func settleViewportLayout(_ before:Motion.Geometry,in root:NSView) {
+        Motion.settle(before,views:Array(cards.values).filter{!$0.isInteracting},in:root,character:.widget)
     }
 
     func coversPoint(inWindow point: NSPoint) -> Bool {
@@ -296,7 +556,7 @@ private struct WidgetPlacement: Codable {
         case .leftMouseDown:
             let point = convert(event.locationInWindow, from: nil)
             guard let card = subviews.reversed().compactMap({ $0 as? GlassWidgetCard })
-                .first(where: { $0.canBeginDrag(at: point) }) else { return false }
+                .first(where: { !$0.isHidden && $0.frame.contains(point) }), card.canBeginDrag(at:point) else { return false }
             draggingCard = card
             card.mouseDown(with: event)
             return true
@@ -333,11 +593,19 @@ private struct WidgetPlacement: Codable {
     private var feedVisible = false
     var activate: (() -> Void)?
     var remove: (() -> Void)?
-    var submitCodex: ((String) -> Void)?
+    var openIDEProject: ((URL?) -> Void)?
+    var openGitHubURL: ((URL) -> Void)?
+    var submitChatGPT: ((String,[ChatGPTWidgetImage]) -> Void)?
     var musicCommand: ((MusicCommand) -> Void)?
     var calculatorCalculated: ((String) -> Void)?
     var didMoveOrResize: ((NSRect) -> Void)?
     lazy var calendarView = CalendarWidgetView(frame: .zero)
+    private lazy var projectWidget = IDEProjectWidgetView(frame:.zero)
+    private var githubWidget: GitHubWidgetView?
+    private var codexAppWidget: CodexAppWidgetView?
+    private let attachmentStrip=NSStackView()
+    private var chatImages:[ChatGPTWidgetImage]=[]
+    private var pasteMonitor:Any?
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
@@ -357,6 +625,7 @@ private struct WidgetPlacement: Codable {
     private let promptButton = NSButton(title: "↗", target: nil, action: nil)
     private let promptGlass = NSVisualEffectView()
     private let albumArt = NSImageView()
+    private let spotifyBrand = NSImageView()
     private let trackTitle = NSTextField(labelWithString: "")
     private let trackArtist = NSTextField(labelWithString: "")
     private let musicPrevious = NSButton(title: "", target: nil, action: nil)
@@ -396,6 +665,16 @@ private struct WidgetPlacement: Codable {
         glass.alphaValue = glassOpacity
         addSubview(glass)
         if kind == .calendar { addSubview(calendarView) }
+        if kind == .ide { addSubview(projectWidget); projectWidget.openProject = { [weak self] url in self?.openIDEProject?(url) } }
+        if let githubKind = kind.githubKind {
+            let view = GitHubWidgetView(kind: githubKind)
+            view.openURL = { [weak self] url in self?.openGitHubURL?(url) }
+            githubWidget = view; addSubview(view)
+        }
+        if kind == .codex || kind == .codexUsage {
+            let view = CodexAppWidgetView(usage:kind == .codexUsage)
+            codexAppWidget = view; addSubview(view)
+        }
         layer?.cornerRadius = 18
         layer?.masksToBounds = true
         topSheen.colors = [NSColor.white.withAlphaComponent(0.13).cgColor,
@@ -419,55 +698,71 @@ private struct WidgetPlacement: Codable {
         } else {
             icon.image = NSImage(systemSymbolName: kind.symbol, accessibilityDescription: kind.title)
         }
-        if kind.googleService != nil && kind != .calendar { loadBrandIcon() }
+        if (kind.googleService != nil && kind != .calendar) || kind == .chatgpt { loadBrandIcon() }
+        if kind == .music {icon.image=WidgetBrandImages.spotify}
+        spotifyBrand.image=WidgetBrandImages.spotify;spotifyBrand.imageScaling = .scaleProportionallyUpOrDown
+        spotifyBrand.toolTip="Spotify";spotifyBrand.setAccessibilityLabel("Spotify")
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.contentTintColor = .labelColor
         title.stringValue = kind.title
-        title.font = .systemFont(ofSize: 14, weight: .semibold)
-        subtitle.font = .systemFont(ofSize: 11)
+        title.font = WebbyTypography.font(ofSize: 14, weight: .semibold)
+        subtitle.font = WebbyTypography.font(ofSize: 11)
         subtitle.textColor = .secondaryLabelColor
         subtitle.lineBreakMode = .byTruncatingTail
-        body.font = .systemFont(ofSize: 12)
+        body.font = WebbyTypography.font(ofSize: 12)
         body.textColor = .labelColor
         body.lineBreakMode = .byTruncatingTail
         body.maximumNumberOfLines = 7
         action.isBordered = false
-        action.font = .systemFont(ofSize: 11, weight: .medium)
+        action.font = WebbyTypography.font(ofSize: 11, weight: .medium)
         action.target = self
         action.action = #selector(actionPressed)
         close.isBordered = false
-        close.font = .systemFont(ofSize: 17)
+        close.font = WebbyTypography.font(ofSize: 17)
         close.contentTintColor = .secondaryLabelColor
         close.target = self
         close.action = #selector(closePressed)
         weatherIcon.imageScaling = .scaleProportionallyUpOrDown
         weatherIcon.wantsLayer = true
-        weatherMeta.font = .systemFont(ofSize: 11, weight: .medium)
+        weatherMeta.font = WebbyTypography.font(ofSize: 11, weight: .medium)
         weatherMeta.textColor = .secondaryLabelColor
-        value.font = .systemFont(ofSize: 34, weight: .light)
+        value.font = WebbyTypography.font(ofSize: 34, weight: .light)
         value.textColor = .labelColor
-        detail.font = .systemFont(ofSize: 12, weight: .medium)
+        detail.font = WebbyTypography.font(ofSize: 12, weight: .medium)
         detail.textColor = .secondaryLabelColor
-        hourly.font = .systemFont(ofSize: 11, weight: .medium)
+        hourly.font = WebbyTypography.font(ofSize: 11, weight: .medium)
         hourly.textColor = .secondaryLabelColor
         hourly.alignment = .center
         for label in hourLabels {
-            label.font = .systemFont(ofSize: 10, weight: .medium)
+            label.font = WebbyTypography.font(ofSize: 10, weight: .medium)
             label.alignment = .center
             label.textColor = .secondaryLabelColor
         }
         for symbol in hourSymbols { symbol.imageScaling = .scaleProportionallyUpOrDown }
         promptField.cell = VerticallyCenteredPromptCell(textCell: "")
-        promptField.placeholderString = "Ask Codex…"
-        promptField.font = .systemFont(ofSize: 12)
+        promptField.isEditable = true
+        promptField.isSelectable = true
+        promptField.isEnabled = true
+        promptField.usesSingleLineMode = true
+        promptField.cell?.isScrollable = true
+        promptField.placeholderString = kind == .chatgpt ? "Ask ChatGPT…":"Ask Codex…"
+        promptField.font = WebbyTypography.font(ofSize: 12)
         promptField.isBordered = false
         promptField.drawsBackground = false
         promptField.focusRingType = .none
         promptField.alignment = .center
+        if kind == .chatgpt {
+            registerForDraggedTypes([.png,.tiff,.fileURL])
+            attachmentStrip.spacing=6;addSubview(attachmentStrip)
+            pasteMonitor=NSEvent.addLocalMonitorForEvents(matching:.keyDown){[weak self] event in
+                guard let self,event.window === self.window,self.promptField.currentEditor() != nil,event.modifierFlags.intersection([.command,.option,.control,.shift]) == .command,event.charactersIgnoringModifiers?.lowercased()=="v",self.acceptImages(NSPasteboard.general) else{return event}
+                return nil
+            }
+        }
         promptField.target = self
         promptField.action = #selector(promptPressed)
         promptButton.isBordered = false
-        promptButton.font = .systemFont(ofSize: 17)
+        promptButton.font = WebbyTypography.font(ofSize: 17)
         promptButton.target = self
         promptButton.action = #selector(promptPressed)
         promptGlass.material = .hudWindow
@@ -481,9 +776,9 @@ private struct WidgetPlacement: Codable {
         albumArt.wantsLayer = true
         albumArt.layer?.cornerRadius = 10
         albumArt.layer?.masksToBounds = true
-        trackTitle.font = .systemFont(ofSize: 14, weight: .semibold)
+        trackTitle.font = WebbyTypography.font(ofSize: 14, weight: .semibold)
         trackTitle.lineBreakMode = .byTruncatingTail
-        trackArtist.font = .systemFont(ofSize: 11)
+        trackArtist.font = WebbyTypography.font(ofSize: 11)
         trackArtist.textColor = .secondaryLabelColor
         trackArtist.lineBreakMode = .byTruncatingTail
         for (button, symbol, selector) in [(musicPrevious, "backward.fill", #selector(previousTrack)),
@@ -500,8 +795,12 @@ private struct WidgetPlacement: Codable {
         musicProgress.minValue = 0
         musicProgress.maxValue = 1
         calculatorField.cell = VerticallyCenteredPromptCell(textCell: "")
-        calculatorField.placeholderString = "Type an equation…"
-        calculatorField.font = .systemFont(ofSize: 17, weight: .medium)
+        calculatorField.isEditable = true
+        calculatorField.isSelectable = true
+        calculatorField.textColor = .labelColor
+        calculatorField.placeholderString = "Try sqrt(9), 2π, ans…"
+        calculatorField.toolTip = "Scientific calculator · radians (or use °) · Enter saves ans · sqrt, sin, cos, tan, ln, log, powers, factorials"
+        calculatorField.font = WebbyTypography.font(ofSize: 17, weight: .medium)
         calculatorField.alignment = .center
         calculatorField.isBordered = false
         calculatorField.drawsBackground = false
@@ -509,20 +808,21 @@ private struct WidgetPlacement: Codable {
         calculatorField.target = self
         calculatorField.action = #selector(calculatePressed)
         calculatorField.delegate = self
-        calculatorAnswer.font = .systemFont(ofSize: 26, weight: .light)
+        calculatorAnswer.font = WebbyTypography.font(ofSize: 26, weight: .light)
         calculatorAnswer.alignment = .center
-        calculatorHistory.font = .systemFont(ofSize: 11)
+        calculatorHistory.font = WebbyTypography.font(ofSize: 11)
         calculatorHistory.textColor = .secondaryLabelColor
         calculatorHistory.alignment = .center
         calculatorHistory.maximumNumberOfLines = 4
         for view in [icon, title, subtitle, body, action, close, sparkline,
                      weatherIcon, weatherMeta, value, detail, hourly, promptGlass, promptField, promptButton,
-                     albumArt, trackTitle, trackArtist, musicPrevious, musicToggle, musicNext, musicProgress,
+                     spotifyBrand, albumArt, trackTitle, trackArtist, musicPrevious, musicToggle, musicNext, musicProgress,
                      calculatorField, calculatorAnswer, calculatorHistory] { addSubview(view) }
+        spotifyBrand.isHidden = kind != .music
         for view in hourSymbols { addSubview(view) }
         for view in hourLabels { addSubview(view) }
         set(subtitle: "", lines: [])
-        feedStatus.font = .systemFont(ofSize:9)
+        feedStatus.font = WebbyTypography.font(ofSize:9)
         feedStatus.textColor = .secondaryLabelColor
         feedStatus.lineBreakMode = .byTruncatingTail
         feedStatus.isHidden = true
@@ -532,9 +832,13 @@ private struct WidgetPlacement: Codable {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    func prepareGitHub(profile: UUID) { githubWidget?.configure(profile: profile) }
+    func prepareCodex(profile: UUID) { codexAppWidget?.configure(profile:profile) }
+
     private func loadBrandIcon() {
         let address: String
         switch kind {
+        case .chatgpt: address = "https://chatgpt.com/favicon.ico"
         case .calendar: address = "https://calendar.google.com/googlecalendar/images/favicons_2020q4/calendar_31.ico"
         case .gmail: address = "https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico"
         case .drive: address = "https://ssl.gstatic.com/docs/doclist/images/drive_2022q3_32dp.png"
@@ -647,6 +951,8 @@ private struct WidgetPlacement: Codable {
         weatherHalo.add(glow, forKey: "weatherGlow")
     }
     func setFeedVisible(_ visible: Bool) {
+        githubWidget?.setFeedVisible(visible)
+        codexAppWidget?.setFeedVisible(visible)
         feedVisible=visible
         updateFeedMotion()
     }
@@ -754,7 +1060,9 @@ private struct WidgetPlacement: Codable {
     }
 
     func setCalculatorHistory(_ entries: [String]) {
-        calculatorHistory.stringValue = entries.prefix(4).joined(separator: "\n")
+        let text = entries.prefix(4).joined(separator: "\n")
+        guard calculatorHistory.stringValue != text else { return }
+        calculatorHistory.stringValue = text
         needsLayout = true
     }
 
@@ -819,7 +1127,12 @@ private struct WidgetPlacement: Codable {
         promptButton.isHidden = true
         promptGlass.isHidden = true
         for view in [albumArt, trackTitle, trackArtist, musicPrevious, musicToggle, musicNext,
-                     musicProgress, calculatorField, calculatorAnswer, calculatorHistory] { view.isHidden = true }
+                     musicProgress, calculatorAnswer, calculatorHistory] { view.isHidden = true }
+        // Hiding an actively edited NSTextField detaches its field editor.
+        // Keep the calculator input visible throughout layout/refresh/resize.
+        if calculatorField.isHidden != (kind != .calculator) {
+            calculatorField.isHidden = kind != .calculator
+        }
         close.isHidden = compact
         close.frame = NSRect(x: width - 27, y: height - 29, width: 21, height: 21)
         skeleton.frame=bounds;skeleton.isHidden = !showSkeleton
@@ -827,6 +1140,15 @@ private struct WidgetPlacement: Codable {
         feedStatus.frame=NSRect(x:14,y:4,width:max(1,width-28),height:12)
         if showSkeleton {
             icon.isHidden=true;subtitle.isHidden=true;body.isHidden=true;action.isHidden=true;sparkline.isHidden=true
+            return
+        }
+        if kind == .ide || kind.githubKind != nil || kind == .codex || kind == .codexUsage {
+            icon.isHidden=true;subtitle.isHidden=true;body.isHidden=true;action.isHidden=true;sparkline.isHidden=true
+            let inset:CGFloat = compact ? 8 : 14
+            let contentFrame=NSRect(x:inset,y:inset,width:max(1,width-inset*2),height:max(1,height-inset-(compact ? inset : 32)))
+            if kind == .ide { projectWidget.frame=contentFrame }
+            else if kind.githubKind != nil { githubWidget?.frame=contentFrame }
+            else { codexAppWidget?.frame=contentFrame }
             return
         }
         if kind == .calendar {
@@ -837,11 +1159,16 @@ private struct WidgetPlacement: Codable {
             return
         }
         if kind == .music {
+            icon.contentTintColor=nil
             icon.isHidden = true; subtitle.isHidden = true; body.isHidden = true
             action.isHidden = true; sparkline.isHidden = true
             albumArt.isHidden = music == nil
             let padding = min(20, max(12, min(width, height) * 0.055))
             let tiny = width < 180 || height < 120
+            spotifyBrand.isHidden=music == nil
+            let badge:CGFloat=tiny ? 14:22
+            spotifyBrand.frame=NSRect(x:tiny ? 6:14,y:height-badge-(tiny ? 6:10),width:badge,height:badge)
+            let height=max(1,height-(tiny ? 0:28))
             let stacked = !tiny && height >= 220 && height >= width * 0.72
             let art: NSRect
             if tiny {
@@ -854,8 +1181,8 @@ private struct WidgetPlacement: Codable {
                 let bottom = max(padding, (height-side-footer)/2)
                 art = NSRect(x:(width-side)/2, y:bottom+footer, width:side, height:side)
                 trackTitle.alignment = .center; trackArtist.alignment = .center
-                trackTitle.font = .systemFont(ofSize:width >= 300 ? 16 : 14, weight:.semibold)
-                trackArtist.font = .systemFont(ofSize:12)
+                trackTitle.font = WebbyTypography.font(ofSize:width >= 300 ? 16 : 14, weight:.semibold)
+                trackArtist.font = WebbyTypography.font(ofSize:12)
                 trackTitle.maximumNumberOfLines = 1
                 trackTitle.frame = NSRect(x:padding, y:art.minY-30, width:width-padding*2, height:24)
                 trackArtist.frame = NSRect(x:padding, y:art.minY-50, width:width-padding*2, height:18)
@@ -879,8 +1206,8 @@ private struct WidgetPlacement: Codable {
                 let groupHeight = titleHeight+18+buttonSide+36
                 let bottom = max(padding,(height-groupHeight)/2)
                 trackTitle.alignment = .left;trackArtist.alignment = .left
-                trackTitle.font = .systemFont(ofSize:width >= 400 ? 17 : 14,weight:.semibold)
-                trackArtist.font = .systemFont(ofSize:width >= 400 ? 12 : 11)
+                trackTitle.font = WebbyTypography.font(ofSize:width >= 400 ? 17 : 14,weight:.semibold)
+                trackArtist.font = WebbyTypography.font(ofSize:width >= 400 ? 12 : 11)
                 trackTitle.maximumNumberOfLines = !dense && textWidth < 180 ? 2 : 1
                 trackTitle.frame = NSRect(x:textX,y:bottom+groupHeight-titleHeight,width:max(1,textWidth-32),height:titleHeight)
                 trackArtist.frame = NSRect(x:textX,y:trackTitle.frame.minY-22,width:textWidth,height:18)
@@ -906,11 +1233,11 @@ private struct WidgetPlacement: Codable {
             promptGlass.isHidden = false
             let fieldWidth = max(40, width - 30)
             if compact {
-                calculatorField.font = .systemFont(ofSize: 15, weight: .medium)
+                calculatorField.font = WebbyTypography.font(ofSize: 15, weight: .medium)
                 calculatorField.frame = NSRect(x: 15, y: (height - 32) / 2, width: fieldWidth, height: 32)
                 calculatorAnswer.isHidden = true
             } else {
-                calculatorField.font = .systemFont(ofSize: medium ? 16 : 20, weight: .medium)
+                calculatorField.font = WebbyTypography.font(ofSize: medium ? 16 : 20, weight: .medium)
                 calculatorField.frame = NSRect(x: 15, y: (height - 40) / 2,
                                                width: fieldWidth, height: 40)
                 calculatorAnswer.frame = NSRect(x: 15, y: (height - 40) / 2 - 39,
@@ -929,12 +1256,12 @@ private struct WidgetPlacement: Codable {
             icon.contentTintColor = battery.percentage <= 20 ? .systemRed : .systemGreen
             if compact {
                 icon.frame = NSRect(x: (width - 35)/2, y: 13, width: 35, height: 28)
-                value.isHidden = false; value.font = .systemFont(ofSize: 19, weight: .medium)
+                value.isHidden = false; value.font = WebbyTypography.font(ofSize: 19, weight: .medium)
                 value.alignment = .center
                 value.frame = NSRect(x: 4, y: height - 38, width: width - 8, height: 25)
             } else {
                 icon.frame = NSRect(x: 20, y: height - 83, width: 50, height: 50)
-                value.isHidden = false; value.font = .systemFont(ofSize: medium ? 30 : 42, weight: .light)
+                value.isHidden = false; value.font = WebbyTypography.font(ofSize: medium ? 30 : 42, weight: .light)
                 value.alignment = .left
                 value.frame = NSRect(x: 83, y: height - 80, width: width - 105, height: 50)
                 detail.isHidden = false
@@ -979,7 +1306,7 @@ private struct WidgetPlacement: Codable {
         if kind == .stocks, stock != nil {
             icon.isHidden = true; subtitle.isHidden = true; body.isHidden = true
             action.isHidden = true; weatherMeta.isHidden = false; detail.isHidden = false
-            weatherMeta.font = .systemFont(ofSize: compact ? 14 : 17, weight: .semibold)
+            weatherMeta.font = WebbyTypography.font(ofSize: compact ? 14 : 17, weight: .semibold)
             weatherMeta.frame = NSRect(x: 16, y: height - (compact ? 30 : 41), width: width - 48, height: 25)
             detail.textColor = (stock?.changePercent ?? 0) >= 0 ? .systemGreen : .systemRed
             if compact {
@@ -987,7 +1314,7 @@ private struct WidgetPlacement: Codable {
                 detail.frame = NSRect(x: 16, y: 13, width: width - 30, height: 24)
             } else {
                 value.isHidden = false; sparkline.isHidden = sparkline.values.count < 2
-                value.font = .systemFont(ofSize: medium ? 25 : 33, weight: .light)
+                value.font = WebbyTypography.font(ofSize: medium ? 25 : 33, weight: .light)
                 value.frame = NSRect(x: 16, y: height - (medium ? 77 : 87), width: width - 32, height: 39)
                 detail.frame = NSRect(x: width - 105, y: height - 40, width: 80, height: 22)
                 detail.alignment = .right
@@ -1002,7 +1329,7 @@ private struct WidgetPlacement: Codable {
             if !feedStatus.isHidden { hourly.isHidden=true }
             return
         }
-        if kind == .codex {
+        if kind == .chatgpt {
             subtitle.isHidden = true; body.isHidden = true; action.isHidden = true
             sparkline.isHidden = true
             icon.isHidden = false
@@ -1010,6 +1337,9 @@ private struct WidgetPlacement: Codable {
             let size = compact ? min(width, height) * 0.59 : medium ? min(width, height) * 0.46 : 72.0
             icon.frame = NSRect(x: (width - size)/2, y: compact ? (height - size)/2 : (height - size)/2 + 17,
                                 width: size, height: size)
+            attachmentStrip.isHidden=compact || chatImages.isEmpty
+            attachmentStrip.frame=NSRect(x:16,y:58,width:width-32,height:38)
+            if kind == .chatgpt && !chatImages.isEmpty && !compact {icon.frame.origin.y=max(102,icon.frame.origin.y)}
             if !compact {
                 promptGlass.isHidden = false; promptField.isHidden = false; promptButton.isHidden = false
                 promptGlass.frame = NSRect(x: 16, y: 14, width: width - 32, height: 38)
@@ -1045,10 +1375,12 @@ private struct WidgetPlacement: Codable {
     }
 
     override func mouseDown(with event: NSEvent) {
+        Motion.interact(self)
+        Motion.basic(gradientRim,key:"opacity",from:0.65,to:1,duration:0.16)
         guard let canvas = superview else { return }
         let point = convert(event.locationInWindow, from: nil)
         if event.clickCount > 1 {
-            if kind != .codex { activate?() }
+            if kind != .codex && kind != .chatgpt { activate?() }
             return
         }
         resizing = point.x >= bounds.width - 32 && point.y <= 32
@@ -1061,12 +1393,17 @@ private struct WidgetPlacement: Codable {
         let point = convert(canvasPoint, from: superview)
         guard bounds.contains(point) else { return false }
         if kind == .calendar, calendarView.frame.contains(point) { return false }
+        if kind == .ide, projectWidget.containsControl(projectWidget.convert(point,from:self)) { return false }
+        if let view = githubWidget, view.containsControl(view.convert(point,from:self)) { return false }
+        if let view = codexAppWidget, view.containsControl(view.convert(point,from:self)) { return false }
         for control in [action, close, promptField, promptButton, calculatorField,
                         musicPrevious, musicToggle, musicNext] where !control.isHidden {
             if control.bounds.contains(control.convert(point, from: self)) { return false }
         }
         return true
     }
+
+    fileprivate func cancelInteraction() { originalFrame = .zero; didDrag = false; resizing = false }
 
     override func mouseDragged(with event: NSEvent) {
         guard let canvas = superview, originalFrame != .zero else { return }
@@ -1075,21 +1412,38 @@ private struct WidgetPlacement: Codable {
         let dy = current.y - dragStart.y
         guard didDrag || hypot(dx, dy) > 3 else { return }
         didDrag = true
+        var proposed = originalFrame
         if resizing {
-            frame.size = NSSize(width: max(64, originalFrame.width + dx),
-                                height: max(64, originalFrame.height + dy))
-        } else {
-            frame.origin = NSPoint(x: originalFrame.minX + dx,
-                                   y: originalFrame.minY + dy)
-        }
+            proposed.size = NSSize(width: max(64, originalFrame.width + dx), height: max(64, originalFrame.height + dy))
+        } else { proposed.origin = NSPoint(x: originalFrame.minX + dx, y: originalFrame.minY + dy) }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        frame = WidgetAlignment.adjusted(proposed, in: WidgetAlignment.paddedBounds(canvas.bounds), resizing: resizing)
+        (canvas as? WidgetCanvas)?.showAlignmentGuides(for: frame)
+        CATransaction.commit()
         needsLayout = true
     }
 
     override func mouseUp(with event: NSEvent) {
+        (superview as? WidgetCanvas)?.hideAlignmentGuides()
         guard originalFrame != .zero else { return }
         originalFrame = .zero
         if didDrag { didMoveOrResize?(frame) }
-        else if kind == .codex { submitCodex?("") }
+        else if kind == .codex {
+            if frame.width < 250 || frame.height < 220 {
+                frame.size=NSSize(width:max(340,frame.width),height:max(250,frame.height))
+                if let canvas = superview { frame = WidgetAlignment.fit(frame, in: canvas.bounds) }
+                needsLayout=true;layoutSubtreeIfNeeded();didMoveOrResize?(frame)
+            }
+            codexAppWidget?.focusComposer()
+        }
+        else if kind == .chatgpt {
+            if promptField.isHidden {
+                frame.size=NSSize(width:max(260,frame.width),height:max(180,frame.height))
+                if let canvas = superview { frame = WidgetAlignment.fit(frame, in: canvas.bounds) }
+                needsLayout=true;layoutSubtreeIfNeeded();didMoveOrResize?(frame)
+            }
+            window?.makeFirstResponder(promptField)
+        }
         didDrag = false
     }
 
@@ -1097,30 +1451,107 @@ private struct WidgetPlacement: Codable {
     @objc private func closePressed() { remove?() }
     @objc private func promptPressed() {
         let prompt = promptField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty || (kind == .chatgpt && !chatImages.isEmpty) else {window?.makeFirstResponder(promptField);return}
+        Motion.change(promptGlass,character:.panel)
         promptField.stringValue = ""
-        submitCodex?(prompt)
+        if kind == .chatgpt {submitChatGPT?(prompt,chatImages);chatImages=[];refreshAttachments()}
     }
+    deinit {if let pasteMonitor {NSEvent.removeMonitor(pasteMonitor)}}
+    private func acceptImages(_ pasteboard:NSPasteboard)->Bool {
+        guard kind == .chatgpt else{return false}
+        let urls=pasteboard.readObjects(forClasses:[NSURL.self],options:[.urlReadingFileURLsOnly:true]) as? [URL] ?? []
+        var images=urls.prefix(4).compactMap{url -> NSImage? in
+            guard let size=try? url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<16_000_000 else{return nil}
+            return NSImage(contentsOf:url)
+        }
+        if images.isEmpty,let image=NSImage(pasteboard:pasteboard){images=[image]}
+        guard !images.isEmpty else{return false}
+        for image in images where chatImages.count<4 {
+            let size=image.size;guard size.width>0,size.height>0 else{continue}
+            let ratio=min(1,2048/max(size.width,size.height)),target=NSSize(width:max(1,size.width*ratio),height:max(1,size.height*ratio))
+            let scaled=NSImage(size:target);scaled.lockFocus();image.draw(in:NSRect(origin:.zero,size:target));scaled.unlockFocus()
+            guard let tiff=scaled.tiffRepresentation,let rep=NSBitmapImageRep(data:tiff),let data=rep.representation(using:.png,properties:[:]),data.count<=4_000_000 else{continue}
+            chatImages.append(ChatGPTWidgetImage(name:"Image-\(chatImages.count+1).png",data:data))
+        }
+        refreshAttachments();window?.makeFirstResponder(promptField);return true
+    }
+    private func refreshAttachments(){
+        Motion.change(attachmentStrip,character:.widget)
+        for view in attachmentStrip.arrangedSubviews {attachmentStrip.removeArrangedSubview(view);view.removeFromSuperview()}
+        for(i,image) in chatImages.enumerated(){let button=NSButton();button.image=NSImage(data:image.data);button.imagePosition = .imageOnly;button.imageScaling = .scaleProportionallyUpOrDown;button.isBordered=false;button.tag=i;button.target=self;button.action=#selector(removeAttachment(_:));button.toolTip="Remove \(image.name)";button.widthAnchor.constraint(equalToConstant:38).isActive=true;button.heightAnchor.constraint(equalToConstant:38).isActive=true;attachmentStrip.addArrangedSubview(button)}
+        needsLayout=true
+    }
+    @objc private func removeAttachment(_ sender:NSButton){guard chatImages.indices.contains(sender.tag) else{return};chatImages.remove(at:sender.tag);refreshAttachments()}
+    override func draggingEntered(_ sender:NSDraggingInfo)->NSDragOperation {kind == .chatgpt ? .copy:[]}
+    override func performDragOperation(_ sender:NSDraggingInfo)->Bool {acceptImages(sender.draggingPasteboard)}
+
     @objc private func previousTrack() { musicCommand?(.previous) }
     @objc private func togglePlayback() { musicCommand?(.toggle) }
     @objc private func nextTrack() { musicCommand?(.next) }
+    private var calculatorLastAnswer: Double = 0
     @objc private func calculatePressed() {
         let expression = calculatorField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        var calculator = ExpressionCalculator(expression)
+        var calculator = ExpressionCalculator(expression, ans: calculatorLastAnswer)
         guard !expression.isEmpty, let answer = calculator.evaluate() else {
             calculatorAnswer.stringValue = expression.isEmpty ? "" : "Check expression"
             return
         }
         let result = answer.rounded() == answer && abs(answer) < 1e15 ? String(format: "%.0f", answer) : String(format: "%.10g", answer)
-        calculatorAnswer.stringValue = result
+        calculatorLastAnswer = answer
+        presentCalculatorAnswer(result, confirmed: true)
         calculatorCalculated?("\(expression) = \(result)")
     }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
+        guard control === calculatorField,
+              command == #selector(NSResponder.insertNewline(_:)) || command == NSSelectorFromString("insertNewlineIgnoringFieldEditor:") else { return false }
+        calculatePressed()
+        return true // Calculate in place; keep the caret and normal typing session.
+    }
+
     func controlTextDidChange(_ obj: Notification) {
         guard obj.object as? NSTextField === calculatorField else { return }
+        // Replace complete scientific names in the live editor, preserving the caret.
+        if let editor = calculatorField.currentEditor() as? NSTextView, !editor.hasMarkedText() {
+            let pattern = #"\b(pi|sqrt|sqrrt)\b"#
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+                let matches = regex.matches(in: editor.string, range: NSRange(location: 0, length: (editor.string as NSString).length))
+                var caret = editor.selectedRange()
+                for match in matches.reversed() {
+                    let word = (editor.string as NSString).substring(with: match.range).lowercased()
+                    let symbol = word == "pi" ? "π" : "√"
+                    editor.textStorage?.replaceCharacters(in: match.range, with: symbol)
+                    if match.range.location < caret.location { caret.location -= min(match.range.length - 1, caret.location - match.range.location) }
+                }
+                if !matches.isEmpty { calculatorField.stringValue = editor.string; editor.setSelectedRange(caret) }
+            }
+        }
         let expression = calculatorField.stringValue
-        var calculator = ExpressionCalculator(expression)
-        calculatorAnswer.stringValue = calculator.evaluate().map {
+        var calculator = ExpressionCalculator(expression, ans: calculatorLastAnswer)
+        let result = calculator.evaluate().map {
             $0.rounded() == $0 && abs($0) < 1e15 ? String(format: "%.0f", $0) : String(format: "%.10g", $0)
         } ?? ""
+        presentCalculatorAnswer(result, confirmed: false)
+    }
+
+    private func presentCalculatorAnswer(_ result: String, confirmed: Bool) {
+        let changed = calculatorAnswer.stringValue != result
+        calculatorAnswer.stringValue = result
+        guard (changed || confirmed), !result.isEmpty, Motion.enabled,
+              window?.occlusionState.contains(.visible) == true,
+              !calculatorAnswer.isHiddenOrHasHiddenAncestor else { return }
+        calculatorAnswer.wantsLayer = true
+        guard let layer = calculatorAnswer.layer else { return }
+        // Replace the current spring rather than queuing animations during typing.
+        let lift = CASpringAnimation(keyPath: "transform.translation.y")
+        lift.fromValue = (layer.presentation()?.value(forKeyPath: "transform.translation.y") as? NSNumber)?.doubleValue ?? (confirmed ? -6 : -3)
+        lift.toValue = 0
+        lift.mass = 1; lift.stiffness = confirmed ? 390 : 480; lift.damping = 30
+        lift.duration = min(0.38, lift.settlingDuration)
+        layer.add(lift, forKey: "calculatorAnswerLift")
+        Motion.change(calculatorAnswer, character: .editor)
+        if confirmed {
+            Motion.basic(promptGlass.layer, key: "opacity", from: 0.72, to: 1, duration: 0.22)
+        }
     }
 }
 
@@ -1202,3 +1633,5 @@ private final class VerticallyCenteredPromptCell: NSTextFieldCell {
         }
     }
 }
+
+struct ChatGPTWidgetImage {let name:String;let data:Data}

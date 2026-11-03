@@ -1,0 +1,287 @@
+{
+  "measurement" : "WK snapshot callback latency; alternating ABBA order; same image dimensions; no total-GPU-time claim",
+  "optimization" : "-O",
+  "samples" : [
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 16.621583345113322,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 4.9571666459087282,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 4.946875007590279,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 4.0025833295658231,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 4.2241666524205357,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 4.2785416590049863,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 4.1131250036414713,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 4.1469999996479601,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 4.0373750089202076,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.7616666522808373,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.8303750043269247,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.776666650082916,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.8702083402313292,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.6317083286121488,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.4188749850727618,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.5498333163559437,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.5400833294261247,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.5994583158753812,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.538124990882352,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.6110416695009917,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.5712916578631848,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.5819583281408995,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.4344999876338989,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.4924999927170575,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.3856666705105454,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.5810000263154507,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.5448333364911377,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.827708336757496,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.7145833484828472,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.8390833360608667,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.8192499778233469,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.5312083491589874,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.5811666748486459,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.5185416636522859,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.7655000051017851,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.8817499880678952,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.8239583373069763,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.855583316180855,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : false,
+      "milliseconds" : 3.982291673310101,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    },
+    {
+      "afterScreenUpdates" : true,
+      "milliseconds" : 3.8569166790693998,
+      "pixelHeight" : 1000,
+      "pixelWidth" : 1700,
+      "sha256" : "1a22fbcdcec90381b9fcac2a79f43a9016146dfdfe7c7e82acec5e4608091434"
+    }
+  ],
+  "url" : "https:\/\/www.wikipedia.org\/"
+}

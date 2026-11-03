@@ -1,0 +1,135 @@
+{
+  "startedUTC": "2026-11-01T23:52:15.261456+00:00",
+  "seed": 20261101,
+  "corpusSHA256": "5944db1c5a6603f885e08535a9e2032e096e85e56b4b9e07005ce7d30976101e",
+  "os": "macOS-14.2-arm64-arm-64bit-Mach-O",
+  "hardware": {
+    "exit": 0,
+    "stdout": "Mac15,12",
+    "stderr": ""
+  },
+  "initialPower": {
+    "exit": 0,
+    "stdout": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=21823587)\t53%; charging; (no estimate) present: true",
+    "stderr": ""
+  },
+  "runs": [
+    {
+      "name": "baseline-0",
+      "variant": "webby",
+      "binarySHA256": "e250a8b84ea57ccf67eb8a46dacb963f5a3b6689a29f2d67706a2858acafb374",
+      "powerBefore": {
+        "exit": 0,
+        "stdout": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=21823587)\t53%; charging; (no estimate) present: true",
+        "stderr": ""
+      },
+      "thermalBefore": {
+        "exit": 0,
+        "stdout": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "stderr": ""
+      },
+      "exit": 0,
+      "elapsedSeconds": 40.13281720801024,
+      "samplesWritten": 12
+    },
+    {
+      "name": "candidate-0",
+      "variant": "webby",
+      "binarySHA256": "a0bab112086df117681ac3b1d449c93342ecc2bb22cad9b6928e99e56036434c",
+      "powerBefore": {
+        "exit": 0,
+        "stdout": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=21823587)\t53%; charging; (no estimate) present: true",
+        "stderr": ""
+      },
+      "thermalBefore": {
+        "exit": 0,
+        "stdout": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "stderr": ""
+      },
+      "exit": 0,
+      "elapsedSeconds": 37.930920542014064,
+      "samplesWritten": 12
+    },
+    {
+      "name": "candidate-1",
+      "variant": "webby",
+      "binarySHA256": "a0bab112086df117681ac3b1d449c93342ecc2bb22cad9b6928e99e56036434c",
+      "powerBefore": {
+        "exit": 0,
+        "stdout": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=21823587)\t55%; charging; (no estimate) present: true",
+        "stderr": ""
+      },
+      "thermalBefore": {
+        "exit": 0,
+        "stdout": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "stderr": ""
+      },
+      "exit": 0,
+      "elapsedSeconds": 37.82227520798915,
+      "samplesWritten": 12
+    },
+    {
+      "name": "baseline-1",
+      "variant": "webby",
+      "binarySHA256": "e250a8b84ea57ccf67eb8a46dacb963f5a3b6689a29f2d67706a2858acafb374",
+      "powerBefore": {
+        "exit": 0,
+        "stdout": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=21823587)\t55%; charging; (no estimate) present: true",
+        "stderr": ""
+      },
+      "thermalBefore": {
+        "exit": 0,
+        "stdout": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "stderr": ""
+      },
+      "exit": 0,
+      "elapsedSeconds": 37.468342334002955,
+      "samplesWritten": 12
+    },
+    {
+      "name": "control-no-glass",
+      "variant": "webby-no-glass",
+      "binarySHA256": "a0bab112086df117681ac3b1d449c93342ecc2bb22cad9b6928e99e56036434c",
+      "powerBefore": {
+        "exit": 0,
+        "stdout": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=21823587)\t57%; charging; (no estimate) present: true",
+        "stderr": ""
+      },
+      "thermalBefore": {
+        "exit": 0,
+        "stdout": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "stderr": ""
+      },
+      "exit": 0,
+      "elapsedSeconds": 38.224762666999595,
+      "samplesWritten": 12
+    },
+    {
+      "name": "control-minimal-wk",
+      "variant": "minimal-wk",
+      "binarySHA256": "a0bab112086df117681ac3b1d449c93342ecc2bb22cad9b6928e99e56036434c",
+      "powerBefore": {
+        "exit": 0,
+        "stdout": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=21823587)\t57%; charging; (no estimate) present: true",
+        "stderr": ""
+      },
+      "thermalBefore": {
+        "exit": 0,
+        "stdout": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "stderr": ""
+      },
+      "exit": 0,
+      "elapsedSeconds": 36.969690875004744,
+      "samplesWritten": 12
+    }
+  ],
+  "limitations": [
+    "Logged-out isolated sessions, not personal signed-in workflows",
+    "Fresh ephemeral WebKit store per run; OS DNS/TLS caches uncontrolled",
+    "Server variation and user background activity uncontrolled",
+    "Host CPU/RSS excludes WebKit content, network and GPU processes",
+    "rAF gaps are opportunities, not compositor FPS or input-to-photon latency",
+    "Small sample: medians/ranges, no fastest-browser or zero-jitter conclusion",
+    "Challenge/error pages retained; load completion alone is not usable-page success"
+  ]
+}

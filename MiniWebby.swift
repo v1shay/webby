@@ -53,12 +53,13 @@ struct MiniWebbyArchive: Codable {
 @MainActor final class MiniWebbySettings:NSObject {
     let hotKey=MiniWebbyHotKey()
     var open:(()->Void)?
+    var toggle:(()->Void)?
     var restore:((MiniWebbyArchive)->Void)?
     private var preferences:NSWindow?
     private var feedback:NSTextField?
     static var externalLinks:Bool {UserDefaults.standard.object(forKey:"webbyMiniExternalLinks")==nil || UserDefaults.standard.bool(forKey:"webbyMiniExternalLinks")}
     static var archiveHours:Int {UserDefaults.standard.object(forKey:"webbyMiniArchiveHours")==nil ? 6 : UserDefaults.standard.integer(forKey:"webbyMiniArchiveHours")}
-    func start(){hotKey.invoke={ [weak self] in self?.open?() };_ = hotKey.register()}
+    func start(){hotKey.invoke={ [weak self] in guard let self else{return};if let toggle=self.toggle {toggle()}else{self.open?()} };_ = hotKey.register()}
     func menu()->NSMenu {
         let menu=NSMenu(title:"Mini Webby")
         let launch=menu.addItem(withTitle:"Open Mini Webby · \(MiniWebbyHotKey.label)",action:#selector(launch),keyEquivalent:"");launch.target=self
@@ -88,10 +89,10 @@ struct MiniWebbyArchive: Codable {
         let panel=NSPanel(contentRect:NSRect(x:0,y:0,width:430,height:210),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         panel.title="Mini Webby Shortcut";panel.isReleasedWhenClosed=false
         let glass=NSVisualEffectView(frame:NSRect(x:0,y:0,width:430,height:210));glass.material = .hudWindow;glass.blendingMode = .behindWindow;glass.state = .active;panel.contentView=glass
-        let heading=NSTextField(labelWithString:"A quick window, from anywhere.");heading.font = .systemFont(ofSize:18,weight:.semibold);heading.frame=NSRect(x:24,y:155,width:385,height:26);glass.addSubview(heading)
+        let heading=NSTextField(labelWithString:"A quick window, from anywhere.");heading.font = WebbyTypography.font(ofSize:18,weight:.semibold);heading.frame=NSRect(x:24,y:155,width:385,height:26);glass.addSubview(heading)
         let hint=NSTextField(wrappingLabelWithString:"Click the shortcut, then press Command, Option, or Control plus one key. Escape cancels.");hint.frame=NSRect(x:24,y:110,width:382,height:38);glass.addSubview(hint)
         let recorder=MiniShortcutRecorder(title:MiniWebbyHotKey.label,target:nil,action:nil);recorder.bezelStyle = .rounded;recorder.frame=NSRect(x:24,y:59,width:200,height:38);glass.addSubview(recorder)
-        let status=NSTextField(wrappingLabelWithString:hotKey.available ? "Two keys. No Accessibility permission needed.":"That shortcut is unavailable. Let’s choose another.");status.font = .systemFont(ofSize:11);status.textColor = .secondaryLabelColor;status.frame=NSRect(x:24,y:15,width:382,height:35);glass.addSubview(status);feedback=status
+        let status=NSTextField(wrappingLabelWithString:hotKey.available ? "Two keys. No Accessibility permission needed.":"That shortcut is unavailable. Let’s choose another.");status.font = WebbyTypography.font(ofSize:11);status.textColor = .secondaryLabelColor;status.frame=NSRect(x:24,y:15,width:382,height:35);glass.addSubview(status);feedback=status
         recorder.record={ [weak self,weak recorder] event in
             guard let self else{return}
             let flags=event.modifierFlags.intersection([.command,.option,.control,.shift])
@@ -159,6 +160,7 @@ struct MiniWebbyArchive: Codable {
         let width=min(640,available.width-40),height=min(360,available.height-40)
         styleMask.insert(.fullSizeContentView)
         for kind in [NSWindow.ButtonType.closeButton,.miniaturizeButton,.zoomButton]{standardWindowButton(kind)?.isHidden=true}
+        animationBehavior = .utilityWindow
         isMovableByWindowBackground=true
         setFrame(NSRect(x:available.midX-width/2,y:available.midY-height/2,width:width,height:height),display:false)
         minSize=NSSize(width:380,height:260);titleVisibility = .hidden;collectionBehavior=[.moveToActiveSpace,.fullScreenAuxiliary]
@@ -171,7 +173,7 @@ struct MiniWebbyArchive: Codable {
         let search=NSVisualEffectView();search.material = .hudWindow;search.blendingMode = .withinWindow;search.state = .active;search.wantsLayer=true;search.layer?.cornerRadius=22;search.layer?.masksToBounds=true;search.layer?.borderWidth=1;search.layer?.borderColor=NSColor.white.withAlphaComponent(0.3).cgColor
         for view in [search,indicator,progress]{view.translatesAutoresizingMaskIntoConstraints=false;root.addSubview(view)}
         addressField.translatesAutoresizingMaskIntoConstraints=false;search.addSubview(addressField)
-        addressField.cell=MiniSearchCell(textCell:"");addressField.isEditable=true;addressField.isSelectable=true;addressField.isEnabled=true;addressField.usesSingleLineMode=true;addressField.cell?.isScrollable=true;addressField.alignment = .center;addressField.placeholderString="Search or enter a URL";addressField.font = .systemFont(ofSize:16);addressField.focusRingType = .none;addressField.isBordered=false;addressField.drawsBackground=false
+        addressField.cell=MiniSearchCell(textCell:"");addressField.isEditable=true;addressField.isSelectable=true;addressField.isEnabled=true;addressField.usesSingleLineMode=true;addressField.cell?.isScrollable=true;addressField.alignment = .center;addressField.placeholderString="Search or enter a URL";addressField.font = WebbyTypography.font(ofSize:16);addressField.focusRingType = .none;addressField.isBordered=false;addressField.drawsBackground=false
         indicator.title="";indicator.isBordered=false;indicator.wantsLayer=true;indicator.layer?.addSublayer(engine.layer)
         engine.setProfile(BrowserTheme.profile(for:owner),wave:false);engine.showScene(BrowserExperiment.scene(for:owner,index:profiles.firstIndex{$0.0==owner} ?? 0))
         indicator.toolTip=profiles.first{$0.0==owner}?.1;indicator.target=self;indicator.action=#selector(chooseProfile)

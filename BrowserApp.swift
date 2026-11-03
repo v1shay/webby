@@ -2,6 +2,161 @@ import AppKit
 import WebKit
 import LocalAuthentication
 import Security
+import os
+
+/// Changes only the position of WebKit's existing native PiP window. Video,
+/// transport buttons and native resize tracking remain owned by WebKit/macOS.
+@MainActor final class NativePiPWindowMotion {
+    private var monitor: Any?
+    var isMonitoring: Bool { monitor != nil }
+    private var timer: Timer?
+    private weak var dragged: NSWindow?
+    private var startMouse = NSPoint.zero
+    private var startOrigin = NSPoint.zero
+    private var samples: [(NSPoint, TimeInterval)] = []
+
+    func setActive(_ active: Bool) {
+        if !active {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil; cancel(); return
+        }
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown,.leftMouseDragged,.leftMouseUp]) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self else { return event }
+                return self.handle(event)
+            }
+        }
+    }
+
+    func cancel() {
+        timer?.invalidate(); timer = nil; dragged = nil; samples.removeAll()
+    }
+
+    static func canDrag(_ window: NSWindow, at location: NSPoint) -> Bool {
+        guard let root = window.contentView else { return false }
+        let point = root.convert(location, from: nil)
+        let safe = root.bounds.insetBy(dx: 10, dy: 10)
+        guard safe.contains(point) else { return false } // Native edge/corner resizing.
+        var hit = root.hitTest(point)
+        while let view = hit {
+            if view is NSControl { return false } // Preserve play, close and return controls.
+            hit = view.superview
+        }
+        return true
+    }
+
+    fileprivate func handle(_ event: NSEvent) -> NSEvent? {
+        if event.type == .leftMouseDown {
+            guard let window = event.window,
+                  NSStringFromClass(type(of: window)).contains("PIPPanel"), event.clickCount == 1,
+                  !event.modifierFlags.contains(.command),
+                  Self.canDrag(window, at: event.locationInWindow) else { return event }
+            begin(window, point: NSEvent.mouseLocation, time: event.timestamp)
+            return nil
+        }
+        guard dragged != nil else { return event }
+        if event.type == .leftMouseDragged { move(point: NSEvent.mouseLocation, time: event.timestamp); return nil }
+        if event.type == .leftMouseUp { finish(point: NSEvent.mouseLocation, time: event.timestamp); return nil }
+        return event
+    }
+
+    func begin(_ window: NSWindow, point: NSPoint, time: TimeInterval) {
+        cancel(); dragged = window; startOrigin = window.frame.origin; startMouse = point
+        samples = [(point,time)]
+    }
+
+    private func record(_ point: NSPoint, _ time: TimeInterval) {
+        samples.append((point,time))
+        samples.removeAll { time - $0.1 > 0.10 }
+        if samples.count > 16 { samples.removeFirst(samples.count - 16) }
+    }
+
+    static func screenBounds(for point: NSPoint, window: NSWindow) -> NSRect {
+        (NSScreen.screens.first { $0.frame.contains(point) } ?? window.screen ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x:0,y:0,width:1280,height:800)
+    }
+
+    static func clamp(_ origin: NSPoint, size: NSSize, in bounds: NSRect) -> NSPoint {
+        NSPoint(x:min(max(bounds.minX,origin.x),max(bounds.minX,bounds.maxX-size.width)),
+                y:min(max(bounds.minY,origin.y),max(bounds.minY,bounds.maxY-size.height)))
+    }
+
+    func move(point: NSPoint, time: TimeInterval) {
+        guard let window = dragged else { return }
+        record(point,time)
+        let next = NSPoint(x:startOrigin.x+point.x-startMouse.x, y:startOrigin.y+point.y-startMouse.y)
+        window.setFrameOrigin(Self.clamp(next,size:window.frame.size,in:Self.screenBounds(for:point,window:window)))
+    }
+
+    @discardableResult func finish(point: NSPoint, time: TimeInterval) -> Bool {
+        guard let window = dragged else { return false }
+        move(point:point,time:time)
+        let first = samples.first ?? (point,time)
+        let dt = time-first.1
+        let velocity = dt > 0.008 ? NSPoint(x:(point.x-first.0.x)/dt,y:(point.y-first.0.y)/dt) : .zero
+        let delta = NSPoint(x:point.x-startMouse.x,y:point.y-startMouse.y)
+        let distance = hypot(delta.x,delta.y)
+        dragged = nil; samples.removeAll()
+        guard distance >= 8 else { return false }
+        let bounds = Self.screenBounds(for:point,window:window)
+        let target = Self.directionalCorner(origin:startOrigin,delta:delta,size:window.frame.size,bounds:bounds)
+        spring(window, target:target, velocity:velocity, bounds:bounds)
+        return true
+    }
+
+    static func corner(origin: NSPoint, velocity: NSPoint, size: NSSize, bounds: NSRect) -> NSPoint {
+        let predicted = NSPoint(x:origin.x+size.width/2+velocity.x*0.18,
+                                y:origin.y+size.height/2+velocity.y*0.18)
+        let inset = bounds.insetBy(dx:14,dy:14)
+        return clamp(NSPoint(x:predicted.x < bounds.midX ? inset.minX : inset.maxX-size.width,
+                             y:predicted.y < bounds.midY ? inset.minY : inset.maxY-size.height),size:size,in:bounds)
+    }
+
+    /// Choose by drag intent, not by whether the pointer crossed half the screen.
+    /// Ignore minor off-axis hand movement, preserving the current corner on that axis.
+    static func directionalCorner(origin: NSPoint, delta: NSPoint, size: NSSize, bounds: NSRect) -> NSPoint {
+        let threshold = max(8, max(abs(delta.x),abs(delta.y))*0.45)
+        let right = abs(delta.x) >= threshold ? delta.x > 0 : origin.x+size.width/2 >= bounds.midX
+        let top = abs(delta.y) >= threshold ? delta.y > 0 : origin.y+size.height/2 >= bounds.midY
+        let inset = bounds.insetBy(dx:14,dy:14)
+        return clamp(NSPoint(x:right ? inset.maxX-size.width : inset.minX,
+                             y:top ? inset.maxY-size.height : inset.minY),size:size,in:bounds)
+    }
+
+    /// Analytic damped spring, preserving release velocity. There is no idle timer.
+    static func position(start: NSPoint, target: NSPoint, velocity: NSPoint, time: Double) -> NSPoint {
+        let omega = 20.0, damping = 0.88
+        let wd = omega*sqrt(1-damping*damping), decay = exp(-damping*omega*time)
+        func axis(_ from: CGFloat, _ to: CGFloat, _ speed: CGFloat) -> CGFloat {
+            let x = Double(from-to), v = min(2400,max(-2400,Double(speed)))
+            return to + CGFloat(decay*(x*cos(wd*time)+(v+damping*omega*x)/wd*sin(wd*time)))
+        }
+        return NSPoint(x:axis(start.x,target.x,velocity.x),y:axis(start.y,target.y,velocity.y))
+    }
+
+    private func spring(_ window: NSWindow, target: NSPoint, velocity: NSPoint, bounds: NSRect) {
+        timer?.invalidate()
+        let start = window.frame.origin
+        guard Motion.enabled else { window.setFrameOrigin(target); return }
+        let started = ProcessInfo.processInfo.systemUptime
+        let fps = min(120,max(60,window.screen?.maximumFramesPerSecond ?? 60))
+        let animation = Timer(timeInterval:1/Double(fps),repeats:true) { [weak self,weak window] tick in
+            MainActor.assumeIsolated {
+                guard let self,let window,window.isVisible else {tick.invalidate();return}
+                let t = ProcessInfo.processInfo.systemUptime-started
+                if t >= 0.48 {
+                    window.setFrameOrigin(target);tick.invalidate();self.timer = nil
+                } else {
+                    let point = Self.position(start:start,target:target,velocity:velocity,time:t)
+                    window.setFrameOrigin(Self.clamp(point,size:window.frame.size,in:bounds))
+                }
+            }
+        }
+        timer = animation
+        RunLoop.main.add(animation,forMode:.common)
+    }
+}
 
 final class BrowserTab {
     let id = UUID()
@@ -10,6 +165,7 @@ final class BrowserTab {
     var ownerSpaceID: UUID?
     var fuseSearch = true
     var title = "New Tab"
+    var siteName:String?
     var searchDraft = ""
     var pendingSearchInput: String?
     var showsSearchView = false
@@ -18,6 +174,8 @@ final class BrowserTab {
     var currentNavigation: WKNavigation?
     var hasUnsavedEdits = false
     var captureMayBeActive = false
+    var hasPictureInPicture = false
+    var returningPictureInPicture = false
     var restoredScroll: NSPoint?
     var discardCheckInFlight = false
     var loadError: String?
@@ -38,7 +196,7 @@ final class BrowserTab {
     var splitSurfaceConstraints: [NSLayoutConstraint] { ide != nil ? ideConstraints : pageConstraints }
     var canSplit: Bool {
         !isFloating && (ide != nil || (!isTerminal && webView != nil &&
-            (webView?.url != nil || URL(string: searchDraft)?.host != nil)))
+            (webView?.url != nil || currentNavigation != nil || URL(string: searchDraft)?.host != nil)))
     }
     var terminalView: NativeTerminalPane?
     var webView: WKWebView?
@@ -107,6 +265,7 @@ private struct TabGroupRecord: Codable {
     let profileID: UUID
     var name: String
     var collapsed: Bool
+    var automaticName:Bool? = nil
 }
 
 private enum SitePermission: String, CaseIterable {
@@ -120,10 +279,12 @@ private enum SitePermission: String, CaseIterable {
     }
 }
 
-@MainActor private final class TabGroupHeader: NSVisualEffectView, NSTextFieldDelegate {
+@MainActor private final class TabGroupHeader: NSView, NSTextFieldDelegate {
     let groupID: UUID
     let nameField = NSTextField()
     let disclosure = NSButton()
+    private let tint=CAGradientLayer()
+    private let countLabel=NSTextField(labelWithString:"")
     var onRename: ((String) -> Void)?
     var onToggle: (() -> Void)?
     var onDrop: ((UUID) -> Void)?
@@ -132,44 +293,65 @@ private enum SitePermission: String, CaseIterable {
     init(groupID: UUID) {
         self.groupID = groupID
         super.init(frame: .zero)
-        material = .sidebar
-        blendingMode = .withinWindow
-        state = .active
         wantsLayer = true
-        layer?.cornerRadius = 10
-        layer?.borderWidth = 0.6
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
+        layer?.cornerRadius = 12
+        layer?.masksToBounds=true
+        tint.cornerRadius=12;tint.opacity=0;layer?.addSublayer(tint)
+        layer?.borderWidth = 0
         disclosure.isBordered = false
         disclosure.target = self
         disclosure.action = #selector(toggle)
         disclosure.translatesAutoresizingMaskIntoConstraints = false
         nameField.isBordered = false
         nameField.drawsBackground = false
-        nameField.font = .systemFont(ofSize: 12, weight: .semibold)
+        nameField.font = WebbyTypography.font(ofSize: 12, weight: .semibold)
         nameField.delegate = self
         nameField.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(disclosure)
-        addSubview(nameField)
+        countLabel.font=WebbyTypography.font(ofSize:10,weight:.semibold)
+        countLabel.textColor = .secondaryLabelColor;countLabel.alignment = .center
+        countLabel.translatesAutoresizingMaskIntoConstraints=false
+        nameField.lineBreakMode = .byTruncatingTail
+        addSubview(disclosure);addSubview(nameField);addSubview(countLabel)
         translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             disclosure.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
             disclosure.centerYAnchor.constraint(equalTo: centerYAnchor),
             disclosure.widthAnchor.constraint(equalToConstant: 24),
             nameField.leadingAnchor.constraint(equalTo: disclosure.trailingAnchor, constant: 4),
-            nameField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            nameField.trailingAnchor.constraint(equalTo: countLabel.leadingAnchor, constant: -5),
+            countLabel.trailingAnchor.constraint(equalTo:trailingAnchor,constant:-9),
+            countLabel.centerYAnchor.constraint(equalTo:centerYAnchor),
+            countLabel.widthAnchor.constraint(equalToConstant:24),
             nameField.centerYAnchor.constraint(equalTo: centerYAnchor),
             heightAnchor.constraint(equalToConstant: 36)
         ])
         registerForDraggedTypes([.string])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    func configure(name: String, collapsed: Bool) {
-        if window?.firstResponder !== nameField.currentEditor() { nameField.stringValue = name }
+    override func layout() {super.layout();CATransaction.begin();CATransaction.setDisableActions(true);tint.frame=bounds;CATransaction.commit()}
+    func configure(name: String, collapsed: Bool, count:Int, profile:PetGradientProfile) {
+        if nameField.currentEditor()==nil {nameField.stringValue=name}
+        countLabel.stringValue=String(count)
+        BrowserTheme.apply(profile.gradients.ambient,to:tint,alpha:0.12)
+        layer?.borderWidth=0
+        toolTip="Command-click another tab to add it · Drag tabs here · Click the arrow to collapse"
+        setAccessibilityLabel("\(name), \(count) tabs, \(collapsed ? "collapsed":"expanded")")
+        if disclosure.title != (collapsed ? "▸":"▾") {Motion.change(disclosure,character:.tabs)}
         disclosure.title = collapsed ? "▸" : "▾"
     }
     func focusName() { window?.makeFirstResponder(nameField); nameField.currentEditor()?.selectAll(nil) }
     @objc private func toggle() { onToggle?() }
-    func controlTextDidEndEditing(_ obj: Notification) { onRename?(nameField.stringValue) }
+    private var committingName=false
+    func controlTextDidEndEditing(_ obj: Notification) {if !committingName {onRename?(nameField.stringValue)}}
+    func control(_ control:NSControl,textView:NSTextView,doCommandBy commandSelector:Selector)->Bool {
+        guard commandSelector==NSSelectorFromString("insertNewline:") || commandSelector==NSSelectorFromString("insertNewlineIgnoringFieldEditor:") else{return false}
+        committingName=true
+        nameField.stringValue=textView.string
+        onRename?(textView.string)
+        window?.makeFirstResponder(nil)
+        committingName=false
+        return true
+    }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         sender.draggingPasteboard.string(forType: .string).flatMap(UUID.init(uuidString:)) == nil ? [] : .move
     }
@@ -185,6 +367,74 @@ private enum SitePermission: String, CaseIterable {
         return menu
     }
     @objc private func deleteGroup() { onDelete?() }
+}
+
+@MainActor private final class TabGroupContainer:NSView {
+    let header:TabGroupHeader
+    let members=NSStackView()
+    let clip=NSView()
+    let frost=NSVisualEffectView()
+    let horizontal:Bool
+    private var extent:NSLayoutConstraint!
+    private var contentExtent:NSLayoutConstraint!
+    private var initialized=false
+    private(set) var collapsed=false
+    init(header:TabGroupHeader,horizontal:Bool=false) {
+        self.header=header;self.horizontal=horizontal
+        super.init(frame:.zero);translatesAutoresizingMaskIntoConstraints=false;wantsLayer=true
+        layer?.cornerRadius=14;layer?.borderWidth=0.6;layer?.borderColor=NSColor.white.withAlphaComponent(0.13).cgColor
+        frost.material = .sidebar;frost.blendingMode = .withinWindow;frost.state = .active
+        frost.wantsLayer=true;frost.layer?.cornerRadius=14;frost.layer?.masksToBounds=true
+        frost.translatesAutoresizingMaskIntoConstraints=false;addSubview(frost)
+        clip.wantsLayer=true;clip.layer?.masksToBounds=true;clip.translatesAutoresizingMaskIntoConstraints=false
+        members.orientation=horizontal ? .horizontal:.vertical;members.alignment=horizontal ? .centerY:.leading;members.spacing=0
+        members.translatesAutoresizingMaskIntoConstraints=false
+        addSubview(header);addSubview(clip);clip.addSubview(members)
+        NSLayoutConstraint.activate([frost.leadingAnchor.constraint(equalTo:leadingAnchor),frost.trailingAnchor.constraint(equalTo:trailingAnchor),frost.topAnchor.constraint(equalTo:topAnchor),frost.bottomAnchor.constraint(equalTo:bottomAnchor)])
+        if horizontal {
+            extent=clip.widthAnchor.constraint(equalToConstant:0);contentExtent=members.widthAnchor.constraint(equalToConstant:0)
+            NSLayoutConstraint.activate([heightAnchor.constraint(equalToConstant:39),header.leadingAnchor.constraint(equalTo:leadingAnchor,constant:4),header.widthAnchor.constraint(equalToConstant:140),header.centerYAnchor.constraint(equalTo:centerYAnchor),clip.leadingAnchor.constraint(equalTo:header.trailingAnchor),clip.trailingAnchor.constraint(equalTo:trailingAnchor,constant:-4),clip.topAnchor.constraint(equalTo:topAnchor),clip.bottomAnchor.constraint(equalTo:bottomAnchor),members.leadingAnchor.constraint(equalTo:clip.leadingAnchor),members.topAnchor.constraint(equalTo:clip.topAnchor),members.heightAnchor.constraint(equalTo:clip.heightAnchor),extent,contentExtent])
+        } else {
+            extent=clip.heightAnchor.constraint(equalToConstant:0);contentExtent=members.heightAnchor.constraint(equalToConstant:0)
+            NSLayoutConstraint.activate([header.leadingAnchor.constraint(equalTo:leadingAnchor,constant:4),header.trailingAnchor.constraint(equalTo:trailingAnchor,constant:-4),header.topAnchor.constraint(equalTo:topAnchor,constant:3),clip.topAnchor.constraint(equalTo:header.bottomAnchor),clip.bottomAnchor.constraint(equalTo:bottomAnchor,constant:-5),clip.leadingAnchor.constraint(equalTo:leadingAnchor,constant:24),clip.trailingAnchor.constraint(equalTo:trailingAnchor,constant:-8),members.leadingAnchor.constraint(equalTo:clip.leadingAnchor),members.trailingAnchor.constraint(equalTo:clip.trailingAnchor),members.topAnchor.constraint(equalTo:clip.topAnchor),extent,contentExtent])
+        }
+        updateGlass(opacity:0,material:BrowserGlass.matchPageGlassSidebar ? .popover:.sidebar)
+    }
+    required init?(coder:NSCoder){fatalError()}
+    func updateGlass(opacity:Double,material:NSVisualEffectView.Material) {
+        frost.material=material;frost.alphaValue=opacity
+        frost.appearance=BrowserGlass.matchPageGlassSidebar ? nil:NSAppearance(named:.darkAqua)
+        let visibility=1-BrowserGlass.sidebarTransparency*0.86
+        layer?.backgroundColor=NSColor.white.withAlphaComponent(0.04*visibility).cgColor
+        layer?.borderColor=NSColor.white.withAlphaComponent(0.16*visibility).cgColor
+    }
+    func setMembers(_ rows:[TabRow],collapsed:Bool) {
+        let full=CGFloat(rows.count)*(horizontal ? 210:39)
+        let target:CGFloat=collapsed ? 0:full
+        let visible=window?.occlusionState.contains(.visible)==true
+        if !initialized && visible {superview?.layoutSubtreeIfNeeded()}
+        let animate=(self.collapsed != collapsed || abs(extent.constant-target)>0.5) && Motion.enabled && visible
+        let views:[NSView]=[self,header,clip,frost]
+        let previous=views.map{($0,$0.layer?.presentation()?.bounds ?? $0.layer?.bounds ?? .zero,$0.layer?.presentation()?.position ?? $0.layer?.position ?? .zero)}
+        for child in members.arrangedSubviews where !rows.contains(where:{$0 === child}) {members.removeArrangedSubview(child);child.removeFromSuperview()}
+        for (i,row) in rows.enumerated() {
+            if row.superview !== members {if let stack=row.superview as? NSStackView,stack.arrangedSubviews.contains(row) {stack.removeArrangedSubview(row)};row.removeFromSuperview();members.addArrangedSubview(row)}
+            if members.arrangedSubviews.firstIndex(of:row) != i {members.removeArrangedSubview(row);members.insertArrangedSubview(row,at:min(i,members.arrangedSubviews.count))}
+        }
+        self.collapsed=collapsed
+        contentExtent.constant=full;extent.constant=target
+        superview?.layoutSubtreeIfNeeded();layoutSubtreeIfNeeded()
+        if animate {
+            for (view,bounds,position) in previous {
+                guard let layer=view.layer else{continue}
+                for (key,from,to) in [("bounds",NSValue(rect:bounds),NSValue(rect:layer.bounds)),("position",NSValue(point:position),NSValue(point:layer.position))] {
+                    let spring=CASpringAnimation(keyPath:key);spring.fromValue=from;spring.toValue=to;spring.mass=1;spring.stiffness=420;spring.damping=34;spring.duration=min(0.42,spring.settlingDuration);layer.add(spring,forKey:"groupFold."+key)
+                }
+            }
+        }
+        if !initialized {Motion.reveal(self,character:.tabs)}
+        initialized=true
+    }
 }
 
 @MainActor private final class TerminalTabIconView: NSView {
@@ -223,6 +473,7 @@ private final class TabActionButton: NSButton, NSDraggingSource {
     let tabID: UUID
     var allowsTabDrag = false
     private(set) var physicalDoubleClick = false
+    private(set) var physicalModifiers:NSEvent.ModifierFlags=[]
 
     init(tabID: UUID, title: String, target: AnyObject, action: Selector) {
         self.tabID = tabID
@@ -250,7 +501,14 @@ private final class TabActionButton: NSButton, NSDraggingSource {
         }
     }
 
+    override func acceptsFirstMouse(for event:NSEvent?)->Bool {true}
     override func mouseDown(with event: NSEvent) {
+        physicalModifiers=event.modifierFlags
+        defer {physicalModifiers=[]}
+        if event.modifierFlags.contains(.command),action == #selector(BrowserApp.selectTabAction(_:)) {
+            NSApp.sendAction(action!,to:target,from:self)
+            return
+        }
         if (superview as? TabRow)?.beginPinResize(with: event) == true { return }
         guard allowsTabDrag, let window else {
             super.mouseDown(with: event)
@@ -285,7 +543,7 @@ private final class TabActionButton: NSButton, NSDraggingSource {
                      xRadius: 8, yRadius: 8).fill()
         NSString(string: row.titleButton.title).draw(at: NSPoint(x: 34, y: 10),
                                                       withAttributes: [.foregroundColor: NSColor.labelColor,
-                                                                       .font: NSFont.systemFont(ofSize: 12)])
+                                                                       .font: WebbyTypography.font(ofSize: 12)])
         image.unlockFocus()
         item.setDraggingFrame(row.bounds, contents: image)
         beginDraggingSession(with: [item], event: event, source: self)
@@ -380,6 +638,7 @@ private final class PinnedTabGrid: NSView {
 
     func beginResize(_ row: TabRow, event: NSEvent, resizeWidth: Bool, resizeHeight: Bool) {
         guard let window, rows.contains(row) else { return }
+        for row in rows {Motion.interact(row)}
         onBeginResize?()
         let start = event.locationInWindow
         let initialWidth = row.pinWidthFraction
@@ -422,6 +681,7 @@ private final class TabRow: NSView {
     var pinWidthFraction: CGFloat = 0.5
     var pinHeight: CGFloat = 72
     var horizontal = false
+    private let pageColorFill = CAShapeLayer()
     var pageColor: NSColor = .windowBackgroundColor
     let titleButton: TabActionButton
     private let selectButton: TabActionButton
@@ -435,6 +695,7 @@ private final class TabRow: NSView {
     private let closeIcon = GradientSymbolView(symbol: "xmark", size: 12)
     private var terminalIcon: TerminalTabIconView?
     private let selectionGradient = CAGradientLayer()
+    private let groupRail=CAGradientLayer()
     private let loadingTrack = CAShapeLayer()
     private let loadingBeam = CAShapeLayer()
     private let loadingGradient = CAGradientLayer()
@@ -442,11 +703,13 @@ private final class TabRow: NSView {
     private var loadingFraction: CGFloat = 0
     private var hovered = false
     private var selected = false
+    private var grouped=false
     private var tileMode = false
     private var rowHeight: NSLayoutConstraint!
     private var iconLeading: NSLayoutConstraint!
     private var iconCenterY: NSLayoutConstraint!
     private var titleCenterY: NSLayoutConstraint!
+    private var titleTrailing:NSLayoutConstraint!
     private var closeCenterY: NSLayoutConstraint!
     private var closeTrailing: NSLayoutConstraint!
     private var iconCenterX: NSLayoutConstraint!
@@ -470,6 +733,7 @@ private final class TabRow: NSView {
     private var lastHorizontalSelected: Bool?
     private var lastHorizontalPinned: Bool?
     private var lastHorizontalColor: NSColor?
+    private var lastEdgeMatch = false
     private var lastPresentation: Presentation?
     var themeSpaceID: UUID?
 
@@ -530,6 +794,7 @@ private final class TabRow: NSView {
         addSubview(iconContainer)
         addSubview(titleButton)
         addSubview(closeButton)
+        layer?.addSublayer(groupRail);groupRail.opacity=0;groupRail.cornerRadius=1.5
         applyTheme(BrowserTheme.profile)
         rowHeight = heightAnchor.constraint(equalToConstant: 39)
         iconLeading = iconContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
@@ -538,6 +803,7 @@ private final class TabRow: NSView {
         iconHeight = iconContainer.heightAnchor.constraint(equalToConstant: 18)
         iconCenterY = iconContainer.centerYAnchor.constraint(equalTo: centerYAnchor)
         titleCenterY = titleButton.centerYAnchor.constraint(equalTo: centerYAnchor)
+        titleTrailing=titleButton.trailingAnchor.constraint(equalTo:closeButton.leadingAnchor,constant:-13)
         closeCenterY = closeButton.centerYAnchor.constraint(equalTo: centerYAnchor)
         closeTrailing = closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5)
         NSLayoutConstraint.activate([
@@ -562,7 +828,7 @@ private final class TabRow: NSView {
             fallbackIcon.topAnchor.constraint(equalTo: iconContainer.topAnchor),
             fallbackIcon.bottomAnchor.constraint(equalTo: iconContainer.bottomAnchor),
             titleButton.leadingAnchor.constraint(equalTo: iconContainer.trailingAnchor, constant: 7),
-            titleButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -3),
+            titleTrailing,
             titleCenterY,
             closeTrailing,
             closeCenterY,
@@ -579,9 +845,10 @@ private final class TabRow: NSView {
 
     func setHorizontal(pinned: Bool, color: NSColor) {
         guard !horizontal || lastHorizontalTitle != titleButton.title || lastHorizontalSelected != selected
-            || lastHorizontalPinned != pinned || lastHorizontalColor != color else { return }
+            || lastHorizontalPinned != pinned || lastHorizontalColor != color || lastEdgeMatch != BrowserGlass.matchWebsiteEdge else { return }
         lastHorizontalTitle = titleButton.title; lastHorizontalSelected = selected
         lastHorizontalPinned = pinned; lastHorizontalColor = color
+        lastEdgeMatch = BrowserGlass.matchWebsiteEdge
         horizontal = true
         pageColor = color
         setTileMode(pinned)
@@ -592,16 +859,84 @@ private final class TabRow: NSView {
         titleCenterY.constant = pinned ? 0 : 4
         closeCenterY.constant = pinned ? 0 : 4
         closeTrailing.constant = -22
+        titleTrailing.constant = -3
         if pinned { setTileIconSize(20) } else { iconLeading.constant = 26 }
         let rgb = color.usingColorSpace(.deviceRGB) ?? .black
         let light = rgb.redComponent * 0.2126 + rgb.greenComponent * 0.7152 + rgb.blueComponent * 0.0722 > 0.55
-        let text: NSColor = selected && !pinned ? (light ? .black : .white) : .white
-        titleButton.attributedTitle = NSAttributedString(string: titleButton.title, attributes: [.foregroundColor: text, .font: NSFont.systemFont(ofSize: 12, weight: selected ? .semibold : .regular)])
-        needsDisplay = true
+        let text: NSColor = (selected && !pinned) || BrowserGlass.matchWebsiteEdge ? (light ? .black : .white) : .white
+        titleButton.attributedTitle = NSAttributedString(string: titleButton.title, attributes: [.foregroundColor: text, .font: WebbyTypography.font(ofSize: 12, weight: selected ? .semibold : .regular)])
+        needsDisplay = true;needsLayout=true;updateTabGlassMask()
+    }
+
+    fileprivate func horizontalTabPath()->CGPath {
+        if tileMode {return CGPath(roundedRect:bounds.insetBy(dx:3,dy:4),cornerWidth:9,cornerHeight:9,transform:nil)}
+        if !selected {return CGPath(roundedRect:bounds.insetBy(dx:9,dy:4),cornerWidth:8,cornerHeight:8,transform:nil)}
+            let w = bounds.width, h = bounds.height
+            let foot: CGFloat = 16, shoulder: CGFloat = 12
+            let k: CGFloat = 0.55228475
+            let path = CGMutablePath()
+            path.move(to: .zero)
+            path.addLine(to: NSPoint(x: w, y: 0))
+            path.addCurve(to: NSPoint(x: w-foot, y: foot),
+                       control1: NSPoint(x: w-foot*k, y: 0),
+                       control2: NSPoint(x: w-foot, y: foot*(1-k)))
+            path.addLine(to: NSPoint(x: w-foot, y: h-shoulder))
+            path.addCurve(to: NSPoint(x: w-foot-shoulder, y: h),
+                       control1: NSPoint(x: w-foot, y: h-shoulder+shoulder*k),
+                       control2: NSPoint(x: w-foot-shoulder+shoulder*k, y: h))
+            path.addLine(to: NSPoint(x: foot+shoulder, y: h))
+            path.addCurve(to: NSPoint(x: foot, y: h-shoulder),
+                       control1: NSPoint(x: foot+shoulder-shoulder*k, y: h),
+                       control2: NSPoint(x: foot, y: h-shoulder+shoulder*k))
+            path.addLine(to: NSPoint(x: foot, y: foot))
+            path.addCurve(to: .zero,
+                       control1: NSPoint(x: foot, y: foot*(1-k)),
+                       control2: NSPoint(x: foot*k, y: 0))
+            path.closeSubpath();return path
+    }
+    fileprivate func verticalGlassRect()->NSRect {
+        let font=titleButton.font ?? WebbyTypography.font(ofSize:13)
+        let textWidth=min(titleButton.bounds.width,ceil((titleButton.title as NSString).size(withAttributes:[.font:font]).width))
+        let end=min(closeButton.frame.minX-2,max(iconContainer.frame.maxX+8,titleButton.frame.minX+textWidth+10))
+        let height=max(0,min(bounds.height-8,max(30,ceil(font.ascender-font.descender)+10)))
+        return NSRect(x:2,y:(bounds.height-height)/2,width:max(0,end-2),height:height)
+    }
+    fileprivate func updateTabGlassMask() {
+        if horizontal {
+            wantsLayer = true
+            if pageColorFill.superlayer == nil { layer?.insertSublayer(pageColorFill, at: 0) }
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            pageColorFill.frame = bounds
+            pageColorFill.path = horizontalTabPath()
+            pageColorFill.isHidden = !selected || tileMode || grouped
+            CATransaction.commit()
+            Motion.color(pageColorFill, key: "fillColor", to: pageColor.cgColor,
+                         animate: !pageColorFill.isHidden && window?.occlusionState.contains(.visible) == true)
+        }
+        guard let frost=subviews.first(where:{$0 is WallpaperTabFrost}) else{return}
+        CATransaction.begin();CATransaction.setDisableActions(true)
+        if horizontal {
+            let mask=(frost.layer?.mask as? CAShapeLayer) ?? CAShapeLayer()
+            mask.frame=frost.bounds;mask.path=horizontalTabPath();mask.fillColor=NSColor.white.cgColor
+            frost.layer?.cornerRadius=0;frost.layer?.mask=mask
+        } else if tileMode {frost.layer?.mask=nil;frost.layer?.cornerRadius=10}
+        else {
+            let mask=(frost.layer?.mask as? CAShapeLayer) ?? CAShapeLayer()
+            mask.frame=frost.bounds;mask.path=CGPath(roundedRect:verticalGlassRect(),cornerWidth:9,cornerHeight:9,transform:nil);mask.fillColor=NSColor.white.cgColor
+            frost.layer?.cornerRadius=0;frost.layer?.mask=mask
+        }
+        CATransaction.commit()
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        if grouped && !tileMode {
+            if selected || hovered {
+                (selected ? NSColor.black.withAlphaComponent(0.23):NSColor.white.withAlphaComponent(0.07)).setFill()
+                NSBezierPath(roundedRect:bounds.insetBy(dx:3,dy:3),xRadius:10,yRadius:10).fill()
+            }
+            return
+        }
         guard horizontal else { return }
         if tileMode {
             let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 3, dy: 4), xRadius: 9, yRadius: 9)
@@ -614,31 +949,11 @@ private final class TabRow: NSView {
                 NSGradient(colors: colors.compactMap { NSColor(cgColor: $0) })?.draw(in: bounds, angle: 25)
                 NSGraphicsContext.restoreGraphicsState()
             }
-        } else if selected {
-            // Quarter-circle shoulders and outward feet flow into the page edge.
-            let w = bounds.width, h = bounds.height
-            let foot: CGFloat = 16, shoulder: CGFloat = 12
-            let k: CGFloat = 0.55228475
-            let path = NSBezierPath()
-            path.move(to: .zero)
-            path.line(to: NSPoint(x: w, y: 0))
-            path.curve(to: NSPoint(x: w-foot, y: foot),
-                       controlPoint1: NSPoint(x: w-foot*k, y: 0),
-                       controlPoint2: NSPoint(x: w-foot, y: foot*(1-k)))
-            path.line(to: NSPoint(x: w-foot, y: h-shoulder))
-            path.curve(to: NSPoint(x: w-foot-shoulder, y: h),
-                       controlPoint1: NSPoint(x: w-foot, y: h-shoulder+shoulder*k),
-                       controlPoint2: NSPoint(x: w-foot-shoulder+shoulder*k, y: h))
-            path.line(to: NSPoint(x: foot+shoulder, y: h))
-            path.curve(to: NSPoint(x: foot, y: h-shoulder),
-                       controlPoint1: NSPoint(x: foot+shoulder-shoulder*k, y: h),
-                       controlPoint2: NSPoint(x: foot, y: h-shoulder+shoulder*k))
-            path.line(to: NSPoint(x: foot, y: foot))
-            path.curve(to: .zero,
-                       controlPoint1: NSPoint(x: foot, y: foot*(1-k)),
-                       controlPoint2: NSPoint(x: foot*k, y: 0))
-            path.close(); pageColor.setFill(); path.fill()
-        } else if hovered {
+        } else if selected && pageColorFill.superlayer == nil {
+            if let context=NSGraphicsContext.current?.cgContext {
+                context.saveGState();context.addPath(horizontalTabPath());context.setFillColor(pageColor.cgColor);context.fillPath();context.restoreGState()
+            }
+        } else if hovered && !selected {
             NSColor.white.withAlphaComponent(0.08).setFill()
             NSBezierPath(roundedRect: bounds.insetBy(dx: 9, dy: 4), xRadius: 8, yRadius: 8).fill()
         }
@@ -658,6 +973,7 @@ private final class TabRow: NSView {
     func setTileMode(_ enabled: Bool) {
         rowHeight.isActive = !(superview is PinnedTabGrid)
         guard tileMode != enabled else { return }
+        Motion.change(self,character:.tabs)
         tileMode = enabled
         iconLeading.isActive = !enabled
         iconCenterX.isActive = enabled
@@ -807,7 +1123,17 @@ private final class TabRow: NSView {
         return menu
     }
 
+    func setGroupAccent(_ profile:PetGradientProfile?) {
+        if grouped != (profile != nil) {grouped=profile != nil;needsDisplay=true}
+        guard let profile else{groupRail.opacity=0;return}
+        wantsLayer=true
+        if groupRail.superlayer==nil {layer?.addSublayer(groupRail)}
+        groupRail.opacity=0
+        BrowserTheme.apply(profile.gradients.ambient,to:groupRail)
+        needsLayout=true
+    }
     private func updateBackground() {
+        updateTabGlassMask()
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
         selectionGradient.opacity = 0
@@ -836,6 +1162,8 @@ private final class TabRow: NSView {
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        updateTabGlassMask()
+        groupRail.frame=horizontal ? CGRect(x:12,y:2,width:max(0,bounds.width-24),height:2):CGRect(x:2,y:6,width:3,height:max(0,bounds.height-12))
         selectionGradient.frame = bounds
         let radius: CGFloat = tileMode ? 16 : 7
         let path = CGPath(roundedRect: bounds.insetBy(dx: 1.25, dy: 1.25),
@@ -893,23 +1221,28 @@ private final class TabRow: NSView {
         draggingEntered(sender)
     }
 
-    override func draggingExited(_ sender: NSDraggingInfo?) { layer?.borderWidth = 0 }
+    override func draggingExited(_ sender: NSDraggingInfo?) { Motion.change(self,character:.tabs);layer?.borderWidth = 0 }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         layer?.borderWidth = 0
         guard let string = sender.draggingPasteboard.string(forType: .string),
               let source = UUID(uuidString: string) else { return false }
         let point = convert(sender.draggingLocation, from: nil)
-        if horizontal && (point.x < bounds.width * 0.27 || point.x > bounds.width * 0.73) {
-            return owner?.reorderTab(sourceID: source, targetID: tabID, before: point.x < bounds.midX) ?? false
+        if let before=reorderEdge(at:point) {
+            return owner?.reorderTab(sourceID:source,targetID:tabID,before:before) ?? false
         }
-        if !horizontal && (point.y < bounds.height * 0.27 || point.y > bounds.height * 0.73) {
-            return owner?.reorderTab(sourceID: source, targetID: tabID,
-                                     before: point.y > bounds.midY) ?? false
-        }
-        if owner?.splitTabs(sourceID: source, targetID: tabID) == true { return true }
-        return owner?.reorderTab(sourceID: source, targetID: tabID,
-                                 before: horizontal ? point.x < bounds.midX : point.y > bounds.midY) ?? false
+        // The body is exclusively a split target. Never turn a failed split
+        // (for example a sleeping tab) into an unexpected reorder.
+        return owner?.splitTabs(sourceID:source,targetID:tabID) ?? false
+    }
+
+    fileprivate func reorderEdge(at point:NSPoint)->Bool? {
+        let length=horizontal ? bounds.width:bounds.height
+        let position=horizontal ? point.x:point.y
+        let edge=min(10,max(4,length*0.12))
+        if position<edge {return horizontal}
+        if position>length-edge {return !horizontal}
+        return nil
     }
 
     func setLoadingProgress(_ progress: Double?) {
@@ -957,12 +1290,14 @@ private final class TabRow: NSView {
             pinned: isPinned, tile: tileMode, horizontal: horizontal)
         guard lastPresentation != presentation else { return }
         let previous = lastPresentation
+        if previous?.favicon != presentation.favicon || previous?.split != presentation.split {Motion.change(iconContainer,character:.tabs)}
         lastPresentation = presentation
         if titleButton.title != title { titleButton.title = title }
-        if previous?.selected != selected { titleButton.font = .systemFont(ofSize: 13, weight: selected ? .semibold : .regular) }
+        if previous?.selected != selected { titleButton.font = WebbyTypography.font(ofSize: 13, weight: selected ? .semibold : .regular) }
         selectButton.toolTip = superview is PinnedTabGrid
             ? "\(title) • Drag the bottom or right edge to resize" : title
         if self.selected != selected {
+            Motion.change(self,character:.tabs)
             self.selected = selected
             updateBackground()
         }
@@ -988,6 +1323,7 @@ private final class TabRow: NSView {
         pinIcon.isHidden = !isPinned || tileMode
         if tileMode { applyFaviconRim(favicon); updateBackground() }
         setLoadingProgress(loadingProgress)
+        needsLayout=true
     }
 }
 
@@ -1100,26 +1436,49 @@ private final class SplitLinkWebView: WKWebView {
     }
 }
 
-@MainActor final class BrowserApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSearchFieldDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+@MainActor final class BrowserApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSearchFieldDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, NSPopoverDelegate {
     private var window: NSWindow!
     private var content: NSView!
     private var sidebar: NSView!
     private var sidebarBackdrop: NSVisualEffectView!
+    private var sidebarNewTab:GlassButton!
+    private var sidebarNewTabLeading:NSLayoutConstraint!
+    private var sidebarHeaderTop: NSLayoutConstraint!
+    private var sidebarRevealTop: NSLayoutConstraint!
+    private var sidebarTabsTop: NSLayoutConstraint!
+    private var sidebarSeparator: NSBox!
+    private var sidebarTabScroll: NSView!
+    private var sidebarAddressHost: NSView!
+    private var addressPageState: Bool?
+    private var sidebarRevealToggle:GlassButton!
     private var horizontalScroll: NSScrollView!
     private var horizontalStack: NSStackView!
     private var horizontalProfile: NSButton!
+    private var websiteEdgeBackdrop: NSView?
+    private var sidebarEdgeBackdrop: NSView?
     private var horizontalSelection: UUID?
     private var horizontalRows: [UUID: TabRow] = [:]
     private var horizontalGroups: [UUID: TabGroupHeader] = [:]
+    private var horizontalGroupContainers:[UUID:TabGroupContainer]=[:]
     private var horizontalWidths: [UUID: NSLayoutConstraint] = [:]
     private var pageAreaTop: NSLayoutConstraint!
     private var pageChromeColors: [UUID: NSColor] = [:]
+    private var pageAddressColors: [UUID: NSColor] = [:]
+    private var addressEdgeBackdrop: NSView?
     private var sidebarWidth: NSLayoutConstraint!
     private var mainArea: NSView!
     private var mainBackdrop: NSVisualEffectView!
     private var pageArea: NSView!
     private var toolbar: GlassPanel!
     private var toolbarLeading: NSLayoutConstraint!
+    private var addressChromeConstraints: [NSLayoutConstraint] = []
+    private var addressControls: NSStackView!
+    private var addressDismiss: NSButton!
+    private var horizontalTabsTrailing: NSLayoutConstraint!
+    private var addressChromeReady = false
+    private var addressLayoutKey = ""
+    private var sidebarControlTop: NSLayoutConstraint!
+
     private var topAddressSurface: GlassAddressSurface!
     private var addressField: NSTextField!
     private var homeSearchField: NSTextField!
@@ -1144,6 +1503,7 @@ private final class SplitLinkWebView: WKWebView {
     private var wallpaperChromeHost:NSView?
     private var wallpaperPaneBlur:WallpaperTabFrost?
     private var wallpaperWindowBackdrop:WallpaperTabFrost?
+    private var wallpaperMotionState:String?
     private var terminalCommandOnOpen: [UUID: String] = [:]
     private var lastWidgetRefresh: [UUID: Date] = [:]
     private struct WidgetFeedState {
@@ -1165,6 +1525,7 @@ private final class SplitLinkWebView: WKWebView {
     private var homeSearchSurface: GlassAddressSurface!
     private var chromeToggle: GlassButton!
     private var sidebarToggleButton: GlassButton!
+    private var chromeDepartures:[NSView]=[]
     private var newTerminalButton: GlassButton!
     private var sidebarToggleLeading: NSLayoutConstraint!
     private var sidebarToggleTerminalTrailing: NSLayoutConstraint!
@@ -1178,10 +1539,13 @@ private final class SplitLinkWebView: WKWebView {
     private var tabRows = [UUID: TabRow]()
     private var tabGroups: [TabGroupRecord] = []
     private var groupHeaders: [UUID: TabGroupHeader] = [:]
+    private var groupContainers:[UUID:TabGroupContainer]=[:]
     private var sitePermissionWindow: NSWindow?
     private var permissionEditingHost: String?
     private var permissionEditingProfile: UUID?
     private var floatingWindows = [UUID: FloatingTabWindow]()
+    private var ideProjectOpenToken = UUID()
+    private var chatGPTDrafts:[UUID:(String,[ChatGPTWidgetImage])]=[:]
     private var miniTabs:[UUID:BrowserTab]=[:]
     private var miniSuggestions:[UUID:BrowserSuggestionPopup]=[:]
     private var miniPreviousApps:[UUID:NSRunningApplication]=[:]
@@ -1219,11 +1583,15 @@ private final class SplitLinkWebView: WKWebView {
     private let spaceSaveQueue = DispatchQueue(label: "WebKitBrowser.SpaceSave", qos: .utility)
     private var pendingSpaceSave: DispatchWorkItem?
     private var importInProgress = false
+    private var buildingFirstWindow=false
+    private var defersTabRefresh=false
     private var activeSpaceIndex = 0
     private var fusedTabOrder: [UUID] = []
     private var fusedActiveTabID: UUID?
     private var recentlyClosedTabs: [ClosedTabRecord] = []
     private var previousTabID: UUID?
+    private var restoringVideoInline = false
+    private let pipWindowMotion = NativePiPWindowMotion()
     private var recentTabOrder: [UUID] = []
     private var tabShortcutMonitor: Any?
     private var switcherPanel: NSPanel?
@@ -1253,6 +1621,7 @@ private final class SplitLinkWebView: WKWebView {
     private var applyingLayout = false
     private var restoringPinnedSplit = false
     private var sessionSaveWork: DispatchWorkItem?
+    private let sessionWriter = BrowserSnapshotWriter()
     private var tabOffloadTimer: Timer?
     private var memoryPressureSource: DispatchSourceMemoryPressure?
     private var lastDiscardPass = -Double.infinity
@@ -1304,12 +1673,26 @@ private final class SplitLinkWebView: WKWebView {
     }
     private var sidebarVisible = true
     private var sidebarTransitionToken = 0
+    private var mainSidebarLeading:NSLayoutConstraint!
+    private var mainFullLeading:NSLayoutConstraint!
+    private var tabsRetreating=false
+    private var tabsPeekVisible=false
+    private var peekHorizontal=false
+    private var tabsPeekToken=0
+    private var hoverDwell:DispatchWorkItem?
+    private var hoverTarget=""
+    private var tabsRetreatTimer:Timer?
+    private var horizontalHoverGlass:NSVisualEffectView?
+    private var toolbarFromHover=false
     private var terminalMode = false
     private var terminalTransitionToken = 0
     private var toolbarVisible = false
     private var toolbarTransitionToken = 0
     private var toolbarHideTimer: Timer?
     private var eventMonitor: Any?
+    private var controlMotionMonitor:Any?
+    private var commandLinkIntent:(source:UUID,time:TimeInterval)?
+    private weak var pressedMotionButton:NSButton?
     private var fastRule: WKContentRuleList?
     private var fastModeEnabled = true
     private var fastModeItem: NSMenuItem?
@@ -1323,20 +1706,14 @@ private final class SplitLinkWebView: WKWebView {
     private var linkPreviewURL: URL?
     private var cookieHosts = [UUID: [String]]()
     private struct HistoryRevision: Equatable { let space: ObjectIdentifier; let revision: Int }
-    private var suggestionHistoryRevision: [HistoryRevision] = []
-    private struct IndexedHistory {
-        let space: BrowserSpace
-        let link: BrowserLink
-        let title: String
-        let url: String
-        let host: String
-        init(space: BrowserSpace, link: BrowserLink) {
-            self.space = space; self.link = link
-            title = link.title.lowercased(); url = link.url.lowercased()
-            host = URL(string: link.url)?.host?.lowercased() ?? ""
-        }
-    }
-    private var suggestionHistory: [IndexedHistory] = []
+    private let suggestionIndex=BrowserSuggestionIndex()
+    private var suggestionTask:Task<Void,Never>?
+    private var suggestionGeneration=0
+    private var suggestionCompletedGeneration=0
+    private var fuseRouteRevision:[HistoryRevision]=[]
+    private var fuseRoutes:[String:UUID]=[:]
+    private let suggestionSignposter=OSSignposter(subsystem:"local.webby.browser",category:"Interaction")
+    private let typographyWindows=NSHashTable<NSWindow>.weakObjects()
     private weak var editingSearchField: NSTextField?
     private var downloads: BrowserDownloads!
     private let launchedAt = ProcessInfo.processInfo.systemUptime
@@ -1416,6 +1793,7 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        buildingFirstWindow=true
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let saved = BrowserSpaceStore.load()
@@ -1431,22 +1809,23 @@ private final class SplitLinkWebView: WKWebView {
         }
         activeSpaceIndex = min(max(0, UserDefaults.standard.integer(forKey: "browserActiveSpace")), spaces.count - 1)
         BrowserTheme.activate(activeSpace.saved.id)
+        loadRules() // Async lookup starts with launch, not after the first navigation.
         installMenus()
         makeWindow()
         downloads = BrowserDownloads()
         makeSidebar()
         makeMainArea()
         makeHome()
-        widgetTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.pollRealtimeWidgets() }
-        }
-        widgetTimer?.tolerance = 1
+        updateWidgetActivity()
         NotificationCenter.default.addObserver(self, selector: #selector(themeChanged),
                                                name: .browserThemeChanged, object: nil)
+        NotificationCenter.default.addObserver(self,selector:#selector(geistChanged),name:Notification.Name("WebbyGeistChanged"),object:nil)
         NotificationCenter.default.addObserver(self, selector: #selector(glassChanged),
                                                name: .browserGlassChanged, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(searchEngineChanged),
                                                name: .browserSearchEngineChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(addressPlacementChanged), name: Notification.Name("WebbyAddressPlacementChanged"), object: nil)
+        defersTabRefresh=true
         addTab(select: true)
         activeSpace.activeTabID = activeTabID
         _ = restorePinnedTabs()
@@ -1468,6 +1847,7 @@ private final class SplitLinkWebView: WKWebView {
             space.activeTabID = home.id
             if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(home.id) }
         }
+        defersTabRefresh=false
         refreshTabs()
         tabOffloadTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.offloadIdleTabs() }
@@ -1478,14 +1858,34 @@ private final class SplitLinkWebView: WKWebView {
         memoryPressureSource?.resume()
         window.makeKeyAndOrderFront(nil)
         DispatchQueue.main.async { [weak self] in self?.sizeWidgetCanvas() }
+        // Yield a real first frame with working input before secondary services start.
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.15) { [weak self] in self?.startSecondaryServices() }
+        for url in pendingMiniURLs {openExternalLink(url)};pendingMiniURLs=[]
+        pipWindowMotion.setActive(false)
+        hideTrafficLights()
+        themeChanged()
+        buildingFirstWindow=false
+        WebbyIcon.finishStartup()
+        windowShownAt = ProcessInfo.processInfo.systemUptime
+        app.activate(ignoringOtherApps: true)
+        NotificationCenter.default.addObserver(self,selector:#selector(linkGlancesChanged),name:NSNotification.Name("WebbyLinkGlancesChanged"),object:nil)
+        installChromeMonitor()
+        if saved.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.showChromeImport()
+            }
+        }
+    }
+
+    private func startSecondaryServices() {
         let mini=MiniWebbySettings()
         mini.open={ [weak self] in self?.openMiniWebby() }
+        mini.toggle={ [weak self] in self?.toggleMiniWebby() }
         mini.restore={ [weak self] entry in
             guard let self,self.spaces.contains(where:{$0.saved.id==entry.profile}),let url=URL(string:entry.url) else{return}
             self.openMiniWebby(url:url,profile:entry.profile)
         }
         miniSettings=mini;mini.start()
-        for url in pendingMiniURLs {openMiniWebby(url:url)};pendingMiniURLs=[]
         menuBar = BrowserMenuBar(showBrowser: { [weak self] in self?.showBrowserWindow() },
                                  addWidget: { [weak self] in self?.showAddWidget() },
                                  resetWidgets: { [weak self] in self?.widgetCanvas?.resetPositions(); self?.asciiCanvas?.resetPositions() },
@@ -1512,23 +1912,14 @@ private final class SplitLinkWebView: WKWebView {
                                          : GoogleWorkspace.shared.isConnected(service, profile: self.activeSpace.saved.id)
                                  }, asciiCanvas: { [weak self] in self?.asciiCanvas }, openWallpaper: { [weak self] in self?.wallpaper?.openSettings() },
                                  miniMenu: { [weak self] in self?.miniSettings?.menu() ?? NSMenu(title:"Mini Webby") })
-        hideTrafficLights()
-        themeChanged()
-        windowShownAt = ProcessInfo.processInfo.systemUptime
-        app.activate(ignoringOtherApps: true)
-        installChromeMonitor()
-        DispatchQueue.main.async { [weak self] in self?.loadRules() }
-        if saved.isEmpty {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                self?.showChromeImport()
-            }
-        }
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.2) {DesktopWidgetBridge.syncIfEnabled()}
     }
 
     private func makeWindow() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1160, height: 770),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.delegate = self
         window.title = "Webby"
         window.styleMask.insert(.fullSizeContentView)
@@ -1563,6 +1954,7 @@ private final class SplitLinkWebView: WKWebView {
     func windowDidResize(_ notification: Notification) {
         guard notification.object as? NSWindow === window else{return}
         sizeWidgetCanvas()
+        applyAddressChrome()
         restoreHomeSearchPosition()
         if let view=activeWebView {updateGlassTone(for:view)}
     }
@@ -1575,19 +1967,24 @@ private final class SplitLinkWebView: WKWebView {
         spaces.flatMap(\.tabs).contains { $0.ide?.mayClose() == false } ? .terminateCancel : .terminateNow
     }
     func applicationWillTerminate(_ notification: Notification) {
+        WebbyIcon.stop()
+        hoverDwell?.cancel();tabsRetreatTimer?.invalidate();toolbarHideTimer?.invalidate();discardLinkPreview()
+        DesktopWidgetBridge.syncIfEnabled()
+        CodeWorkbenchRuntime.shared.stop()
         miniSettings?.hotKey.stop()
         for id in Array(miniTabs.keys) {closeMiniWebby(id,restoreFocus:false)}
         sessionSaveWork?.cancel()
         tabOffloadTimer?.invalidate()
         memoryPressureSource?.cancel()
         for state in widgetFeedStates.values {state.task?.cancel()}
-        saveSessionTabs()
+        saveSessionTabs(wait: true)
         NotificationCenter.default.removeObserver(self, name: .browserThemeChanged, object: nil)
         NotificationCenter.default.removeObserver(self, name: .browserGlassChanged, object: nil)
         NotificationCenter.default.removeObserver(self, name: .browserSearchEngineChanged, object: nil)
-        suggestions.close()
+        closeSuggestions()
         tabPreview.hide()
         if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+        if let controlMotionMonitor {NSEvent.removeMonitor(controlMotionMonitor)}
         if let tabShortcutMonitor { NSEvent.removeMonitor(tabShortcutMonitor) }
         switcherPanel?.close()
         if let homeSearchDragMonitor { NSEvent.removeMonitor(homeSearchDragMonitor) }
@@ -1596,6 +1993,11 @@ private final class SplitLinkWebView: WKWebView {
         pendingSpaceSave?.cancel()
         let snapshot = spaces.map(\.saved)
         spaceSaveQueue.sync { try? BrowserSpaceStore.save(snapshot) }
+    }
+
+    func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool {
+        if !flag,window != nil {showBrowserWindow()}
+        return true
     }
 
     private func showBrowserWindow() {
@@ -1639,8 +2041,19 @@ private final class SplitLinkWebView: WKWebView {
         showCurrentIndicator()
     }
 
+    @objc private func geistChanged(){
+        for host in NSApp.windows {if let root=host.contentView {WebbyTypography.apply(to:root)}}
+        var configured=Set<ObjectIdentifier>()
+        for tab in spaces.flatMap(\.tabs)+Array(miniTabs.values) {
+            guard let view=tab.webView else{continue}
+            let controller=view.configuration.userContentController
+            if configured.insert(ObjectIdentifier(controller)).inserted {GlassPageInjector.installGeist(into:controller,replace:true)}
+            GlassPageInjector.applyGeist(to:view)
+        }
+    }
+
     @objc private func glassChanged() {
-        defer {applyWallpaperPresentation()}
+        defer {applyWallpaperPresentation(); refreshHorizontalTabs(); updateWebsiteEdgeBackdrop(); if let view=activeWebView {updateGlassTone(for:view)}}
         mainBackdrop.alphaValue = 1 - BrowserGlass.backgroundTransparency
         sidebarBackdrop.material = BrowserGlass.matchPageGlassSidebar ? .popover : .sidebar
         sidebarBackdrop.appearance = BrowserGlass.matchPageGlassSidebar
@@ -1701,6 +2114,7 @@ private final class SplitLinkWebView: WKWebView {
         // Keep the contents at their full width while the glass viewport closes.
         // Constraining children directly to a zero-width sidebar breaks layout.
         let sidebarInner = NSView()
+        sidebarAddressHost = sidebarInner
         sidebarInner.translatesAutoresizingMaskIntoConstraints = false
         sidebar.addSubview(sidebarInner)
         NSLayoutConstraint.activate([
@@ -1712,6 +2126,13 @@ private final class SplitLinkWebView: WKWebView {
 
         let newTab = GlassButton(symbol: "plus", label: "New Tab", target: self, action: #selector(newTabAction))
         newTab.translatesAutoresizingMaskIntoConstraints = false
+        sidebarNewTab=newTab
+        sidebarNewTabLeading=newTab.leadingAnchor.constraint(equalTo:sidebarInner.leadingAnchor,constant:14)
+        sidebarRevealToggle=GlassButton(symbol:"sidebar.left",label:"Keep Tabs Open",target:self,action:#selector(toggleSidebar))
+        sidebarRevealToggle.translatesAutoresizingMaskIntoConstraints=false;sidebarRevealToggle.isHidden=true
+        sidebarInner.addSubview(sidebarRevealToggle)
+        sidebarRevealTop = sidebarRevealToggle.topAnchor.constraint(equalTo:sidebarInner.topAnchor,constant:16)
+        NSLayoutConstraint.activate([sidebarRevealToggle.leadingAnchor.constraint(equalTo:sidebarInner.leadingAnchor,constant:10),sidebarRevealTop,sidebarRevealToggle.widthAnchor.constraint(equalToConstant:34),sidebarRevealToggle.heightAnchor.constraint(equalToConstant:34)])
         spaceLabel = FusedProfileLabel(frame: .zero)
         spaceLabel.showProfile(activeSpace.saved.name, animated: false)
         spaceLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -1720,6 +2141,7 @@ private final class SplitLinkWebView: WKWebView {
         let downloadButton = downloads.button
         downloadButton.translatesAutoresizingMaskIntoConstraints = false
         let separator = NSBox()
+        sidebarSeparator = separator
         separator.boxType = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
         tabStack = NSStackView()
@@ -1763,9 +2185,12 @@ private final class SplitLinkWebView: WKWebView {
         sidebarInner.addSubview(downloadButton)
         sidebarInner.addSubview(separator)
         sidebarInner.addSubview(scroll)
+        sidebarTabScroll = scroll
+        sidebarHeaderTop = newTab.topAnchor.constraint(equalTo:sidebarInner.topAnchor,constant:16)
+        sidebarTabsTop = scroll.topAnchor.constraint(equalTo:newTab.bottomAnchor,constant:26)
         NSLayoutConstraint.activate([
-            newTab.leadingAnchor.constraint(equalTo: sidebarInner.leadingAnchor, constant: 14),
-            newTab.topAnchor.constraint(equalTo: sidebarInner.topAnchor, constant: 16),
+            sidebarNewTabLeading,
+            sidebarHeaderTop,
             newTab.widthAnchor.constraint(equalToConstant: 34), newTab.heightAnchor.constraint(equalToConstant: 34),
             spaceLabel.leadingAnchor.constraint(equalTo: newTab.trailingAnchor, constant: 4),
             spaceLabel.trailingAnchor.constraint(equalTo: downloadButton.leadingAnchor, constant: -4),
@@ -1779,7 +2204,7 @@ private final class SplitLinkWebView: WKWebView {
             separator.topAnchor.constraint(equalTo: newTab.bottomAnchor, constant: 13),
             scroll.leadingAnchor.constraint(equalTo: sidebarInner.leadingAnchor, constant: 8),
             scroll.trailingAnchor.constraint(equalTo: sidebarInner.trailingAnchor, constant: -8),
-            scroll.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 10),
+            sidebarTabsTop,
             scroll.bottomAnchor.constraint(equalTo: sidebarInner.bottomAnchor, constant: -10),
             tabStack.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
             tabStack.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor),
@@ -1794,6 +2219,9 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     private func applyTabPlacement() {
+        chromeDepartures.forEach{$0.removeFromSuperview()};chromeDepartures=[]
+        let searchGeometry=Motion.capture([homeCenter,sidebarToggleButton,newTerminalButton,chromeToggle].compactMap{$0},in:content)
+        let widgetGeometry=widgetCanvas?.captureViewportLayout(in:content) ?? .empty
         configureHorizontalTabs()
         guard tabStack != nil, tabSpacer != nil else { return }
         tabStack.removeArrangedSubview(tabSpacer)
@@ -1802,6 +2230,11 @@ private final class SplitLinkWebView: WKWebView {
             : tabStack.arrangedSubviews.count
         tabStack.insertArrangedSubview(tabSpacer, at: index)
         refreshTabs()
+        if mainArea != nil {
+            content.layoutSubtreeIfNeeded()
+            widgetCanvas?.settleViewportLayout(widgetGeometry,in:content)
+            Motion.settle(searchGeometry,views:[homeCenter,sidebarToggleButton,newTerminalButton,chromeToggle].compactMap{$0},in:content,character:.widget)
+        }
     }
 
     private func makeMainArea() {
@@ -1810,8 +2243,10 @@ private final class SplitLinkWebView: WKWebView {
         mainArea.wantsLayer = true
         mainArea.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(mainArea)
+        mainSidebarLeading=mainArea.leadingAnchor.constraint(equalTo:sidebar.trailingAnchor)
+        mainFullLeading=mainArea.leadingAnchor.constraint(equalTo:content.leadingAnchor)
         NSLayoutConstraint.activate([
-            mainArea.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            mainSidebarLeading,
             mainArea.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             mainArea.topAnchor.constraint(equalTo: content.topAnchor),
             mainArea.bottomAnchor.constraint(equalTo: content.bottomAnchor)
@@ -1866,11 +2301,13 @@ private final class SplitLinkWebView: WKWebView {
         configureSuggestions(for: addressSurface)
         addressSurface.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let controls = NSStackView(views: [back, forward, reload, addressSurface, dismiss])
+        addressControls = controls; addressDismiss = dismiss
         controls.orientation = .horizontal
         controls.alignment = .centerY
-        controls.spacing = 5
+        controls.spacing = 8
         controls.translatesAutoresizingMaskIntoConstraints = false
         toolbar = GlassPanel(radius: 14)
+        toolbar.useBareAddressChrome(surface: addressSurface)
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         toolbar.addSubview(controls)
         mainArea.addSubview(toolbar)
@@ -1881,17 +2318,14 @@ private final class SplitLinkWebView: WKWebView {
         chromeToggle.isHidden = true
         toolbarLeading = toolbar.leadingAnchor.constraint(equalTo: mainArea.leadingAnchor,
                                                           constant: BrowserExperiment.cyclesNewTabProfiles ? 92 : 51)
+        sidebarControlTop = sidebarToggleButton.topAnchor.constraint(equalTo: mainArea.topAnchor, constant: 16)
         sidebarToggleLeading = sidebarToggleButton.leadingAnchor.constraint(equalTo: mainArea.leadingAnchor, constant: 10)
         sidebarToggleTerminalTrailing = sidebarToggleButton.trailingAnchor.constraint(equalTo: mainArea.trailingAnchor, constant: -55)
         terminalButtonLeading = newTerminalButton.leadingAnchor.constraint(equalTo: sidebarToggleButton.trailingAnchor, constant: 7)
         terminalButtonTrailing = newTerminalButton.trailingAnchor.constraint(equalTo: sidebarToggleButton.leadingAnchor, constant: -7)
         NSLayoutConstraint.activate([
-            toolbarLeading,
-            toolbar.trailingAnchor.constraint(equalTo: mainArea.trailingAnchor, constant: -10),
-            toolbar.centerYAnchor.constraint(equalTo: sidebarToggleButton.centerYAnchor),
-            toolbar.heightAnchor.constraint(equalToConstant: 52),
             sidebarToggleLeading,
-            sidebarToggleButton.topAnchor.constraint(equalTo: pageArea.topAnchor, constant: 16),
+            sidebarControlTop,
             sidebarToggleButton.widthAnchor.constraint(equalToConstant: 34),
             sidebarToggleButton.heightAnchor.constraint(equalToConstant: 34),
             terminalButtonLeading,
@@ -1902,8 +2336,8 @@ private final class SplitLinkWebView: WKWebView {
             chromeToggle.centerYAnchor.constraint(equalTo: sidebarToggleButton.centerYAnchor),
             chromeToggle.widthAnchor.constraint(equalToConstant: 34),
             chromeToggle.heightAnchor.constraint(equalToConstant: 34),
-            controls.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor, constant: 9),
-            controls.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor, constant: -9),
+            controls.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor, constant: 10),
+            controls.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor, constant: -10),
             controls.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
             back.widthAnchor.constraint(equalToConstant: 34), back.heightAnchor.constraint(equalToConstant: 34),
             forward.widthAnchor.constraint(equalToConstant: 34), forward.heightAnchor.constraint(equalToConstant: 34),
@@ -1912,8 +2346,14 @@ private final class SplitLinkWebView: WKWebView {
             addressSurface.heightAnchor.constraint(equalToConstant: 34),
             addressSurface.widthAnchor.constraint(greaterThanOrEqualToConstant: 160)
         ])
+        addressChromeReady = true
+        applyAddressChrome()
     }
 
+    @objc private func cycleWallpaperPair() {
+        guard NSApp.currentEvent?.isARepeat != true else{return}
+        wallpaper?.cycleWallpaperSet()
+    }
     @objc private func openWallpaperSettings() { wallpaper?.openSettings() }
 
     private func makeHome() {
@@ -1931,7 +2371,8 @@ private final class SplitLinkWebView: WKWebView {
         wallpaper = BrowserWallpaperView(frame: .zero)
         wallpaper.translatesAutoresizingMaskIntoConstraints = false
         wallpaper.homepage = homeView
-        wallpaper.presentationChanged={ [weak self] in self?.applyWallpaperPresentation() }
+        wallpaper.presentationChanged={ [weak self] in self?.applyWallpaperPresentation();self?.refreshHomeTabColor() }
+        wallpaper.chromeColorChanged={ [weak self] in self?.refreshHomeTabColor() }
         wallpaper.show(profile: activeSpace.saved.id)
         asciiCanvas = ASCIIBackgroundCanvas(frame: .zero)
         asciiCanvas.translatesAutoresizingMaskIntoConstraints = false
@@ -1947,7 +2388,7 @@ private final class SplitLinkWebView: WKWebView {
         globe.onClick = { [weak self] in self?.globeClicked() }
         homeSearchField = NSTextField(string: "")
         homeSearchField.placeholderString = "Search the web or enter a URL"
-        homeSearchField.font = .systemFont(ofSize: 19, weight: .regular)
+        homeSearchField.font = WebbyTypography.font(ofSize: 19, weight: .regular)
         homeSearchField.target = self
         homeSearchField.action = #selector(openHomeSearch)
         let searchSurface = GlassAddressSurface(field: homeSearchField)
@@ -1964,7 +2405,7 @@ private final class SplitLinkWebView: WKWebView {
         center.addSubview(searchSurface)
         loadErrorLabel = NSTextField(labelWithString: "")
         loadErrorLabel.alignment = .center
-        loadErrorLabel.font = .systemFont(ofSize: 12)
+        loadErrorLabel.font = WebbyTypography.font(ofSize: 12)
         loadErrorLabel.textColor = .secondaryLabelColor
         loadErrorLabel.maximumNumberOfLines = 3
         loadErrorLabel.lineBreakMode = .byWordWrapping
@@ -2004,13 +2445,27 @@ private final class SplitLinkWebView: WKWebView {
             guard let self else { return }
             // New cards have no feed data, even if this profile was fetched recently.
             self.lastWidgetRefresh.removeValue(forKey: profile)
+            if self.widgetCanvas.has(.githubRecent),let space = self.spaces.first(where: { $0.saved.id == profile }) {
+                let visits = space.saved.history.map(\.url)
+                Task {
+                    if await GitHubWidgetStore.shared.seedRecent(visits,profile:profile) {
+                        NotificationCenter.default.post(name:.webbyGitHubChanged,object:profile,userInfo:["recentOnly":true])
+                    }
+                }
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.activeSpace.saved.id == profile else { return }
                 self.refreshGoogleWidgets()
             }
         }
         widgetCanvas.activate = { [weak self] kind in self?.activateWidget(kind) }
-        widgetCanvas.submitCodex = { [weak self] prompt in self?.launchCodexWidget(prompt: prompt) }
+        widgetCanvas.openIDEProject = { [weak self] url in self?.openIDEProject(url) }
+        widgetCanvas.openGitHubURL = { [weak self] url in
+            guard let self else { return }
+            self.addTab(select: true)
+            self.navigate(url.absoluteString)
+        }
+        widgetCanvas.submitChatGPT = { [weak self] text,images in self?.launchChatGPTWidget(prompt:text,images:images) }
         widgetCanvas.musicCommand = { [weak self] command in self?.controlSpotify(command) }
         widgetCanvas.calculatorCalculated = { [weak self] line in self?.recordCalculation(line) }
         scroll.documentView = widgetCanvas
@@ -2138,7 +2593,7 @@ private final class SplitLinkWebView: WKWebView {
                         guard abs(dy) > 6, abs(dy) > abs(dx) * 1.15 else { return event }
                     } else { guard hypot(dx, dy) > 6 else { return event } }
                     self.homeSearchIsDragging = true
-                    self.suggestions.close()
+                    self.closeSuggestions()
                     let draft = self.homeSearchField.currentEditor()?.string ?? self.homeSearchField.stringValue
                     self.homeSearchField.abortEditing()
                     self.homeSearchField.stringValue = draft
@@ -2241,8 +2696,16 @@ private final class SplitLinkWebView: WKWebView {
         }
     }
 
+    private var startupWidgetRefresh:DispatchWorkItem?
     private func refreshGoogleWidgets(force: Bool = false) {
         guard widgetCanvas != nil else { return }
+        if buildingFirstWindow {
+            startupWidgetRefresh?.cancel()
+            let work=DispatchWorkItem { [weak self] in self?.refreshGoogleWidgets(force:force) }
+            startupWidgetRefresh=work
+            DispatchQueue.main.asyncAfter(deadline:.now()+0.15,execute:work)
+            return
+        }
         let profile = activeSpace.saved.id
         if !force, let last = lastWidgetRefresh[profile], Date().timeIntervalSince(last) < 120 { return }
         lastWidgetRefresh[profile] = Date()
@@ -2343,7 +2806,30 @@ private final class SplitLinkWebView: WKWebView {
         }
     }
 
+    // Stop the timer itself while its consumers are hidden. Mini-window expiry
+    // remains active independently of homepage visibility.
+    private func updateWidgetActivity() {
+        asciiCanvas?.refreshActivity()
+        let visible = widgetCanvas != nil && homeView?.isHidden == false && window?.isVisible == true && window?.occlusionState.contains(.visible) == true
+        widgetCanvas?.setFeedsVisible(visible)
+        let needed = visible || !miniTabs.isEmpty
+        if !needed { widgetTimer?.invalidate(); widgetTimer = nil; return }
+        guard widgetTimer == nil else { return }
+        widgetTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pollRealtimeWidgets() }
+        }
+        widgetTimer?.tolerance = 1
+    }
+
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        updateWidgetActivity()
+        wallpaper?.refreshActivity()
+        if window.occlusionState.contains(.visible) { pollRealtimeWidgets() }
+    }
+
     private func pollRealtimeWidgets() {
+        updateWidgetActivity()
         let hours=MiniWebbySettings.archiveHours
         if hours>0 {for (id,host) in floatingWindows {if let mini=host as? MiniWebbyWindow,!mini.isKeyWindow,Date().timeIntervalSince(mini.lastUsed)>Double(hours)*3600 {expireMiniWebby(id,hours:hours)}}}
         let visible = widgetCanvas != nil && !homeView.isHidden && window.isVisible && window.occlusionState.contains(.visible)
@@ -2435,6 +2921,7 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     private func activateWidget(_ kind: WebbyWidget) {
+        if kind.githubKind != nil { GitHubWidgetConnection.present(profile: activeSpace.saved.id); return }
         if kind == .calendar { openGoogleService(.calendar); return }
         if let service = kind.googleService {
             if GoogleWorkspace.shared.isConnected(service, profile: activeSpace.saved.id) { openGoogleService(service) }
@@ -2457,7 +2944,11 @@ private final class SplitLinkWebView: WKWebView {
                 UserDefaults.standard.set(note, forKey: "webbyNote.\(activeSpace.saved.id.uuidString)")
                 refreshLocalWidgets(profile: activeSpace.saved.id)
             }
-        case .codex:
+        case .ide:
+            openIDEProject(nil)
+        case .chatgpt:
+            launchChatGPTWidget(prompt:"",images:[])
+        case .codex, .codexUsage:
             launchCodexWidget(prompt: "")
         case .music:
             NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Spotify.app"))
@@ -2487,12 +2978,30 @@ private final class SplitLinkWebView: WKWebView {
         }
     }
 
+    private func launchChatGPTWidget(prompt:String,images:[ChatGPTWidgetImage]) {
+        addTab(select:true)
+        guard let target=activeTab else{return}
+        if !images.isEmpty {chatGPTDrafts[target.id]=(prompt,images)}
+        navigate(ChatGPTWidgetRoute.url(prompt:prompt,hasImages:!images.isEmpty).absoluteString,in:target)
+    }
+    private func sendChatGPTDraft(_ tab:BrowserTab,webView:WKWebView){
+        guard webView.url?.host=="chatgpt.com",let draft=chatGPTDrafts.removeValue(forKey:tab.id),
+              let path=Bundle.main.path(forResource:"ChatGPTWidget",ofType:"js"),let script=try? String(contentsOfFile:path,encoding:.utf8) else{return}
+        let value:[String:Any]=["text":draft.0,"images":draft.1.map{["name":$0.name,"data":$0.data.base64EncodedString()]}]
+        webView.callAsyncJavaScript(script,arguments:["draft":value],in:nil,in:.page){[weak self,weak tab] result in
+            guard let self,let tab,self.tab(id:tab.id) === tab else{return}
+            if case .success(let sent)=result,sent as? Bool==true {return}
+            // A sign-in or changed composer must not discard the draft.
+            self.chatGPTDrafts[tab.id]=draft
+        }
+    }
+
     private func launchCodexWidget(prompt: String) {
-        addTab(select: true)
-        guard let tab = activeTab else { return }
-        let quoted = "'" + prompt.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        terminalCommandOnOpen[tab.id] = prompt.isEmpty ? "codex" : "codex \(quoted)"
-        toggleTerminal()
+        let text = prompt.trimmingCharacters(in:.whitespacesAndNewlines)
+        if text.isEmpty { CodexWidgetHub.open(); return }
+        var url = URLComponents(string:"codex://threads/new")!
+        url.queryItems = [.init(name:"prompt",value:text)]
+        if let url = url.url { NSWorkspace.shared.open(url) }
     }
 
     private func widgetTextPrompt(title: String, value: String) -> String? {
@@ -2516,7 +3025,7 @@ private final class SplitLinkWebView: WKWebView {
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         let editor = NSTextView(frame: scroll.bounds)
-        editor.font = .systemFont(ofSize: 13)
+        editor.font = WebbyTypography.font(ofSize: 13)
         editor.string = value
         scroll.documentView = editor
         alert.accessoryView = scroll
@@ -2548,7 +3057,7 @@ private final class SplitLinkWebView: WKWebView {
         surface.onExpandedEntranceBeam = { [weak self] in self?.suggestions.playEntranceBeam() }
         suggestions.knownFavicon = { [weak self] url in
             guard let self, let host = url.host?.lowercased() else { return nil }
-            return self.spaces.flatMap(\.tabs).first {
+            return self.spaces.lazy.flatMap(\.tabs).first {
                 $0.webView?.url?.host?.lowercased() == host && $0.favicon != nil
             }?.favicon
         }
@@ -2556,6 +3065,7 @@ private final class SplitLinkWebView: WKWebView {
             guard let self else { return }
             self.editingSearchField = nil
             self.navigate(item.url, profileID: item.profileID)
+            self.window.makeFirstResponder(self.activeWebView)
         }
         surface.onBeginEditing = { [weak self] field in
             guard let self else { return }
@@ -2568,7 +3078,7 @@ private final class SplitLinkWebView: WKWebView {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { [weak self] in
                 guard let self, field.currentEditor() == nil else { return }
                 if self.suggestions.containsMouse() { return }
-                self.suggestions.close()
+                self.closeSuggestions()
                 if self.editingSearchField === field { self.editingSearchField = nil }
             }
         }
@@ -2583,13 +3093,18 @@ private final class SplitLinkWebView: WKWebView {
                 return self.suggestions.isShown
             }
             if selector == #selector(NSResponder.cancelOperation(_:)) {
-                self.suggestions.close()
+                self.closeSuggestions()
+                if field === self.addressField {
+                    self.window.makeFirstResponder(self.activeWebView)
+                    self.hideToolbar(animated: true)
+                }
                 return true
             }
             if selector == #selector(NSResponder.insertNewline(_:)), let choice = self.suggestions.selected() {
-                self.suggestions.close()
+                self.closeSuggestions()
                 self.editingSearchField = nil
                 self.navigate(choice.url, profileID: choice.profileID)
+                self.window.makeFirstResponder(self.activeWebView)
                 return true
             }
             return false
@@ -2621,75 +3136,42 @@ private final class SplitLinkWebView: WKWebView {
         spaces.map { .init(id: $0.saved.id, name: $0.saved.name, history: $0.saved.history) }
     }
 
+    private func closeSuggestions() {
+        suggestionGeneration &+= 1;suggestionTask?.cancel();suggestionTask=nil
+        suggestions.close()
+    }
     private func presentSuggestions(for field: NSTextField) {
-        guard !terminalMode, let surface = field.superview else { return }
-        let query = (field.currentEditor()?.string ?? field.stringValue)
-            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if field === homeSearchField && query.isEmpty {
-            suggestions.close()
-            return
+        guard !terminalMode,let surface=field.superview else{return}
+        suggestionGeneration &+= 1
+        let generation=suggestionGeneration
+        suggestionTask?.cancel()
+        suggestions.invalidateSelection()
+        let query=(field.currentEditor()?.string ?? field.stringValue).trimmingCharacters(in:.whitespacesAndNewlines).lowercased()
+        if field === homeSearchField && query.isEmpty {closeSuggestions();return}
+        let fuse=usesFuseSearch,tabID=activeTabID
+        let sources=suggestionSpaces
+        let revision=sources.map{HistoryRevision(space:ObjectIdentifier($0),revision:$0.historyRevision)}
+        let snapshots=sources.map { space in
+            SuggestionSearchSource(id:space.saved.id,identity:ObjectIdentifier(space),revision:space.historyRevision,name:space.saved.name,
+                bookmarks:space.saved.bookmarks,history:space.saved.history,
+                pins:space.tabs.filter(\.isPinned).compactMap { tab in
+                    guard let url=tab.webView?.url?.absoluteString ?? destination(for:tab.searchDraft,profile:space.saved.id)?.absoluteString else{return nil}
+                    return BrowserLink(title:tab.title,url:url,visitedAt:nil)
+                },cookies:cookieHosts[space.saved.id] ?? [])
         }
-        var seen = Set<String>()
-        var items: [BrowserSuggestion] = []
-        var ranked: [(item: BrowserSuggestion, rank: Int)] = []
-        func append(_ title: String, _ url: String, _ kind: BrowserSuggestion.Kind, _ space: BrowserSpace, indexed: IndexedHistory? = nil) {
-            if query.isEmpty && items.count >= 8 { return }
-            let key = indexed?.url ?? url.lowercased()
-            let titleKey = indexed?.title ?? title.lowercased()
-            if !query.isEmpty && !titleKey.contains(query) && !key.contains(query) { return }
-            let identity = key + (usesFuseSearch ? "|" + space.saved.id.uuidString : "")
-            guard !seen.contains(identity) else { return }
-            var rank = 0
-            if !query.isEmpty {
-                let host = indexed?.host ?? URL(string: url)?.host?.lowercased() ?? ""
-                let match = host == query ? 0 : (host.hasPrefix(query) ? 1 : (titleKey.hasPrefix(query) ? 2 : 3))
-                let kindRank: Int
-                switch kind { case .pinned: kindRank = 0; case .bookmark: kindRank = 1; case .history: kindRank = 2; case .cookie: kindRank = 3 }
-                rank = match * 10 + kindRank
-                if ranked.count == 8 && rank >= ranked[7].rank { return }
-            }
-            guard let parsed = URL(string: url), ["http", "https"].contains(parsed.scheme?.lowercased() ?? "") else { return }
-            seen.insert(identity)
-            let item = BrowserSuggestion(title: title, url: url, kind: kind,
-                profileID: space.saved.id, profileName: usesFuseSearch ? space.saved.name : nil)
-            if query.isEmpty { items.append(item) }
-            else {
-                let index = ranked.firstIndex { $0.rank > rank } ?? ranked.count
-                ranked.insert((item, rank), at: index)
-                if ranked.count > 8 { ranked.removeLast() }
-            }
+        let index=suggestionIndex,signposter=suggestionSignposter
+        let interval=signposter.beginInterval("Suggestions",id:signposter.makeSignpostID())
+        suggestionTask=Task(priority:.userInitiated) { @MainActor [weak self,weak field,weak surface] in
+            defer {signposter.endInterval("Suggestions",interval)}
+            let result=await index.search(query,sources:snapshots,fuse:fuse)
+            guard !Task.isCancelled,let self,let field,let surface,
+                  self.suggestionGeneration==generation,self.activeTabID==tabID,self.usesFuseSearch==fuse,
+                  self.suggestionSpaces.map({HistoryRevision(space:ObjectIdentifier($0),revision:$0.historyRevision)})==revision,
+                  (field.currentEditor()?.string ?? field.stringValue).trimmingCharacters(in:.whitespacesAndNewlines).lowercased()==query else{return}
+            if fuse {self.fuseRoutes=result.routes;self.fuseRouteRevision=revision}
+            self.suggestions.show(result.items,at:surface)
+            self.suggestionCompletedGeneration=generation
         }
-        let sources = suggestionSpaces
-        for tab in tabs where tab.isPinned && sources.contains(where: { $0.saved.id == ownerSpace(for: tab).saved.id }) {
-            let owner = ownerSpace(for: tab)
-            if let url = tab.webView?.url?.absoluteString ?? destination(for: tab.searchDraft, profile: owner.saved.id)?.absoluteString {
-                append(tab.title, url, .pinned, owner)
-            }
-        }
-        for space in sources {
-            for link in space.saved.bookmarks { append(link.title, link.url, .bookmark, space) }
-        }
-        let revision = sources.map { HistoryRevision(space: ObjectIdentifier($0), revision: $0.historyRevision) }
-        if suggestionHistoryRevision != revision {
-            suggestionHistoryRevision = revision
-            var indexed: [IndexedHistory] = []
-            for space in sources {
-                for link in space.saved.history { indexed.append(IndexedHistory(space: space, link: link)) }
-            }
-            indexed.sort { ($0.link.visitedAt ?? .distantPast) > ($1.link.visitedAt ?? .distantPast) }
-            suggestionHistory = indexed
-        }
-        for entry in suggestionHistory {
-            if query.isEmpty && items.count >= 8 { break }
-            append(entry.link.title, entry.link.url, .history, entry.space, indexed: entry)
-        }
-        if !query.isEmpty {
-            for space in sources {
-                for host in cookieHosts[space.saved.id] ?? [] { append(host, "https://\(host)", .cookie, space) }
-            }
-        }
-        if !query.isEmpty { items = ranked.map { $0.item } }
-        suggestions.show(items, at: surface)
     }
 
     private func terminalPane(for tab: BrowserTab) -> NativeTerminalPane {
@@ -2732,7 +3214,7 @@ private final class SplitLinkWebView: WKWebView {
             old.tabs.removeAll { $0.id == tab.id }
             space.tabs.append(tab)
             if old.activeTabID == tab.id { old.activeTabID = old.tabs.first?.id }
-            tab.groupID = nil
+            // A Fuse group can span accounts; changing the new tab’s owner keeps its group.
         }
         tab.ownerSpaceID = space.saved.id
         space.activeTabID = tab.id
@@ -2748,7 +3230,7 @@ private final class SplitLinkWebView: WKWebView {
         guard BrowserExperiment.cyclesNewTabProfiles,
               let tab = activeTab, tab.webView == nil, !tab.isTerminal,
               !spaces.isEmpty else { toggleTerminal(); return }
-        suggestions.close()
+        closeSuggestions()
         let current = tab.fuseSearch ? nil : tab.ownerSpaceID
         if let next = FuseHistoryRouting.nextProfile(after: current, profiles: spaces.map { $0.saved.id }),
            let space = spaces.first(where: { $0.saved.id == next }) {
@@ -2848,7 +3330,7 @@ private final class SplitLinkWebView: WKWebView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
     }
 
-    private func saveSessionTabs() {
+    private func saveSessionTabs(wait: Bool = false) {
         guard restoreTabsOnLaunch else { return }
         let pages = spaces.flatMap { space in
             space.tabs.compactMap { tab -> BrowserSessionRecord.Page? in
@@ -2862,7 +3344,7 @@ private final class SplitLinkWebView: WKWebView {
                              groupID: tab.groupID)
             }
         }
-        UserDefaults.standard.set(try? JSONEncoder().encode(BrowserSessionRecord(pages: pages)), forKey: "webbySessionTabs")
+        sessionWriter.save(BrowserSessionRecord(pages: pages), key: "webbySessionTabs", wait: wait)
     }
 
     private func restoreSessionTabs() {
@@ -2896,17 +3378,22 @@ private final class SplitLinkWebView: WKWebView {
         let candidates = spaces.flatMap(\.tabs).filter {
             canDiscard($0, cutoff: cutoff) && !recent.contains($0.id)
         }.sorted { a, b in a.isPinned == b.isPinned ? a.lastActiveAt < b.lastActiveAt : !a.isPinned }
-        // Bound cross-process checks and release oldest, unpinned pages first.
-        for tab in candidates.prefix(memoryPressure ? 4 : 2) { checkDiscard(tab, cutoff: cutoff) }
+        // A soft working-set target accelerates only already-eligible idle tabs.
+        // User idle timeouts, dirty/media/capture/split checks and keep-loaded
+        // exceptions are unchanged. No timer is added and each pass stays bounded.
+        let loaded = spaces.reduce(0) { $0 + $1.tabs.lazy.filter { $0.webView != nil }.count }
+        let budget = BrowserWorkingSet.discardBatch(loaded: loaded, physicalMemory: ProcessInfo.processInfo.physicalMemory, pressure: memoryPressure)
+        for tab in candidates.prefix(budget) { checkDiscard(tab, cutoff: cutoff) }
     }
 
     private func canDiscard(_ tab: BrowserTab, cutoff: Date) -> Bool {
         guard tab.id != activeTabID, !(splitTabIDs?.contains(tab.id) ?? false), !tab.isFloating,
-              !tab.isTerminal, !tab.navigationInProgress, !tab.hasUnsavedEdits, !tab.captureMayBeActive,
+              !tab.isTerminal, !tab.navigationInProgress, !tab.hasUnsavedEdits, !tab.captureMayBeActive, !tab.hasPictureInPicture,
               !tab.discardCheckInFlight, tab.lastActiveAt < cutoff,
               keepLoadedKey(for: tab).map { !UserDefaults.standard.bool(forKey: $0) } ?? true,
               let view = tab.webView, view.isHidden, !view.isLoading,
               view.cameraCaptureState == .none, view.microphoneCaptureState == .none,
+              view.fullscreenState == .notInFullscreen,
               downloads?.hasActiveDownloads != true else { return false }
         return true
     }
@@ -2954,6 +3441,7 @@ private final class SplitLinkWebView: WKWebView {
         tab.pageConstraints = []
         tab.webView?.removeFromSuperview()
         tab.webView = nil
+        tab.hasPictureInPicture = false
         tab.currentNavigation = nil
         tab.navigationTiming = BrowserNavigationTiming()
         tab.discardCheckInFlight = false
@@ -3034,7 +3522,7 @@ private final class SplitLinkWebView: WKWebView {
         tab.ide = ide
         tab.isTerminal = true
         tab.title = "IDE"
-        tab.favicon = NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: "IDE")
+        tab.favicon = IDEIdentity.image(size:32)
         ide.onTitleChange = { [weak self, weak tab] title in
             guard let tab else { return }
             tab.title = title
@@ -3053,7 +3541,34 @@ private final class SplitLinkWebView: WKWebView {
         if let project { ide.restoreProject(project) }
     }
 
+    private func openIDEProject(_ project: URL?) {
+        let token=UUID();ideProjectOpenToken=token
+        let origin=activeSpace.saved.id
+        guard let project else { openIDE(); return }
+        let normalized = project.standardizedFileURL
+        Task { [weak self] in
+            let exists = await Task.detached(priority:.userInitiated) { () -> Bool in
+                var directory: ObjCBool = false
+                return FileManager.default.fileExists(atPath:normalized.path,isDirectory:&directory) && directory.boolValue
+            }.value
+            guard let self, self.ideProjectOpenToken == token, self.activeSpace.saved.id == origin else { return }
+            guard exists else {
+                let alert=NSAlert();alert.messageText="We couldn’t find this project";alert.informativeText=normalized.path
+                alert.addButton(withTitle:"Keep in Recents");alert.addButton(withTitle:"Remove from Recents")
+                if alert.runModal() == .alertSecondButtonReturn { IDERecentProjects.forget(normalized) };return
+            }
+            // Reuse only a workspace visible in this profile/Fuse, preserving profile isolation.
+            if let existing = self.tabs.first(where: { !$0.isFloating && $0.ide?.projectURL?.standardizedFileURL == normalized }) {
+                self.showBrowserWindow(); self.selectTab(existing); IDERecentProjects.record(normalized); return
+            }
+            self.showBrowserWindow(); self.addTab(select:false)
+            guard let tab=self.tabs.last else { return }
+            self.attachIDE(to:tab,project:normalized);self.selectTab(tab)
+        }
+    }
+
     @objc private func openIDE() {
+        ideProjectOpenToken=UUID()
         showBrowserWindow()
         addTab(select: false)
         guard let tab = tabs.last else { return }
@@ -3144,6 +3659,8 @@ private final class SplitLinkWebView: WKWebView {
         tabGroups.removeAll { $0.profileID == target.saved.id }
         saveTabGroups()
         GoogleWorkspace.shared.deleteProfile(target.saved.id)
+        let deletedGitHubProfile = target.saved.id
+        Task { await GitHubWidgetStore.shared.deleteProfile(deletedGitHubProfile) }
         UserDefaults.standard.removeObject(forKey: "webbyWidgetCanvas.\(target.saved.id.uuidString)")
         for key in ["webbyNote", "webbyWeatherCity", "webbyStockSymbol"] {
             UserDefaults.standard.removeObject(forKey: "\(key).\(target.saved.id.uuidString)")
@@ -3237,7 +3754,7 @@ private final class SplitLinkWebView: WKWebView {
         linkPreview?.close()
         let motionSurface = BrowserTabPlacement.current == .horizontal ? horizontalScroll : tabStack.enclosingScrollView
         if let motionSurface { profileMotion.prepare(motionSurface) }
-        for tab in tabs where tab.id == activeTabID {
+        for tab in tabs where tab.id == activeTabID && !restoringVideoInline {
             captureTabPreview(tab)
             tab.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
                                             in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
@@ -3571,11 +4088,16 @@ private final class SplitLinkWebView: WKWebView {
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.name == "browserChromeTone" {
-            guard message.frameInfo.isMainFrame, BrowserTabPlacement.current == .horizontal,
+            guard message.frameInfo.isMainFrame, (BrowserTabPlacement.current == .horizontal || BrowserGlass.matchWebsiteEdge),
                   let view=message.webView,let tab=tab(for:view),tab.id == activeTabID,
-                  let rgb=message.body as? [Double],rgb.count==3,
+                  let rgb=(message.body as? [String:Any])?["edge"] as? [Double] ?? message.body as? [Double],rgb.count==3,
                   rgb.allSatisfy({$0.isFinite && (0...255).contains($0)}) else {return}
             let color=NSColor(srgbRed:rgb[0]/255,green:rgb[1]/255,blue:rgb[2]/255,alpha:1)
+            if let top=(message.body as? [String:Any])?["top"] as? [Double], top.count==3,
+               top.allSatisfy({$0.isFinite && (0...255).contains($0)}) {
+                pageAddressColors[tab.id]=NSColor(srgbRed:top[0]/255,green:top[1]/255,blue:top[2]/255,alpha:1)
+                updateAddressEdgeBackdrop()
+            }
             if pageChromeColors[tab.id] != color {
                 pageChromeColors[tab.id]=color
                 refreshTabContent(tab)
@@ -3585,13 +4107,6 @@ private final class SplitLinkWebView: WKWebView {
         if message.name == "browserPageActivity" {
             guard message.body as? String == "edited", let view = message.webView, let tab = tab(for: view) else { return }
             tab.hasUnsavedEdits = true
-            return
-        }
-        if message.name == "browserVideoFloat" {
-            guard message.body as? String == "video-pip-fallback",
-                  let webView = message.webView,
-                  let tab = tab(for: webView), !tab.isFloating else { return }
-            floatTab(tab)
             return
         }
         if message.name == "browserLinkPreview" {
@@ -3610,8 +4125,24 @@ private final class SplitLinkWebView: WKWebView {
         if matches.count == 1 { fill(matches[0], in: webView) }
     }
 
+    private func discardLinkPreview() {
+        let popover=linkPreview,view=linkPreviewWebView
+        linkPreview=nil;linkPreviewWebView=nil;linkPreviewURL=nil;linkPreviewOwnerID=nil
+        popover?.delegate=nil;popover?.close();popover?.contentViewController=nil
+        view?.evaluateJavaScript("document.querySelectorAll('video,audio').forEach(m=>m.pause())",completionHandler:nil)
+        view?.stopLoading();view?.removeFromSuperview()
+    }
+    func popoverDidClose(_ notification:Notification) {
+        if let popover=notification.object as? NSPopover,popover === linkPreview {discardLinkPreview()}
+    }
+    @objc private func linkGlancesChanged() {
+        if !BrowserHoverPreferences.glancesEnabled {discardLinkPreview()}
+        for tab in spaces.flatMap(\.tabs)+Array(miniTabs.values) {
+            tab.webView?.evaluateJavaScript("window.__webbySetLinkPreviewsEnabled?.(\(BrowserHoverPreferences.glancesEnabled ? "true":"false"));",completionHandler:nil)
+        }
+    }
     private func showLinkPreview(_ message: WKScriptMessage) {
-        guard message.frameInfo.isMainFrame,
+        guard BrowserHoverPreferences.glancesEnabled,message.frameInfo.isMainFrame,
               let source = message.webView, let tab = tab(for: source), tab.id == activeTabID,
               let body = message.body as? [String: Any],
               let raw = body["url"] as? String, raw.count < 4096,
@@ -3620,7 +4151,7 @@ private final class SplitLinkWebView: WKWebView {
               x.isFinite, y.isFinite else { return }
         let ownerID = ownerSpace(for: tab).saved.id
         if linkPreviewOwnerID != ownerID {
-            linkPreview?.close()
+            discardLinkPreview()
             let config = WKWebViewConfiguration()
             config.websiteDataStore = ownerSpace(for: tab).dataStore
             GlassPageInjector.install(into: config)
@@ -3635,7 +4166,7 @@ private final class SplitLinkWebView: WKWebView {
             host.view = backdrop
             let title = NSTextField(labelWithString: "Link Preview")
             title.translatesAutoresizingMaskIntoConstraints = false
-            title.font = .systemFont(ofSize: 12, weight: .medium)
+            title.font = WebbyTypography.font(ofSize: 12, weight: .medium)
             title.textColor = .secondaryLabelColor
             backdrop.addSubview(title)
             let open = NSButton(title: "Open Tab", target: self, action: #selector(openPreviewTab))
@@ -3656,6 +4187,7 @@ private final class SplitLinkWebView: WKWebView {
             let popover = NSPopover()
             popover.contentSize = backdrop.frame.size
             popover.behavior = .transient
+            popover.delegate = self
             popover.contentViewController = host
             linkPreview = popover
             linkPreviewWebView = view
@@ -3808,16 +4340,26 @@ private final class SplitLinkWebView: WKWebView {
             floatingWindows[tab.id]?.makeKeyAndOrderFront(nil)
             return
         }
-        guard tabs.contains(where: { $0.id == tab.id }), activeTabID != tab.id else { return }
-        suggestions.close()
+        guard tabs.contains(where: { $0.id == tab.id }) else { return }
+        if activeTabID == tab.id {
+            returnVideoInline(tab)
+            return
+        }
+        // A newly selected page must never inherit a previous page's spring position.
+        Motion.interact(pageArea)
+        if tab.webView == nil || tab.showsSearchView { if let homeCenter { Motion.interact(homeCenter) } }
+        if let view = tab.webView { Motion.interact(view) }
+        closeSuggestions()
         linkPreview?.close()
         if let previous = activeTab, previous.id != tab.id {
             previous.webView?.evaluateJavaScript("window.__webbyChromeTone?.({enabled:false})",in:nil,in:BrowserChromeTone.world,completionHandler:nil)
             previousTabID = previous.id
             previous.lastActiveAt = Date()
             captureTabPreview(previous)
-            previous.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
-                                                 in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
+            if !restoringVideoInline {
+                previous.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
+                    in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
+            }
         }
         if let previous = activeTab, (previous.webView == nil || previous.showsSearchView) && !previous.isTerminal {
             previous.searchDraft = homeSearchField.currentEditor()?.string ?? homeSearchField.stringValue
@@ -3858,8 +4400,12 @@ private final class SplitLinkWebView: WKWebView {
         for item in tabs {
             if item.isFloating { continue }
             let inSplit = splitTabIDs?.contains(item.id) ?? false
-            item.webView?.isHidden = inSplit ? !showsSplit : item.id != tab.id
-            item.webView?.alphaValue = item.id == tab.id && item.showsSearchView ? 0.001 : 1
+            if let view = item.webView {
+                let hidden = inSplit ? !showsSplit : item.id != tab.id
+                if view.isHidden != hidden { view.isHidden = hidden }
+                let alpha: CGFloat = item.id == tab.id && item.showsSearchView ? 0.001 : 1
+                if view.alphaValue != alpha { view.alphaValue = alpha }
+            }
         }
         homeView.isHidden = showsSplit || (tab.webView != nil && !tab.showsSearchView) || tab.isTerminal
         if !homeView.isHidden { refreshGoogleWidgets() }
@@ -3872,7 +4418,7 @@ private final class SplitLinkWebView: WKWebView {
         loadErrorLabel.isHidden = tab.loadError == nil
         if (tab.webView == nil || tab.showsSearchView) && !tab.isTerminal { showCurrentIndicator() }
         else { globe.engine.hide() }
-        chromeToggle.isHidden = tab.webView == nil || tab.showsSearchView
+        applyAddressChrome()
         if let view = tab.webView, view.isLoading { toolbar.setProgress(min(view.estimatedProgress, 0.96)) }
         addressField.stringValue = tab.webView?.url.map(displayAddress) ?? ""
         homeSearchField.stringValue = tab.searchDraft
@@ -3881,6 +4427,10 @@ private final class SplitLinkWebView: WKWebView {
             homeSearchSurface.setLoadingProgress(view.estimatedProgress)
         } else { homeSearchSurface.stopLoading() }
         updateNavigation()
+        content.layoutSubtreeIfNeeded()
+        for id in showsSplit ? (splitTabIDs ?? []) : [tab.id] {
+            if let visibleTab = self.tab(id: id) { returnVideoInline(visibleTab) }
+        }
         refreshTabSelection(previousID: previousSelection)
         tabSwitchTimes.append((ProcessInfo.processInfo.systemUptime-selectionStarted)*1000)
         if tabSwitchTimes.count > 200 { tabSwitchTimes.removeFirst() }
@@ -3944,7 +4494,9 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     private var visibleTabGroups: [TabGroupRecord] {
-        tabGroups.filter { BrowserExperiment.cyclesNewTabProfiles || $0.profileID == activeSpace.saved.id }
+        tabGroups.filter { group in
+            BrowserExperiment.cyclesNewTabProfiles || group.profileID == activeSpace.saved.id || activeSpace.tabs.contains{$0.groupID==group.id}
+        }
     }
 
     @objc private func tabSettingsFromEmptySpace(_ gesture: NSClickGestureRecognizer) {
@@ -3963,12 +4515,88 @@ private final class SplitLinkWebView: WKWebView {
     @objc private func createGroupFromEmptySpace() {
         rememberLayout()
         let group = TabGroupRecord(id: UUID(), profileID: activeSpace.saved.id, name: "New Group", collapsed: false)
+        let member = BrowserTab()
+        member.ownerSpaceID = activeSpace.saved.id
+        member.groupID = group.id
+        tabs.append(member)
         tabGroups.append(group)
         saveTabGroups()
         refreshTabs()
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             (BrowserTabPlacement.current == .horizontal ? self.horizontalGroups[group.id] : self.groupHeaders[group.id])?.focusName()
+        }
+    }
+
+    private func commandGroupTab(_ id:UUID,with source:BrowserTab?=nil,focusName:Bool=true) {
+        tabPreview.hide()
+        guard let clicked=tab(id:id),!clicked.isFloating else{return}
+        guard !clicked.isPinned else {selectTab(clicked);return}
+        let current=(source ?? activeTab).flatMap{!$0.isPinned && !$0.isFloating ? $0:nil}
+        func unit(_ tab:BrowserTab)->[BrowserTab] {
+            if splitTabIDs?.contains(tab.id)==true {return (splitTabIDs ?? []).compactMap{self.tab(id:$0)}.filter{!$0.isPinned && !$0.isFloating}}
+            return [tab]
+        }
+        var members=unit(clicked)
+        if let current {members += unit(current)}
+        var seen=Set<UUID>();members=members.filter{seen.insert($0.id).inserted}
+        let existing=(current?.groupID ?? clicked.groupID).flatMap{id in tabGroups.first{$0.id==id}}
+        if let existing,members.allSatisfy({$0.groupID==existing.id}) {return}
+        rememberLayout()
+        let websiteName=commonSiteName(members)
+        let group=existing ?? TabGroupRecord(id:UUID(),profileID:current.map{ownerSpace(for:$0).saved.id} ?? ownerSpace(for:clicked).saved.id,name:websiteName ?? "New Group",collapsed:false,automaticName:websiteName != nil)
+        if existing==nil {tabGroups.append(group)}
+        let previous=Set(members.compactMap(\.groupID)).subtracting([group.id])
+        for member in members {member.groupID=group.id}
+        if let index=tabGroups.firstIndex(where:{$0.id==group.id}) {
+            tabGroups[index].collapsed=false
+            if tabGroups[index].automaticName==nil && tabGroups[index].name=="New Group" {tabGroups[index].automaticName=true}
+        }
+        // Moving the last member must not leave an empty glass shell behind.
+        tabGroups.removeAll{old in previous.contains(old.id) && !spaces.flatMap(\.tabs).contains{$0.groupID==old.id}}
+        updateAutomaticGroupName(group.id)
+        saveTabGroups();refreshTabs()
+        if current==nil && focusName {selectTab(clicked)}
+        if existing==nil && focusName && websiteName==nil {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else{return}
+                let header=BrowserTabPlacement.current == .horizontal ? self.horizontalGroups[group.id]:self.groupHeaders[group.id]
+                if let header {Motion.reveal(header,character:.tabs);header.focusName()}
+            }
+        }
+    }
+
+    private func siteHost(_ tab:BrowserTab)->String? {
+        let candidates=[tab.webView?.url,tab.suspendedURL,URL(string:tab.searchDraft)]
+        guard let host=candidates.compactMap({$0?.host?.lowercased()}).first else{return nil}
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)):host
+    }
+    private func commonSiteName(_ members:[BrowserTab])->String? {
+        guard let first=members.first,let host=siteHost(first),members.allSatisfy({siteHost($0)==host}) else{return nil}
+        if let name=members.compactMap(\.siteName).first,!name.isEmpty {return name}
+        let known=["chatgpt.com":"ChatGPT","youtube.com":"YouTube","github.com":"GitHub","google.com":"Google","mail.google.com":"Gmail","calendar.google.com":"Google Calendar","docs.google.com":"Google Docs"]
+        return known[host] ?? host
+    }
+    private func updateAutomaticGroupName(_ id:UUID) {
+        guard let index=tabGroups.firstIndex(where:{$0.id==id}),tabGroups[index].automaticName==true else{return}
+        let members=spaces.flatMap(\.tabs).filter{$0.groupID==id && !$0.isPinned}
+        let name=commonSiteName(members) ?? "Tab Group"
+        if tabGroups[index].name != name {tabGroups[index].name=name;saveTabGroups()}
+    }
+    private func groupBackgroundLink(_ opened:BrowserTab,from source:BrowserTab,url:URL) {
+        guard !source.isFloating,let host=url.host?.lowercased() else{return}
+        let normalized=host.hasPrefix("www.") ? String(host.dropFirst(4)):host
+        guard siteHost(source)==normalized else{return}
+        commandGroupTab(opened.id,with:source,focusName:false)
+    }
+    private func readSiteName(_ tab:BrowserTab,view:WKWebView) {
+        let generation=tab.navigationTiming.id
+        view.evaluateJavaScript("(document.querySelector('meta[property=\"og:site_name\"],meta[name=\"application-name\"]')?.content || '').trim().slice(0,80)",in:nil,in:BrowserPageActivity.world) { [weak self,weak tab,weak view] result in
+            guard let self,let tab,tab.webView === view,tab.navigationTiming.id==generation else{return}
+            if case .success(let value)=result,let name=value as? String,!name.isEmpty {tab.siteName=name.components(separatedBy:.whitespacesAndNewlines).filter{!$0.isEmpty}.joined(separator:" ")}
+            if let id=tab.groupID,self.tabGroups.first(where:{$0.id==id})?.automaticName==true {
+                self.updateAutomaticGroupName(id);self.refreshTabs()
+            }
         }
     }
 
@@ -3988,11 +4616,16 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     fileprivate func appendGroupItem(for tabID: UUID, to menu: NSMenu) {
-        guard tab(id: tabID)?.groupID != nil else { return }
+        guard let tab=tab(id:tabID),!tab.isPinned else{return}
+        let group=menu.addItem(withTitle:"Group with Current Tab",action:#selector(groupWithCurrent(_:)),keyEquivalent:"")
+        group.target=self;group.representedObject=tabID
+        guard tab.groupID != nil else {return}
         let item = menu.addItem(withTitle: "Remove from Group", action: #selector(removeTabFromGroup(_:)), keyEquivalent: "")
         item.target = self
         item.representedObject = tabID
     }
+
+    @objc private func groupWithCurrent(_ sender:NSMenuItem) {if let id=sender.representedObject as? UUID {commandGroupTab(id)}}
 
     @objc private func removeTabFromGroup(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? UUID, let tab = tab(id: id) else { return }
@@ -4032,29 +4665,30 @@ private final class SplitLinkWebView: WKWebView {
         mainArea.addSubview(horizontalScroll)
         horizontalProfile = NSButton(title: activeSpace.saved.name, target: self, action: #selector(horizontalProfileMenu(_:)))
         horizontalProfile.isBordered = false
-        horizontalProfile.font = .systemFont(ofSize: 12, weight: .semibold)
+        horizontalProfile.font = WebbyTypography.font(ofSize: 12, weight: .semibold)
         horizontalProfile.contentTintColor = .white
         horizontalProfile.translatesAutoresizingMaskIntoConstraints = false
         mainArea.addSubview(horizontalProfile)
         let add = NSButton(title: "+", target: self, action: #selector(newTabAction))
-        add.isBordered = false; add.font = .systemFont(ofSize: 23, weight: .light)
+        add.isBordered = false; add.font = WebbyTypography.font(ofSize: 23, weight: .light)
         add.contentTintColor = .white; add.translatesAutoresizingMaskIntoConstraints = false
         add.identifier = NSUserInterfaceItemIdentifier("horizontalNewTab")
         mainArea.addSubview(add)
+        horizontalTabsTrailing = horizontalScroll.trailingAnchor.constraint(equalTo: add.leadingAnchor)
         NSLayoutConstraint.activate([
             horizontalProfile.leadingAnchor.constraint(equalTo: mainArea.leadingAnchor, constant: 8),
-            horizontalProfile.topAnchor.constraint(equalTo: mainArea.topAnchor, constant: 8),
-            horizontalProfile.widthAnchor.constraint(equalToConstant: 92), horizontalProfile.heightAnchor.constraint(equalToConstant: 30),
+            horizontalProfile.centerYAnchor.constraint(equalTo: horizontalScroll.centerYAnchor),
+            horizontalProfile.widthAnchor.constraint(equalToConstant: 92), horizontalProfile.heightAnchor.constraint(equalToConstant: 34),
             horizontalScroll.leadingAnchor.constraint(equalTo: horizontalProfile.trailingAnchor),
-            horizontalScroll.trailingAnchor.constraint(equalTo: add.leadingAnchor),
+            horizontalTabsTrailing,
             horizontalScroll.topAnchor.constraint(equalTo: mainArea.topAnchor, constant: 6),
             horizontalScroll.heightAnchor.constraint(equalToConstant: 38),
             horizontalStack.heightAnchor.constraint(equalToConstant: 38),
             horizontalStack.leadingAnchor.constraint(equalTo: horizontalScroll.contentView.leadingAnchor),
             horizontalStack.topAnchor.constraint(equalTo: horizontalScroll.contentView.topAnchor),
             add.trailingAnchor.constraint(equalTo: mainArea.trailingAnchor, constant: -8),
-            add.topAnchor.constraint(equalTo: mainArea.topAnchor, constant: 8),
-            add.widthAnchor.constraint(equalToConstant: 32), add.heightAnchor.constraint(equalToConstant: 30)
+            add.centerYAnchor.constraint(equalTo: horizontalScroll.centerYAnchor),
+            add.widthAnchor.constraint(equalToConstant: 34), add.heightAnchor.constraint(equalToConstant: 34)
         ])
         configureHorizontalTabs()
     }
@@ -4080,68 +4714,195 @@ private final class SplitLinkWebView: WKWebView {
     @objc private func toggleHorizontalFuse() { BrowserExperiment.cyclesNewTabProfiles.toggle(); experimentalModeChanged() }
 
     private func configureHorizontalTabs() {
+        let layoutGeometry=buildingFirstWindow ? Motion.Geometry.empty:Motion.capture([pageArea,sidebar].compactMap{$0},in:content)
+        let previousLayout=horizontalScroll?.isHidden
+        defer {if let previousLayout,previousLayout != horizontalScroll?.isHidden {Motion.settle(layoutGeometry,views:(homeView?.isHidden==false ? [sidebar]:[pageArea,sidebar]).compactMap{$0},in:content,character:.split)}}
         defer {applyWallpaperPresentation()}
         guard horizontalScroll != nil else { return }
         let horizontal = BrowserTabPlacement.current == .horizontal
         if horizontalScroll.isHidden { horizontalSelection = nil }
+        if tabsPeekVisible && (peekHorizontal != horizontal || !tabsHiddenByUser) {tabsPeekVisible=false;tabsRetreating=false;tabsPeekToken+=1;tabsRetreatTimer?.invalidate()}
         sidebarToggleButton?.isHidden = horizontal
-        horizontalScroll.isHidden = !horizontal; horizontalProfile.isHidden = !horizontal
-        mainArea.subviews.first { $0.identifier?.rawValue == "horizontalNewTab" }?.isHidden = !horizontal
-        pageAreaTop.constant = horizontal ? 44 : 0
-        sidebarWidth.constant = horizontal ? 0 : (sidebarVisible ? 238 : 0)
-        sidebar.isHidden = horizontal || !sidebarVisible
+        applyHiddenChromeLayout()
         if horizontal { refreshHorizontalTabs() }
         if let view=activeWebView {updateGlassTone(for:view)}
     }
 
+    private func horizontalTabColor(_ tab:BrowserTab,row:TabRow)->NSColor {
+        if tab.id==activeTabID,homeView?.isHidden==false,let wallpaper {
+            let point=wallpaper.convert(row.convert(NSPoint(x:row.bounds.midX,y:0),to:nil),from:nil)
+            if let color=wallpaper.chromeColor(at:point) {return color}
+            return NSColor(white:0.13,alpha:1)
+        }
+        return pageChromeColors[tab.id] ?? (tab.prefersDarkGlass ? NSColor(white:0.13,alpha:1):.white)
+    }
+    private func updateSidebarEdgeBackdrop() {
+        guard sidebar != nil, sidebarBackdrop != nil else { return }
+        let matching = BrowserGlass.matchWebsiteEdge && homeView?.isHidden == true && BrowserTabPlacement.current != .horizontal
+        guard matching, let active = activeTab else {
+            sidebarEdgeBackdrop?.isHidden = true
+            sidebar.appearance = nil
+            for row in tabRows.values { row.titleButton.contentTintColor = .white }
+            return
+        }
+        if sidebarEdgeBackdrop == nil {
+            let backdrop = NSView()
+            backdrop.wantsLayer = true; backdrop.translatesAutoresizingMaskIntoConstraints = false
+            sidebar.addSubview(backdrop, positioned: .above, relativeTo: sidebarBackdrop)
+            NSLayoutConstraint.activate([
+                backdrop.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
+                backdrop.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+                backdrop.topAnchor.constraint(equalTo: sidebar.topAnchor),
+                backdrop.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor)
+            ])
+            sidebarEdgeBackdrop = backdrop
+        }
+        var color = pageChromeColors[active.id] ?? (active.prefersDarkGlass ? NSColor(white:0.13,alpha:1) : .white)
+        if homeView?.isHidden == false, let wallpaper {
+            let point = wallpaper.convert(sidebar.convert(NSPoint(x:sidebar.bounds.maxX,y:sidebar.bounds.midY),to:nil),from:nil)
+            color = wallpaper.chromeColor(at:point) ?? NSColor(white:0.13,alpha:1)
+        }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        Motion.color(sidebarEdgeBackdrop?.layer, to: color.cgColor, animate: sidebarEdgeBackdrop?.isHidden == false && window.occlusionState.contains(.visible))
+        sidebarEdgeBackdrop?.isHidden = false
+        CATransaction.commit()
+        let rgb = color.usingColorSpace(.deviceRGB) ?? .black
+        let light = rgb.redComponent*0.2126 + rgb.greenComponent*0.7152 + rgb.blueComponent*0.0722 > 0.55
+        sidebar.appearance = NSAppearance(named: light ? .aqua : .darkAqua)
+        for row in tabRows.values { row.titleButton.contentTintColor = light ? .black : .white }
+    }
+
+    /// Reserved address-header space follows the page's top edge, independently
+    /// of the left-edge color used by a vertical sidebar. Homepage keeps wallpaper.
+    private func updateAddressEdgeBackdrop() {
+        guard mainArea != nil, pageArea != nil, addressChromeReady else { return }
+        let visible = BrowserGlass.matchWebsiteEdge && homeView?.isHidden == true
+            && toolbar.superview === mainArea && !toolbar.isHidden
+        guard visible, let tab=activeTab else {addressEdgeBackdrop?.isHidden=true;toolbar.appearance=nil;return}
+        if addressEdgeBackdrop == nil {
+            let backdrop=NSView();backdrop.wantsLayer=true;backdrop.translatesAutoresizingMaskIntoConstraints=false
+            mainArea.addSubview(backdrop,positioned:.below,relativeTo:pageArea)
+            NSLayoutConstraint.activate([
+                backdrop.leadingAnchor.constraint(equalTo:mainArea.leadingAnchor),
+                backdrop.trailingAnchor.constraint(equalTo:mainArea.trailingAnchor),
+                backdrop.topAnchor.constraint(equalTo:mainArea.topAnchor),
+                backdrop.bottomAnchor.constraint(equalTo:pageArea.topAnchor)
+            ])
+            addressEdgeBackdrop=backdrop
+        }
+        let color=pageAddressColors[tab.id] ?? pageChromeColors[tab.id]
+            ?? (tab.prefersDarkGlass ? NSColor(white:0.13,alpha:1):.white)
+        Motion.color(addressEdgeBackdrop?.layer,to:color.cgColor,
+                     animate:addressEdgeBackdrop?.isHidden == false && window.occlusionState.contains(.visible))
+        addressEdgeBackdrop?.isHidden=false
+        let rgb=color.usingColorSpace(.deviceRGB) ?? .black
+        let light=rgb.redComponent*0.2126+rgb.greenComponent*0.7152+rgb.blueComponent*0.0722>0.55
+        toolbar.appearance=NSAppearance(named:light ? .aqua:.darkAqua)
+    }
+
+    private func updateWebsiteEdgeBackdrop() {
+        updateAddressEdgeBackdrop()
+        guard mainArea != nil, horizontalScroll != nil else { return }
+        updateSidebarEdgeBackdrop()
+        let visible = BrowserGlass.matchWebsiteEdge && homeView?.isHidden == true && BrowserTabPlacement.current == .horizontal && !horizontalScroll.isHidden
+        guard visible, let tab = activeTab else { websiteEdgeBackdrop?.isHidden = true; horizontalProfile?.contentTintColor = .white; return }
+        if websiteEdgeBackdrop == nil {
+            let backdrop = NSView()
+            backdrop.wantsLayer = true
+            backdrop.translatesAutoresizingMaskIntoConstraints = false
+            mainArea.addSubview(backdrop, positioned: .below, relativeTo: horizontalScroll)
+            NSLayoutConstraint.activate([
+                backdrop.leadingAnchor.constraint(equalTo: mainArea.leadingAnchor),
+                backdrop.trailingAnchor.constraint(equalTo: mainArea.trailingAnchor),
+                backdrop.topAnchor.constraint(equalTo: mainArea.topAnchor),
+                backdrop.heightAnchor.constraint(equalToConstant: 44)
+            ])
+            websiteEdgeBackdrop = backdrop
+        }
+        let rowID = splitTabIDs?.contains(tab.id) == true ? splitRepresentativeID ?? tab.id : tab.id
+        let color = horizontalRows[rowID].map { horizontalTabColor(tab, row: $0) }
+            ?? pageChromeColors[tab.id] ?? NSColor(white: 0.13, alpha: 1)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        Motion.color(websiteEdgeBackdrop?.layer, to: color.cgColor, animate: websiteEdgeBackdrop?.isHidden == false && window.occlusionState.contains(.visible))
+        websiteEdgeBackdrop?.isHidden = false
+        CATransaction.commit()
+        let rgb = color.usingColorSpace(.deviceRGB) ?? .black
+        let light = rgb.redComponent * 0.2126 + rgb.greenComponent * 0.7152 + rgb.blueComponent * 0.0722 > 0.55
+        horizontalProfile.contentTintColor = light ? .black : .white
+        mainArea.subviews.first { $0.identifier?.rawValue == "horizontalNewTab" }.map { ($0 as? NSButton)?.contentTintColor = light ? .black : .white }
+        let pinnedIDs = Set(tabs.lazy.filter(\.isPinned).map(\.id))
+        for view in horizontalRows.values where view.tabID != rowID {
+            // Reuse the active edge color for legible inactive labels as well.
+            view.setHorizontal(pinned: pinnedIDs.contains(view.tabID), color: color)
+        }
+    }
+
+    private func refreshHomeTabColor() {
+        if BrowserTabPlacement.current != .horizontal { updateWebsiteEdgeBackdrop(); return }
+        guard BrowserTabPlacement.current == .horizontal,homeView?.isHidden==false,let tab=activeTab,let row=horizontalRows[tab.id] else{return}
+        row.setHorizontal(pinned:tab.isPinned,color:horizontalTabColor(tab,row:row))
+        updateWebsiteEdgeBackdrop()
+    }
     private func refreshHorizontalTabs() {
+        defer { updateWebsiteEdgeBackdrop() }
+        guard !defersTabRefresh else{return}
         guard horizontalStack != nil, BrowserTabPlacement.current == .horizontal else { return }
         horizontalProfile.title = BrowserExperiment.cyclesNewTabProfiles ? "Fuse · " + activeSpace.saved.name : activeSpace.saved.name
-        let visible = visibleSidebarTabs
+        let visible = tabs.filter{!(splitTabIDs?.contains($0.id) ?? false) || $0.id==splitRepresentativeID}.filter { tab in
+            guard !tab.isPinned,let id=tab.groupID,tabGroups.first(where:{$0.id==id})?.collapsed==true else{return true}
+            return horizontalRows[tab.id] != nil
+        }
         let valid = Set(visible.map(\.id))
         for (id, row) in horizontalRows where !valid.contains(id) {
-            horizontalStack.removeArrangedSubview(row); row.removeFromSuperview()
+            if horizontalStack.arrangedSubviews.contains(row) {horizontalStack.removeArrangedSubview(row)};if let parent=row.superview as? NSStackView,parent.arrangedSubviews.contains(row) {parent.removeArrangedSubview(row)};row.removeFromSuperview()
             horizontalWidths.removeValue(forKey: id)?.isActive = false
             horizontalRows.removeValue(forKey: id)
         }
         let groups = visibleTabGroups, groupIDs = Set(groups.map(\.id))
         for (id, header) in horizontalGroups where !groupIDs.contains(id) {
-            horizontalStack.removeArrangedSubview(header); header.removeFromSuperview(); horizontalGroups.removeValue(forKey: id)
+            if let container=horizontalGroupContainers.removeValue(forKey:id) {horizontalStack.removeArrangedSubview(container);container.removeFromSuperview()}
+            header.removeFromSuperview();horizontalGroups.removeValue(forKey:id)
         }
         var ordered: [NSView] = []
-        func append(_ tab: BrowserTab) {
+        func append(_ tab: BrowserTab, standalone:Bool=true) {
             let row = horizontalRows[tab.id] ?? TabRow(tabID: tab.id, target: self)
             horizontalRows[tab.id] = row
-            if row.superview == nil {
-                horizontalStack.addArrangedSubview(row)
+            if horizontalWidths[tab.id]==nil {
                 let width = row.widthAnchor.constraint(equalToConstant: tab.isPinned ? 48 : 210)
                 width.isActive = true; horizontalWidths[tab.id] = width
             }
             horizontalWidths[tab.id]?.constant = tab.isPinned ? 48 : 210
             updateTabPresentation(tab, row: row)
-            row.setHorizontal(pinned: tab.isPinned, color: pageChromeColors[tab.id] ?? (tab.prefersDarkGlass ? NSColor(white: 0.13, alpha: 1) : .white))
-            ordered.append(row)
+            row.setHorizontal(pinned:tab.isPinned,color:horizontalTabColor(tab,row:row))
+            if standalone {
+                if row.superview !== horizontalStack {if let parent=row.superview as? NSStackView,parent.arrangedSubviews.contains(row) {parent.removeArrangedSubview(row)};row.removeFromSuperview();horizontalStack.addArrangedSubview(row)}
+                ordered.append(row)
+            }
         }
         for tab in visible.filter(\.isPinned) { append(tab) }
         for tab in visible where !tab.isPinned && (tab.groupID == nil || !groupIDs.contains(tab.groupID!)) { append(tab) }
         for group in groups {
             let header = horizontalGroups[group.id] ?? TabGroupHeader(groupID: group.id)
             horizontalGroups[group.id] = header
-            if header.superview == nil { horizontalStack.addArrangedSubview(header); header.widthAnchor.constraint(equalToConstant: 140).isActive = true }
-            header.configure(name: group.name, collapsed: group.collapsed)
+            header.configure(name:group.name,collapsed:group.collapsed,count:tabs.filter{$0.groupID==group.id && !$0.isPinned}.count,profile:BrowserTheme.profile(for:group.profileID))
             if let original = groupHeaders[group.id] {
                 header.onRename = original.onRename; header.onToggle = original.onToggle
                 header.onDrop = original.onDrop; header.onDelete = original.onDelete
             }
-            ordered.append(header)
-            for tab in visible where !tab.isPinned && tab.groupID == group.id { append(tab) }
+            let container=horizontalGroupContainers[group.id] ?? TabGroupContainer(header:header,horizontal:true)
+            horizontalGroupContainers[group.id]=container
+            if container.superview !== horizontalStack {horizontalStack.addArrangedSubview(container)}
+            let grouped=visible.filter{!$0.isPinned && $0.groupID==group.id}
+            for tab in grouped {append(tab,standalone:false)}
+            container.setMembers(grouped.compactMap{horizontalRows[$0.id]},collapsed:group.collapsed)
+            ordered.append(container)
         }
         for (index, view) in ordered.enumerated() where horizontalStack.arrangedSubviews.firstIndex(of: view) != index {
             horizontalStack.removeArrangedSubview(view); view.removeFromSuperview(); horizontalStack.insertArrangedSubview(view, at: min(index, horizontalStack.arrangedSubviews.count))
         }
         horizontalStack.layoutSubtreeIfNeeded()
         if horizontalSelection != activeTabID, let id = activeTabID, let row = horizontalRows[id] {
-            horizontalSelection = id; horizontalStack.scrollToVisible(row.frame)
+            horizontalSelection = id; horizontalStack.scrollToVisible(row.convert(row.bounds,to:horizontalStack))
         }
     }
 
@@ -4160,6 +4921,7 @@ private final class SplitLinkWebView: WKWebView {
         let splitFavicons: [NSImage?]? = splitRepresentativeID == tab.id
             ? splitTabIDs?.map { self.tab(id: $0)?.favicon }
             : (tab.savedSplit != nil ? tab.savedSplitTabIDs.map { self.tab(id: $0)?.favicon } : nil)
+        row.setGroupAccent(!tab.isPinned && tab.groupID != nil ? BrowserTheme.profile(for:ownerSpace(for:tab).saved.id):nil)
         row.update(title: displayTitle, selected: isSelected,
                    favicon: tab.favicon, splitFavicons: splitFavicons,
                    isTerminal: tab.isTerminal && tab.ide == nil, isPinned: tab.isPinned,
@@ -4172,13 +4934,13 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     private func refreshTabContent(_ changed: BrowserTab) {
+        defer { if changed.id == activeTabID { updateWebsiteEdgeBackdrop() } }
         let id = splitTabIDs?.contains(changed.id) == true ? splitRepresentativeID ?? changed.id : changed.id
         guard let representative = tab(id: id) else { return }
         if let row = tabRows[id] { updateTabPresentation(representative, row: row) }
         if let row = horizontalRows[id] {
             updateTabPresentation(representative, row: row)
-            row.setHorizontal(pinned: representative.isPinned, color: pageChromeColors[id] ??
-                (representative.prefersDarkGlass ? NSColor(white: 0.13, alpha: 1) : .white))
+            row.setHorizontal(pinned:representative.isPinned,color:horizontalTabColor(representative,row:row))
         }
     }
 
@@ -4191,14 +4953,29 @@ private final class SplitLinkWebView: WKWebView {
         if BrowserTabPlacement.current == .horizontal {
             let id = activeTabID.flatMap { splitTabIDs?.contains($0) == true ? splitRepresentativeID : $0 }
             if horizontalSelection != id, let id, let row = horizontalRows[id] {
-                horizontalSelection = id; horizontalStack.scrollToVisible(row.frame)
+                horizontalSelection = id; horizontalStack.scrollToVisible(row.convert(row.bounds,to:horizontalStack))
             }
         }
     }
 
     private func refreshTabs() {
-        defer {applyWallpaperPresentation()}
-        let visibleTabs = visibleSidebarTabs
+        guard !defersTabRefresh else{return}
+        let occupiedGroups = Set(spaces.flatMap(\.tabs).filter { !$0.isPinned }.compactMap(\.groupID))
+        let emptyGroups = Set(tabGroups.map(\.id)).subtracting(occupiedGroups)
+        if !emptyGroups.isEmpty {
+            tabGroups.removeAll { emptyGroups.contains($0.id) }
+            for tab in spaces.flatMap(\.tabs) where tab.groupID.map(emptyGroups.contains) == true {
+                tab.groupID = nil
+            }
+            saveTabGroups()
+        }
+        let geometry=buildingFirstWindow ? Motion.Geometry.empty:Motion.capture(Array(tabRows.values)+Array(horizontalRows.values)+Array(groupHeaders.values),in:content)
+        defer {Motion.settle(geometry,views:Array(tabRows.values)+Array(horizontalRows.values)+Array(groupHeaders.values),in:content,character:.tabs)}
+        defer {applyWallpaperPresentation();updateWebsiteEdgeBackdrop()}
+        let visibleTabs = tabs.filter{!(splitTabIDs?.contains($0.id) ?? false) || $0.id==splitRepresentativeID}.filter { tab in
+            guard !tab.isPinned,let id=tab.groupID,tabGroups.first(where:{$0.id==id})?.collapsed==true else{return true}
+            return tabRows[tab.id] != nil
+        }
         let pinnedTabs = visibleTabs.filter(\.isPinned)
         let regularTabs = visibleTabs.filter { !$0.isPinned }
         let validIDs = Set(visibleTabs.map(\.id))
@@ -4229,15 +5006,18 @@ private final class SplitLinkWebView: WKWebView {
         pinGrid.isHidden = tileRows.isEmpty
         pinGridHeight.constant = pinGrid.requiredHeight
         let firstRegularIndex = BrowserTabPlacement.current == .bottom ? 2 : 1
+        let visibleGroupIDs=Set(visibleTabGroups.map(\.id))
         for (index, tab) in regularTabs.enumerated() {
+            let isGrouped=tab.groupID.map{visibleGroupIDs.contains($0)} ?? false
             let row: TabRow
-            if let existing = tabRows[tab.id], existing.superview === tabStack { row = existing }
+            if let existing=tabRows[tab.id],!(existing.superview is PinnedTabGrid) {row=existing}
             else {
                 discardTabRow(tab.id)
                 row = TabRow(tabID: tab.id, target: self)
                 tabRows[tab.id] = row
             }
-            if row.superview !== tabStack {
+            if row.superview==nil || (row.superview !== tabStack && !isGrouped) {
+                if let stack=row.superview as? NSStackView,stack.arrangedSubviews.contains(row) {stack.removeArrangedSubview(row)}
                 row.removeFromSuperview()
                 row.translatesAutoresizingMaskIntoConstraints = false
                 tabStack.insertArrangedSubview(row, at: min(firstRegularIndex + index, tabStack.arrangedSubviews.count))
@@ -4248,8 +5028,9 @@ private final class SplitLinkWebView: WKWebView {
                 width.isActive = true
                 tabWidthConstraints[tab.id] = width
             }
+            tabWidthConstraints[tab.id]?.constant=isGrouped ? -32:0
             let desired = firstRegularIndex + index
-            if tabStack.arrangedSubviews.firstIndex(of: row) != desired {
+            if !isGrouped,tabStack.arrangedSubviews.firstIndex(of: row) != desired {
                 tabStack.removeArrangedSubview(row)
                 row.removeFromSuperview()
                 tabStack.insertArrangedSubview(row, at: min(desired, tabStack.arrangedSubviews.count))
@@ -4257,12 +5038,15 @@ private final class SplitLinkWebView: WKWebView {
         }
         let regularIDs = Set(regularTabs.map(\.id))
         for case let stale as TabRow in tabStack.subviews where !regularIDs.contains(stale.tabID) {
+            if tab(id:stale.tabID)?.isPinned != true {Motion.depart(stale,character:.tabs)}
             tabStack.removeArrangedSubview(stale)
             stale.removeFromSuperview()
         }
         let groups = visibleTabGroups
         for (id, header) in Array(groupHeaders) where !groups.contains(where: { $0.id == id }) {
+            Motion.depart(header,character:.tabs)
             if tabStack.arrangedSubviews.contains(header) { tabStack.removeArrangedSubview(header) }
+            if let container=groupContainers.removeValue(forKey:id) {tabStack.removeArrangedSubview(container);container.removeFromSuperview()}
             header.removeFromSuperview()
             groupHeaders.removeValue(forKey: id)
         }
@@ -4272,10 +5056,11 @@ private final class SplitLinkWebView: WKWebView {
         for group in groups {
             let header = groupHeaders[group.id] ?? TabGroupHeader(groupID: group.id)
             groupHeaders[group.id] = header
-            header.configure(name: group.name, collapsed: group.collapsed)
+            header.configure(name:group.name,collapsed:group.collapsed,count:tabs.filter{$0.groupID==group.id && !$0.isPinned}.count,profile:BrowserTheme.profile(for:group.profileID))
             header.onRename = { [weak self] name in
                 guard let self, let index = self.tabGroups.firstIndex(where: { $0.id == group.id }) else { return }
                 self.rememberLayout()
+                self.tabGroups[index].automaticName=false
                 self.tabGroups[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? "Untitled Group" : name.trimmingCharacters(in: .whitespacesAndNewlines)
                 self.saveTabGroups()
@@ -4296,12 +5081,12 @@ private final class SplitLinkWebView: WKWebView {
                 self.saveTabGroups()
                 self.refreshTabs()
             }
-            if header.superview !== tabStack {
-                tabStack.addArrangedSubview(header)
-                header.widthAnchor.constraint(equalTo: tabStack.widthAnchor).isActive = true
-            }
-            orderedViews.append(header)
-            orderedViews += regularTabs.filter { $0.groupID == group.id }.compactMap { tabRows[$0.id] }
+            let container=groupContainers[group.id] ?? TabGroupContainer(header:header)
+            groupContainers[group.id]=container
+            if container.superview !== tabStack {tabStack.addArrangedSubview(container);container.widthAnchor.constraint(equalTo:tabStack.widthAnchor).isActive=true}
+            let rows=regularTabs.filter{$0.groupID==group.id}.compactMap{tabRows[$0.id]}
+            container.setMembers(rows,collapsed:group.collapsed)
+            orderedViews.append(container)
         }
         for (offset, view) in orderedViews.enumerated() {
             let desired = firstRegularIndex + offset
@@ -4320,13 +5105,17 @@ private final class SplitLinkWebView: WKWebView {
         tabStack.needsDisplay = true
         tabStack.enclosingScrollView?.contentView.needsDisplay = true
         refreshHorizontalTabs()
-        renderedTabIDs = visibleTabs.map(\.id)
+        renderedTabIDs = visibleSidebarTabs.map(\.id)
         renderedTabScope = tabScope
     }
 
     @objc fileprivate func selectTabAction(_ sender: TabActionButton) {
         tabPreview.hide()
         guard let tab = tabs.first(where: { $0.id == sender.tabID }) else { return }
+        if sender.physicalModifiers.contains(.command) {
+            commandGroupTab(tab.id)
+            return
+        }
         if sender.physicalDoubleClick {
             let id = tab.id
             // Present after NSButton finishes handling the double click. Moving the
@@ -4448,6 +5237,7 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     private func floatTab(_ tab: BrowserTab) {
+        defer {if let floating=floatingWindows[tab.id] {Motion.reveal(floating.contentView ?? NSView(),character:.panel)}}
         guard tab.ide == nil else { return }
         guard !tab.isFloating else { floatingWindows[tab.id]?.makeKeyAndOrderFront(nil); return }
         if splitTabIDs?.contains(tab.id) == true { endSplit() }
@@ -4501,6 +5291,7 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     private func dockFloatingTab(id: UUID, activate: Bool) {
+        defer {if activate {Motion.reveal(pageArea,character:.split)}}
         guard let tab = tab(id: id), let floating = floatingWindows.removeValue(forKey: id) else { return }
         NSLayoutConstraint.deactivate(floatingContentConstraints.removeValue(forKey: id) ?? [])
         if let webView = tab.webView {
@@ -4591,7 +5382,9 @@ private final class SplitLinkWebView: WKWebView {
         guard sourceID != targetID,
               let source = tabs.first(where: { $0.id == sourceID }),
               let target = tabs.first(where: { $0.id == targetID }),
-              source.canSplit, target.canSplit else { return false }
+              !source.isFloating,!target.isFloating,(source.ide != nil || !source.isTerminal),(target.ide != nil || !target.isTerminal) else { return false }
+        for page in [source,target] where page.ide==nil && (page.suspendedURL != nil || page.pinnedInstanceClosed) {resumeTab(page,show:false)}
+        guard source.canSplit,target.canSplit else{return false}
         let existing = splitTabIDs ?? []
         let targetGroup = existing.contains(targetID) ? existing : [targetID]
         guard !targetGroup.contains(sourceID), targetGroup.count < 4 else { return false }
@@ -4605,6 +5398,9 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     private func renderSplit(_ ids: [UUID], fractions: [Double] = []) {
+        let surfaces=ids.compactMap{tab(id:$0)?.splitSurface}
+        let geometry=Motion.capture(surfaces,in:pageArea)
+        defer {Motion.settle(geometry,views:surfaces,in:pageArea,character:.split)}
         guard (2...4).contains(ids.count), ids.allSatisfy({ tab(id: $0)?.splitSurface != nil }) else { return }
         endSplit()
         let views = ids.compactMap { tab(id: $0)?.splitSurface }
@@ -4721,6 +5517,9 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     private func endSplit() {
+        let surfaces=(splitTabIDs ?? []).compactMap{tab(id:$0)?.splitSurface}
+        let geometry=Motion.capture(surfaces,in:pageArea)
+        defer {Motion.settle(geometry,views:surfaces,in:pageArea,character:.split)}
         guard let split = splitView, let ids = splitTabIDs else { return }
         if let anchor = splitRepresentativeID.flatMap({ tab(id: $0) }), anchor.savedSplit != nil,
            anchor.savedSplitTabIDs == ids {
@@ -4762,6 +5561,9 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     private func closeTab(id: UUID) {
+        if let row=tabRows[id],tab(id:id)?.isPinned != true {Motion.depart(row)}
+        if let row=horizontalRows[id],tab(id:id)?.isPinned != true {Motion.depart(row)}
+        chatGPTDrafts.removeValue(forKey:id)
         if miniTabs[id] != nil {closeMiniWebby(id);return}
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         guard tabs[index].ide?.mayClose() != false else { return }
@@ -4871,92 +5673,300 @@ private final class SplitLinkWebView: WKWebView {
         else { refreshTabs() }
     }
 
-    @objc private func toggleSidebar() {
-        if BrowserTabPlacement.current == .horizontal { return }
-        content.layoutSubtreeIfNeeded()
-        sidebarTransitionToken += 1
-        let token = sidebarTransitionToken
-        sidebarVisible.toggle()
-        if sidebarVisible { sidebar.isHidden = false }
-        sidebarWidth.constant = sidebarVisible ? 238 : 0
-        UserDefaults.standard.set(!sidebarVisible, forKey: "sidebarHidden")
-        if Motion.enabled {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.22
-                context.allowsImplicitAnimation = true
-                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.7, 0.2, 1)
-                content.animator().layoutSubtreeIfNeeded()
-            } completionHandler: { [weak self] in
-                guard let self else { return }
-                if self.sidebarTransitionToken == token && !self.sidebarVisible { self.sidebar.isHidden = true }
-            }
+    private var tabsHiddenByUser:Bool {BrowserTabPlacement.current == .horizontal ? UserDefaults.standard.bool(forKey:"horizontalTabsHidden"):!sidebarVisible}
+    private var horizontalChrome:[NSView] {[horizontalScroll,horizontalProfile,mainArea?.subviews.first{$0.identifier?.rawValue=="horizontalNewTab"}].compactMap{$0}}
+    private func applyHiddenChromeLayout() {
+        guard mainArea != nil,sidebar != nil,horizontalScroll != nil else{return}
+        let horizontal=BrowserTabPlacement.current == .horizontal
+        let hidden=tabsHiddenByUser
+        let presented = !hidden || tabsPeekVisible
+        let pinnedVertical = !horizontal && !hidden
+        let floatingVertical = !horizontal && tabsPeekVisible
+        sidebarNewTabLeading?.constant = floatingVertical ? 56:14
+        sidebarRevealToggle?.isHidden = !floatingVertical
+        sidebarToggleButton?.isHidden = horizontal || floatingVertical
+        mainSidebarLeading?.isActive=false;mainFullLeading?.isActive=false
+        if pinnedVertical {mainSidebarLeading?.isActive=true}else{mainFullLeading?.isActive=true}
+        sidebarWidth.constant = !horizontal && presented ? 238:0
+        sidebar.isHidden = horizontal || !presented
+        sidebar.layer?.cornerRadius = tabsPeekVisible ? 16:0
+        pageAreaTop.constant = horizontal && !hidden ? 44:0
+        if addressChromeReady { applyAddressChrome() }
+        for view in horizontalChrome {view.isHidden = !horizontal || !presented}
+        if !horizontal && tabsPeekVisible {content.addSubview(sidebar,positioned:.above,relativeTo:mainArea)}
+        if horizontalHoverGlass == nil {
+            let glass=NSVisualEffectView();glass.wantsLayer=true;glass.layer?.cornerRadius=14;glass.layer?.masksToBounds=true;glass.material = .popover;glass.blendingMode = .withinWindow;glass.state = .active
+            glass.translatesAutoresizingMaskIntoConstraints=false;mainArea.addSubview(glass,positioned:.below,relativeTo:horizontalScroll)
+            NSLayoutConstraint.activate([glass.leadingAnchor.constraint(equalTo:mainArea.leadingAnchor),glass.trailingAnchor.constraint(equalTo:mainArea.trailingAnchor),glass.topAnchor.constraint(equalTo:mainArea.topAnchor),glass.heightAnchor.constraint(equalToConstant:48)])
+            horizontalHoverGlass=glass
+        }
+        horizontalHoverGlass?.isHidden = !horizontal || !tabsPeekVisible
+        updateWebsiteEdgeBackdrop()
+    }
+    private func animateTabPeek(_ view:NSView,show:Bool,horizontal:Bool) {
+        guard Motion.enabled,let layer=view.layer else{return}
+        let key=horizontal ? "transform.translation.y":"transform.translation.x"
+        let resting:CGFloat=horizontal ? 14:-24
+        let interrupted=layer.animation(forKey:"webbyEdgeReveal") != nil
+        let from=interrupted ? ((layer.presentation()?.value(forKeyPath:key) as? NSNumber)?.doubleValue ?? 0):(show ? Double(resting):0)
+        let movement:CABasicAnimation
+        if show {
+            let spring=CASpringAnimation(keyPath:key);spring.mass=1;spring.stiffness=580;spring.damping=48;spring.duration=0.30;movement=spring
         } else {
-            content.layoutSubtreeIfNeeded()
-            if !sidebarVisible { sidebar.isHidden = true }
+            movement=CABasicAnimation(keyPath:key);movement.duration=0.18;movement.timingFunction=CAMediaTimingFunction(name:.easeInEaseOut)
+        }
+        movement.fromValue=from;movement.toValue=show ? 0:resting
+        movement.fillMode = .forwards;movement.isRemovedOnCompletion=false
+        layer.add(movement,forKey:"webbyEdgeReveal")
+        let fade=CABasicAnimation(keyPath:"opacity");fade.fromValue=interrupted ? (layer.presentation()?.opacity ?? 1):(show ? 0:1);fade.toValue=show ? 1:0;fade.duration=show ? 0.16:0.18
+        fade.fillMode = .forwards;fade.isRemovedOnCompletion=false
+        layer.add(fade,forKey:"webbyEdgeOpacity")
+    }
+    // Hidden tabs require deliberate contact with the outer edge. Once open,
+    // the existing full-panel hover region keeps them available for selection.
+    private func tabHoverRegion(horizontal:Bool)->NSRect {
+        if horizontal {return NSRect(x:mainArea.frame.minX,y:content.bounds.maxY-4,width:max(0,mainArea.bounds.width-64),height:4)}
+        return NSRect(x:content.bounds.minX,y:content.bounds.minY,width:min(4,content.bounds.width),height:content.bounds.height)
+    }
+    private func revealTabsFromEdge() {
+        guard tabsHiddenByUser,(!tabsPeekVisible || tabsRetreating) else{return}
+        tabsRetreating=false;tabsPeekToken+=1;tabsPeekVisible=true;peekHorizontal=BrowserTabPlacement.current == .horizontal
+        applyHiddenChromeLayout();content.layoutSubtreeIfNeeded();applyWallpaperPresentation()
+        for view in peekHorizontal ? horizontalChrome+[horizontalHoverGlass].compactMap({$0}):[sidebar!] {view.wantsLayer=true;animateTabPeek(view,show:true,horizontal:peekHorizontal)}
+        scheduleTabsRetreat()
+    }
+    private func retreatTabs() {
+        guard tabsPeekVisible else{return}
+        tabsRetreatTimer?.invalidate();tabsRetreatTimer=nil;tabsPeekToken+=1
+        let token=tabsPeekToken,horizontal=peekHorizontal
+        tabsRetreating=true
+        for view in horizontal ? horizontalChrome+[horizontalHoverGlass].compactMap({$0}):[sidebar!] {animateTabPeek(view,show:false,horizontal:horizontal)}
+        let finish={ [weak self] in
+            guard let self,self.tabsPeekToken==token else{return}
+            self.tabsPeekVisible=false;self.tabsRetreating=false;self.applyHiddenChromeLayout();self.content.layoutSubtreeIfNeeded()
+            // Hide first, then clear the held presentation. Otherwise Core
+            // Animation briefly restores opacity/position before AppKit hides it.
+            for view in horizontal ? self.horizontalChrome+[self.horizontalHoverGlass].compactMap({$0}):[self.sidebar!] {
+                view.layer?.removeAnimation(forKey:"webbyEdgeReveal");view.layer?.removeAnimation(forKey:"webbyEdgeOpacity")
+            }
+            self.applyWallpaperPresentation()
+        }
+        if Motion.enabled {DispatchQueue.main.asyncAfter(deadline:.now()+0.18,execute:finish)}else{finish()}
+    }
+    private func pointerOverTabs()->Bool {
+        let point=content.convert(window.mouseLocationOutsideOfEventStream,from:nil)
+        if peekHorizontal {return NSRect(x:mainArea.frame.minX,y:content.bounds.maxY-56,width:mainArea.bounds.width,height:56).contains(point)}
+        return sidebar.frame.insetBy(dx:-8,dy:-8).contains(point)
+    }
+    private func scheduleTabsRetreat() {
+        tabsRetreatTimer?.invalidate()
+        tabsRetreatTimer=Timer.scheduledTimer(withTimeInterval:0.45,repeats:false){[weak self] _ in MainActor.assumeIsolated {
+            guard let self,self.tabsPeekVisible else{return}
+            let editing=(self.window.firstResponder as? NSTextView).map{$0.isDescendant(of:self.sidebar) || $0.isDescendant(of:self.horizontalScroll)} ?? false
+            if NSApp.isActive && (self.pointerOverTabs() || editing || NSEvent.pressedMouseButtons != 0 || self.profileSwipeActive || NSApp.modalWindow != nil) {self.scheduleTabsRetreat()}
+            else {self.retreatTabs()}
+        }}
+    }
+    private func updateChromeHover(_ event:NSEvent) {
+        guard window.isKeyWindow,NSApp.isActive,NSEvent.pressedMouseButtons==0,pointerLockedWebView==nil else {hoverDwell?.cancel();hoverDwell=nil;hoverTarget="";return}
+        if tabsPeekVisible && tabsRetreating && pointerOverTabs() {revealTabsFromEdge()}
+        let p=content.convert(event.locationInWindow,from:nil)
+        let horizontal=BrowserTabPlacement.current == .horizontal
+        let nearTabs=tabsHiddenByUser && !tabsPeekVisible && tabHoverRegion(horizontal:horizontal).contains(p)
+        let target = nearTabs ? "tabs" : "" // Page controls never trigger address chrome.
+        if target != hoverTarget {
+            hoverDwell?.cancel();hoverDwell=nil;hoverTarget=target
+            if !target.isEmpty {
+                let work=DispatchWorkItem{[weak self] in
+                    guard let self else{return}
+                    self.hoverDwell=nil
+                    guard self.hoverTarget==target,self.window.isKeyWindow,NSApp.isActive else{self.hoverTarget="";return}
+                    let current=self.content.convert(self.window.mouseLocationOutsideOfEventStream,from:nil)
+                    let horizontal=BrowserTabPlacement.current == .horizontal
+                    let stillAtTarget = self.tabHoverRegion(horizontal:horizontal).contains(current)
+                    guard self.content.bounds.contains(current),stillAtTarget,NSEvent.pressedMouseButtons==0,self.pointerLockedWebView==nil else{self.hoverTarget="";return}
+                    self.revealTabsFromEdge()
+                };hoverDwell=work;DispatchQueue.main.asyncAfter(deadline:.now()+0.24,execute:work)
+            }
+        }
+        if toolbarVisible {
+            if toolbarHideTimer==nil {scheduleToolbarHide()}
         }
     }
-
-    @objc private func toggleToolbar() {
-        if toolbarVisible { hideToolbar(animated: true) }
-        else { showToolbar() }
+    @objc private func toggleSidebar() {
+        let horizontal=BrowserTabPlacement.current == .horizontal
+        let opening=tabsHiddenByUser
+        let wasPeeking=tabsPeekVisible
+        chromeDepartures.forEach{$0.removeFromSuperview()};chromeDepartures=[]
+        let movingViews=[homeCenter,sidebarToggleButton,newTerminalButton,chromeToggle,toolbar].compactMap{$0}
+        var controlFrames=Motion.capture(movingViews,in:content).frames
+        // The revealed header and pinned page button are the same action.
+        // Transfer its visible position across the two native controls.
+        if opening && tabsPeekVisible && !horizontal,let button=sidebarRevealToggle,!button.isHidden {
+            controlFrames[ObjectIdentifier(sidebarToggleButton!)]=button.convert(button.bounds,to:content)
+        }
+        let controls=Motion.Geometry(frames:controlFrames)
+        let pageGeometry=Motion.capture([pageArea],in:content)
+        let widgetGeometry=widgetCanvas?.captureViewportLayout(in:content) ?? .empty
+        if !opening {
+            chromeDepartures=Motion.departChrome(horizontal ? horizontalChrome:[sidebar!],in:content,horizontal:horizontal)
+        }
+        hoverDwell?.cancel();hoverTarget="";tabsRetreatTimer?.invalidate();tabsPeekToken+=1;tabsPeekVisible=false;tabsRetreating=false
+        for view in horizontalChrome+[sidebar].compactMap({$0}) {view.layer?.removeAnimation(forKey:"webbyEdgeReveal");view.layer?.removeAnimation(forKey:"webbyEdgeOpacity");view.layer?.removeAnimation(forKey:"webbyGeometry")}
+        if horizontal {UserDefaults.standard.set(!tabsHiddenByUser,forKey:"horizontalTabsHidden")}
+        else {sidebarVisible.toggle();UserDefaults.standard.set(!sidebarVisible,forKey:"sidebarHidden")}
+        configureHorizontalTabs();content.layoutSubtreeIfNeeded()
+        if opening && !wasPeeking {
+            for view in horizontal ? horizontalChrome:[sidebar!] {view.wantsLayer=true;animateTabPeek(view,show:true,horizontal:horizontal)}
+        }
+        // Animate leaves, never both a parent and its children: that doubled
+        // translations and made the controls judder at the end of a switch.
+        if homeView?.isHidden != false {Motion.settle(pageGeometry,views:[pageArea],in:content,character:.split)}
+        Motion.settle(controls,views:movingViews,in:content,character:.widget)
+        widgetCanvas?.settleViewportLayout(widgetGeometry,in:content)
     }
 
-    private func showToolbar() {
-        guard activeWebView != nil, !terminalMode else { return }
-        if toolbarVisible { scheduleToolbarHide(); return }
-        toolbarTransitionToken += 1
-        let visibleOpacity = toolbar.layer?.presentation()?.opacity ?? 0
-        let visibleY = (toolbar.layer?.presentation()?.value(forKeyPath: "transform.translation.y") as? NSNumber)
-            .map { CGFloat(truncating: $0) } ?? -7
-        toolbarVisible = true
-        toolbar.isHidden = false
-        chromeToggle.isHidden = true
-        if Motion.enabled {
-            Motion.basic(toolbar.layer, key: "opacity", from: visibleOpacity, to: 1, duration: 0.18)
-            Motion.basic(toolbar.layer, key: "transform.translation.y", from: visibleY, to: 0, duration: 0.20)
-        }
-        scheduleToolbarHide()
+    @objc private func toggleToolbar() { focusAddress() }
+
+    private func showToolbar(fromHover: Bool = false) {
+        guard !fromHover else { return }
+        applyAddressChrome()
     }
 
     private func hideToolbar(animated: Bool) {
-        toolbarHideTimer?.invalidate()
-        toolbarHideTimer = nil
-        toolbarTransitionToken += 1
-        let token = toolbarTransitionToken
-        let wasVisible = toolbarVisible && !toolbar.isHidden
-        let visibleOpacity = toolbar.layer?.presentation()?.opacity ?? 1
-        let visibleY = (toolbar.layer?.presentation()?.value(forKeyPath: "transform.translation.y") as? NSNumber)
-            .map { CGFloat(truncating: $0) } ?? 0
-        toolbarVisible = false
-        if animated && Motion.enabled && wasVisible {
-            Motion.basic(toolbar.layer, key: "opacity", from: visibleOpacity, to: 0, duration: 0.18)
-            Motion.basic(toolbar.layer, key: "transform.translation.y", from: visibleY, to: -7, duration: 0.18)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-                guard let self, self.toolbarTransitionToken == token, !self.toolbarVisible else { return }
-                self.toolbar.isHidden = true
-                self.chromeToggle.isHidden = self.activeWebView == nil
-            }
-        } else {
-            toolbar.isHidden = true
-            chromeToggle.isHidden = activeWebView == nil
-        }
+        toolbarHideTimer?.invalidate(); toolbarHideTimer = nil
+        applyAddressChrome()
     }
 
     private func scheduleToolbarHide() {
-        toolbarHideTimer?.invalidate()
-        toolbarHideTimer = Timer.scheduledTimer(timeInterval: 2.2, target: self,
-                                                selector: #selector(toolbarHideTimerFired), userInfo: nil, repeats: false)
+        toolbarHideTimer?.invalidate(); toolbarHideTimer = nil
     }
 
     @objc private func toolbarHideTimerFired() {
-        guard toolbarVisible else { return }
-        toolbarHideTimer = nil
-        let point = toolbar.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        if toolbar.bounds.contains(point) || addressField.currentEditor() != nil { scheduleToolbarHide() }
-        else { hideToolbar(animated: true) }
+        // Explicitly opened chrome stays open until Escape, navigation, or a page click.
+        toolbarHideTimer?.invalidate(); toolbarHideTimer = nil
+    }
+
+    private var addressHeaderViews: [NSView] {
+        [sidebarNewTab, spaceLabel, downloads?.button, sidebarRevealToggle,
+         sidebarTabScroll, sidebarToggleButton, newTerminalButton, toolbar].compactMap { $0 }
+    }
+
+    @objc private func addressPlacementChanged() {
+        closeSuggestions()
+        let views = addressHeaderViews
+        let geometry = Motion.capture(views, in: content)
+        let wasHidden = toolbar.isHidden
+        toolbarTransitionToken += 1
+        toolbar.layer?.removeAllAnimations()
+        toolbarVisible = false
+        applyAddressChrome()
+        content.layoutSubtreeIfNeeded()
+        Motion.settle(geometry, views: views, in: content, character: .widget)
+        if wasHidden && !toolbar.isHidden { Motion.reveal(toolbar, character: .widget) }
+    }
+
+    /// Sidebar address mode occupies sidebar space only; the webpage keeps its full height.
+    private func applyAddressChrome() {
+        guard addressChromeReady else { return }
+        let horizontal = BrowserTabPlacement.current == .horizontal
+        let mode = BrowserAddressPlacement.current
+        let pane = mode == .tabBar && !horizontal
+        let compact = mode == .tabBar && horizontal && !tabsHiddenByUser
+        let page = activeWebView != nil && activeTab?.showsSearchView != true && !terminalMode && pointerLockedWebView == nil
+        if pane && !sidebarVisible && !tabsPeekVisible && addressField.currentEditor() != nil {
+            window.makeFirstResponder(activeWebView)
+        }
+        let pageChanged = addressPageState != nil && addressPageState != page
+        addressPageState = page
+        let moving = addressHeaderViews
+        let geometry = pageChanged ? Motion.capture(moving, in: content) : .empty
+        defer {
+            if pageChanged {
+                content.layoutSubtreeIfNeeded()
+                Motion.settle(geometry, views: moving, in: content, character: .widget)
+            }
+        }
+        let base: CGFloat = horizontal && !tabsHiddenByUser ? 44 : 0
+        pageAreaTop.constant = base + (page && !compact && !pane ? 42 : 0)
+        horizontalTabsTrailing?.constant = compact && page ? -300 : 0
+        let sharedHeader = page && !horizontal && !pane
+        sidebarHeaderTop.constant = sharedHeader ? 4 : 16
+        sidebarRevealTop.constant = sharedHeader ? 4 : 16
+        sidebarTabsTop.constant = pane ? 50 : (sharedHeader ? 4 : 26)
+        sidebarSeparator.isHidden = pane || sharedHeader
+        sidebarControlTop.constant = page && !pane ? base + 4 : base + 16
+        sidebarToggleButton.isHidden = horizontal || tabsPeekVisible || pane && sidebarVisible
+        newTerminalButton.isHidden = !BrowserExperiment.cyclesNewTabProfiles || page && (horizontal || pane)
+        let layoutKey = "\(mode.rawValue):\(pane):\(compact):\(base):\(BrowserExperiment.cyclesNewTabProfiles)"
+        if layoutKey != addressLayoutKey {
+            addressLayoutKey = layoutKey
+            NSLayoutConstraint.deactivate(addressChromeConstraints)
+            let host: NSView = pane ? sidebarAddressHost : mainArea
+            if toolbar.superview !== host { toolbar.removeFromSuperview(); host.addSubview(toolbar) }
+            if pane {
+                addressChromeConstraints = [
+                    toolbar.topAnchor.constraint(equalTo: sidebarNewTab.bottomAnchor, constant: 8),
+                    toolbar.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 4),
+                    toolbar.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -4),
+                    toolbar.heightAnchor.constraint(equalToConstant: 34)
+                ]
+            } else {
+                addressChromeConstraints = [
+                    toolbar.topAnchor.constraint(equalTo: mainArea.topAnchor, constant: compact ? 8 : base + 4),
+                    toolbar.trailingAnchor.constraint(equalTo: mainArea.trailingAnchor, constant: compact ? -48 : -8),
+                    toolbar.heightAnchor.constraint(equalToConstant: 34)
+                ]
+                if compact { addressChromeConstraints.append(toolbar.widthAnchor.constraint(equalToConstant: 288)) }
+                else {
+                    toolbarLeading = toolbar.leadingAnchor.constraint(equalTo: mainArea.leadingAnchor, constant: horizontal ? 8 : (BrowserExperiment.cyclesNewTabProfiles ? 92 : 51))
+                    addressChromeConstraints.append(toolbarLeading)
+                }
+            }
+            NSLayoutConstraint.activate(addressChromeConstraints)
+        }
+        for view in addressControls.arrangedSubviews where view !== topAddressSurface {
+            view.isHidden = pane || compact || view === addressDismiss
+        }
+        addressControls.spacing = pane || compact ? 0 : 5
+        toolbar.layer?.cornerRadius = pane || compact ? 12 : 14
+        chromeToggle.isHidden = true
+        toolbar.isHidden = pane ? terminalMode : !page
+        toolbarVisible = !toolbar.isHidden
+        updateAddressEdgeBackdrop()
+        updateWidgetActivity()
+        wallpaper?.refreshActivity()
     }
 
     private func installChromeMonitor() {
+        controlMotionMonitor=NSEvent.addLocalMonitorForEvents(matching:[.leftMouseDown,.leftMouseUp]){[weak self] event in
+            guard let self,let host=event.window,host === self.window || self.floatingWindows.values.contains(where:{$0 === host}) else{return event}
+            if event.type == .leftMouseUp {if let button=self.pressedMotionButton {Motion.basic(button.layer,key:"transform.scale",from:0.99,to:1,duration:0.12)};self.pressedMotionButton=nil;return event}
+            var hit=host.contentView?.hitTest(host.contentView?.convert(event.locationInWindow,from:nil) ?? .zero)
+            self.commandLinkIntent=nil
+            if event.modifierFlags.contains(.command),!event.modifierFlags.contains(.option) {
+                var node=hit
+                while let current=node {
+                    if let view=current as? WKWebView,let tab=self.tab(for:view) {self.commandLinkIntent=(tab.id,ProcessInfo.processInfo.systemUptime);break}
+                    node=current.superview
+                }
+            }
+            if event.modifierFlags.contains(.command) {
+                var candidate=hit;var closing=false
+                while let node=candidate {
+                    if let button=node as? TabActionButton,button.action == #selector(BrowserApp.closeTabAction(_:)) {closing=true}
+                    if let row=node as? TabRow {
+                        if !closing {self.commandGroupTab(row.tabID);return nil}
+                        break
+                    }
+                    candidate=node.superview
+                }
+            }
+            while let current=hit,!(current is NSButton) {hit=current.superview}
+            if let button=hit as? NSButton,!(button is GlassButton),button.isEnabled {button.wantsLayer=true;self.pressedMotionButton=button;Motion.basic(button.layer,key:"transform.scale",from:0.97,to:1,duration:0.16)}
+            return event
+        }
+
         installTabShortcuts()
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .mouseMoved]) { [weak self] event in
             guard let self, event.window === self.window else { return event }
@@ -4966,7 +5976,7 @@ private final class SplitLinkWebView: WKWebView {
                 let profilePoint = self.horizontalProfile.convert(event.locationInWindow, from: nil)
                 let overProfile = horizontalLayout
                     ? !self.horizontalProfile.isHidden && self.horizontalProfile.bounds.contains(profilePoint)
-                    : self.sidebarVisible && self.sidebar.bounds.contains(sidebarPoint)
+                    : (self.sidebarVisible || self.tabsPeekVisible) && self.sidebar.bounds.contains(sidebarPoint)
                 let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.25
                 if BrowserExperiment.cyclesNewTabProfiles || self.spaces.count < 2 {
                     if self.profileSwipeActive { self.profileSwipeActive=false;self.swipeDistance=0;self.profileMotion.cancel() }
@@ -4998,13 +6008,7 @@ private final class SplitLinkWebView: WKWebView {
                 }
 
             }
-            if event.type == .mouseMoved && self.toolbarVisible {
-                let point = self.toolbar.convert(event.locationInWindow, from: nil)
-                if self.toolbar.bounds.contains(point) {
-                    self.toolbarHideTimer?.invalidate()
-                    self.toolbarHideTimer = nil
-                } else if self.toolbarHideTimer == nil { self.scheduleToolbarHide() }
-            }
+            if event.type == .mouseMoved {self.updateChromeHover(event)}
             return event
         }
     }
@@ -5018,8 +6022,19 @@ private final class SplitLinkWebView: WKWebView {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.fastRule = rule
+                if let rule { self.applyFastRule(rule) }
                 if rule == nil { self.fastModeEnabled = false; self.fastModeItem?.isEnabled = false }
             }
+        }
+    }
+
+    private func applyFastRule(_ rule: WKContentRuleList) {
+        var updated = Set<ObjectIdentifier>()
+        for tab in spaces.flatMap(\.tabs) + Array(miniTabs.values) {
+            guard let controller = tab.webView?.configuration.userContentController,
+                  updated.insert(ObjectIdentifier(controller)).inserted else { continue }
+            controller.remove(rule)
+            if fastModeEnabled { controller.add(rule) }
         }
     }
 
@@ -5027,10 +6042,23 @@ private final class SplitLinkWebView: WKWebView {
     private let linkPreviewSource = Bundle.main.url(forResource: "LinkPreview", withExtension: "js").flatMap { try? String(contentsOf: $0) }
     private let videoControlsSource = Bundle.main.url(forResource: "VideoControls", withExtension: "js").flatMap { try? String(contentsOf: $0) }
 
+    /// macOS exposes fullscreen publicly, but keeps its PiP enablement on WKPreferences.
+    /// Use the verified boolean setter only when present; never unguarded KVC.
+    private func configureVideoPresentation(_ configuration: WKWebViewConfiguration) {
+        configuration.preferences.isElementFullscreenEnabled = true
+        let preferences = configuration.preferences
+        let setter = NSSelectorFromString("_setAllowsPictureInPictureMediaPlayback:")
+        if preferences.responds(to: setter), let implementation = preferences.method(for: setter) {
+            typealias BooleanSetter = @convention(c) (AnyObject, Selector, Bool) -> Void
+            unsafeBitCast(implementation, to: BooleanSetter.self)(preferences, setter, true)
+        }
+    }
+
     private func makeWebView(for tab: BrowserTab, popupConfiguration: WKWebViewConfiguration? = nil) -> WKWebView {
         if let existing = tab.webView { return existing }
         let configuration = popupConfiguration ?? WKWebViewConfiguration()
         configuration.suppressesIncrementalRendering = false
+        configureVideoPresentation(configuration)
         if popupConfiguration == nil {
             configuration.websiteDataStore = ownerSpace(for: tab).dataStore
             if fastModeEnabled, let fastRule { configuration.userContentController.add(fastRule) }
@@ -5038,7 +6066,7 @@ private final class SplitLinkWebView: WKWebView {
             configuration.userContentController.add(self, name: "browserLinkPreview")
             if let source = linkPreviewSource {
                 configuration.userContentController.addUserScript(
-                    WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+                    WKUserScript(source: source+"\nwindow.__webbySetLinkPreviewsEnabled?.(\(BrowserHoverPreferences.glancesEnabled ? "true":"false"));", injectionTime: .atDocumentEnd, forMainFrameOnly: true))
             }
             if let source = passwordProbeSource {
                 configuration.userContentController.addUserScript(WKUserScript(source: source,
@@ -5046,7 +6074,6 @@ private final class SplitLinkWebView: WKWebView {
             }
             if let script = videoControlsSource {
                 let videoWorld = WKContentWorld.world(name: "WebbyVideo")
-                configuration.userContentController.add(self, contentWorld: videoWorld, name: "browserVideoFloat")
                 configuration.userContentController.addUserScript(
                     WKUserScript(source: script, injectionTime: .atDocumentEnd,
                                  forMainFrameOnly: false, in: videoWorld))
@@ -5059,6 +6086,7 @@ private final class SplitLinkWebView: WKWebView {
         // WebKit popup configurations already inherit the opener's controller and session.
         // Reinstalling handlers on that shared controller raises an Objective-C exception.
         let view = SplitLinkWebView(frame: .zero, configuration: configuration)
+        view.allowsBackForwardNavigationGestures = true
         view.registerForDraggedTypes([.URL, .string])
         view.canAddPane = { [weak self,weak tab] in guard let self,let tab,self.miniTabs[tab.id]==nil else{return false};return (self.splitTabIDs?.count ?? 1)<4 }
         view.onLinkDrop = { [weak self, weak tab] url, zone in
@@ -5148,14 +6176,14 @@ private final class SplitLinkWebView: WKWebView {
 
     private func updateGlassTone(for webView: WKWebView) {
         guard let tab=tab(for:webView) else {return}
-        let enabled=BrowserTabPlacement.current == .horizontal && tab.id == activeTabID
+        let enabled=(BrowserTabPlacement.current == .horizontal || BrowserGlass.matchWebsiteEdge) && tab.id == activeTabID
         var sampleX:CGFloat=0.5
         let rowID=splitTabIDs?.contains(tab.id) == true ? splitRepresentativeID ?? tab.id : tab.id
         if let row=horizontalRows[rowID],webView.bounds.width>0 {
             let point=webView.convert(row.convert(NSPoint(x:row.bounds.midX,y:0),to:nil),from:nil)
             sampleX=min(0.98,max(0.02,point.x/webView.bounds.width))
         }
-        webView.evaluateJavaScript("window.__webbyChromeTone?.({enabled:\(enabled),x:\(sampleX),glass:\(BrowserGlass.pageInjectionEnabled)})",
+        webView.evaluateJavaScript("window.__webbyChromeTone?.({enabled:\(enabled),x:\(sampleX),left:\(BrowserGlass.matchWebsiteEdge && BrowserTabPlacement.current != .horizontal),glass:\(BrowserGlass.pageInjectionEnabled)})",
             in:nil,in:BrowserChromeTone.world,completionHandler:nil)
         if BrowserGlass.pageInjectionEnabled {
             tab.prefersDarkGlass=true
@@ -5204,12 +6232,15 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     private func navigate(_ input: String, in tab: BrowserTab? = nil, profileID: UUID? = nil) {
+        closeSuggestions()
         let query = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, let target = tab ?? activeTab,
               let url = destination(for: query, profile: ownerSpace(for: target).saved.id) else { return }
         if BrowserExperiment.cyclesNewTabProfiles && target.fuseSearch && target.id == activeTabID && !target.isTerminal {
             let isWebsite = query.contains("://") || (!query.contains(where: \.isWhitespace) && (query.contains(".") || query.lowercased().hasPrefix("localhost")))
-            let routedID = profileID ?? (isWebsite ? FuseHistoryRouting.profile(for: url, sources: fuseHistorySources) : nil)
+            let routingRevision=spaces.map{HistoryRevision(space:ObjectIdentifier($0),revision:$0.historyRevision)}
+            let cachedProfile=fuseRouteRevision==routingRevision ? fuseRoutes[url.host?.lowercased() ?? ""]:nil
+            let routedID = profileID ?? (isWebsite ? cachedProfile ?? FuseHistoryRouting.profile(for: url, sources: fuseHistorySources) : nil)
             if let routedID, let space = spaces.first(where: { $0.saved.id == routedID }), ownerSpace(for: target) !== space {
                 if target.webView == nil && !target.isTerminal { assignSearchProfile(target, to: space) }
                 else {
@@ -5253,7 +6284,7 @@ private final class SplitLinkWebView: WKWebView {
             refreshTabs()
             return
         }
-        suggestions.close()
+        closeSuggestions()
         loadErrorLabel.isHidden = true
         target.loadError = nil
         let startsFromSearch = target.webView == nil || target.showsSearchView
@@ -5275,7 +6306,7 @@ private final class SplitLinkWebView: WKWebView {
             globe.engine.showScene(usesFuseSearch ? BrowserExperiment.fuseScene : "search")
         }
         hideToolbar(animated: false)
-        chromeToggle.isHidden = startsFromSearch
+        applyAddressChrome()
         let view = makeWebView(for: target)
         target.title = query.contains("://") || query.contains(".") ? (url.host ?? query) : query
         if target.id == activeTabID {
@@ -5327,6 +6358,7 @@ private final class SplitLinkWebView: WKWebView {
         let text = addressField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         navigate(text)
+        window.makeFirstResponder(activeWebView)
     }
 
     @objc private func openHomeSearch() {
@@ -5339,6 +6371,12 @@ private final class SplitLinkWebView: WKWebView {
         if let mini=NSApp.keyWindow as? MiniWebbyWindow {mini.makeFirstResponder(mini.addressField);mini.addressField.currentEditor()?.selectAll(nil);return}
         if let ide = activeTab?.ide { ide.focus() }
         else if terminalMode { activeTab?.terminalView?.focus() }
+        else if BrowserAddressPlacement.current == .tabBar && BrowserTabPlacement.current != .horizontal {
+            if !sidebarVisible { toggleSidebar() }
+            applyAddressChrome(); content.layoutSubtreeIfNeeded()
+            window.makeFirstResponder(addressField)
+            addressField.currentEditor()?.selectAll(nil)
+        }
         else if activeWebView == nil || activeTab?.showsSearchView == true {
             window.makeFirstResponder(homeSearchField)
             homeSearchField.currentEditor()?.selectAll(nil)
@@ -5395,6 +6433,7 @@ private final class SplitLinkWebView: WKWebView {
     }
 
     @objc private func showFindBar() {
+        if let ide = activeTab?.ide { ide.find(); return }
         guard activeWebView != nil else { return }
         if findBar == nil {
             let bar = NSVisualEffectView()
@@ -5443,13 +6482,14 @@ private final class SplitLinkWebView: WKWebView {
             findStatus = status
         }
         findBar?.isHidden = false
+        if let findBar {Motion.reveal(findBar,character:.panel)}
         window.makeFirstResponder(findField)
         findField?.currentEditor()?.selectAll(nil)
     }
 
-    @objc private func hideFindBar() { findBar?.isHidden = true; window.makeFirstResponder(activeWebView) }
-    @objc private func findNext() { findInPage(backwards: false) }
-    @objc private func findPrevious() { findInPage(backwards: true) }
+    @objc private func hideFindBar() { if let findBar {Motion.depart(findBar,character:.panel)};findBar?.isHidden = true; window.makeFirstResponder(activeWebView) }
+    @objc private func findNext() { if let ide = activeTab?.ide { ide.find(backwards: false); return }; findInPage(backwards: false) }
+    @objc private func findPrevious() { if let ide = activeTab?.ide { ide.find(backwards: true); return }; findInPage(backwards: true) }
 
     @objc private func showSitePermissions() {
         guard let tab = activeTab, let host = tab.webView?.url?.host ?? tab.suspendedURL?.host else { return }
@@ -5469,20 +6509,20 @@ private final class SplitLinkWebView: WKWebView {
         glass.autoresizingMask = [.width, .height]
         panel.contentView = glass
         let heading = NSTextField(labelWithString: host)
-        heading.font = .systemFont(ofSize: 18, weight: .semibold)
+        heading.font = WebbyTypography.font(ofSize: 18, weight: .semibold)
         heading.lineBreakMode = .byTruncatingMiddle
         heading.frame = NSRect(x: 24, y: 342, width: 372, height: 27)
         glass.addSubview(heading)
         let profileName = ownerSpace(for: tab).saved.name
         let subtitle = NSTextField(labelWithString: "Permissions for \(profileName)")
-        subtitle.font = .systemFont(ofSize: 11)
+        subtitle.font = WebbyTypography.font(ofSize: 11)
         subtitle.textColor = .secondaryLabelColor
         subtitle.frame = NSRect(x: 24, y: 321, width: 372, height: 18)
         glass.addSubview(subtitle)
         for (index, kind) in SitePermission.allCases.enumerated() {
             let y = CGFloat(274 - index * 39)
             let label = NSTextField(labelWithString: kind.title)
-            label.font = .systemFont(ofSize: 13)
+            label.font = WebbyTypography.font(ofSize: 13)
             label.frame = NSRect(x: 27, y: y + 4, width: 160, height: 20)
             glass.addSubview(label)
             let picker = NSPopUpButton(frame: NSRect(x: 200, y: y, width: 190, height: 28), pullsDown: false)
@@ -5494,7 +6534,7 @@ private final class SplitLinkWebView: WKWebView {
             glass.addSubview(picker)
         }
         let note = NSTextField(labelWithString: "Allow does not bypass macOS or website permission prompts.")
-        note.font = .systemFont(ofSize: 10)
+        note.font = WebbyTypography.font(ofSize: 10)
         note.textColor = .tertiaryLabelColor
         note.frame = NSRect(x: 24, y: 12, width: 380, height: 16)
         glass.addSubview(note)
@@ -5542,13 +6582,16 @@ private final class SplitLinkWebView: WKWebView {
     private func updateNavigation() {
         backButton.isEnabled = activeWebView?.canGoBack == true
         forwardButton.isEnabled = activeWebView?.canGoForward == true
-        if !terminalMode { addressField.stringValue = activeWebView?.url.map(displayAddress) ?? "" }
+        if !terminalMode && addressField.currentEditor() == nil { addressField.stringValue = activeWebView?.url.map(displayAddress) ?? "" }
+        addressField.toolTip = activeWebView?.url?.absoluteString
+        applyAddressChrome()
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if pointerLockedWebView === webView { releasePointerLock() }
         if let tab = tab(for: webView) {
             tab.navigationTiming = BrowserNavigationTiming()
+            tab.siteName=nil
             tab.currentNavigation = navigation
             tab.loadError = nil
             tab.navigationInProgress = true
@@ -5571,7 +6614,7 @@ private final class SplitLinkWebView: WKWebView {
             hideToolbar(animated: false)
             webView.isHidden = false
             if tab.showsSearchView {
-                chromeToggle.isHidden = true
+                applyAddressChrome()
                 homeView.isHidden = false
                 webView.alphaValue = 0.001
                 homeSearchSurface.isHidden = false
@@ -5581,7 +6624,7 @@ private final class SplitLinkWebView: WKWebView {
                 homeSearchField.stringValue = tab.searchDraft
                 globe.engine.showScene("search")
             } else {
-                chromeToggle.isHidden = false
+                applyAddressChrome()
                 homeView.isHidden = true
                 webView.alphaValue = 1
             }
@@ -5606,7 +6649,8 @@ private final class SplitLinkWebView: WKWebView {
     private func presentPage(_ tab: BrowserTab, webView: WKWebView, generation: UUID) {
         guard self.tab(id: tab.id) === tab, tab.webView === webView, tab.navigationTiming.id == generation,
               tab.navigationTiming.committed != nil, tab.loadError == nil else { return }
-        if tab.navigationTiming.presented == nil { tab.navigationTiming.presented = ProcessInfo.processInfo.systemUptime }
+        guard tab.navigationTiming.presented == nil else { return }
+        tab.navigationTiming.presented = ProcessInfo.processInfo.systemUptime
         tab.showsSearchView = false
         webView.alphaValue = 1
         guard tab.id == activeTabID else { return }
@@ -5614,7 +6658,7 @@ private final class SplitLinkWebView: WKWebView {
         webView.isHidden = false
         globe.engine.hide()
         homeSearchSurface.stopLoading()
-        chromeToggle.isHidden = false
+        applyAddressChrome()
         if homeSearchField.currentEditor() != nil {
             homeSearchField.abortEditing(); window.makeFirstResponder(webView)
         }
@@ -5651,6 +6695,8 @@ private final class SplitLinkWebView: WKWebView {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard let tab = tab(for: webView), tab.currentNavigation === navigation else { return }
         tab.navigationTiming.finished = ProcessInfo.processInfo.systemUptime
+        readSiteName(tab,view:webView)
+        sendChatGPTDraft(tab,webView:webView)
         updateMiniChrome(tab)
         presentPage(tab, webView: webView, generation: tab.navigationTiming.id)
         updateGlassTone(for: webView)
@@ -5668,6 +6714,13 @@ private final class SplitLinkWebView: WKWebView {
            let space = spaces.first(where: { $0.saved.id == tab.ownerSpaceID })
                        ?? spaces.first(where: { $0.tabs.contains { $0.id == tab.id } }) {
             space.recordVisit(url: url, title: tab.title)
+            if GitHubWidgetStore.repositoryURL(url) != nil {
+                let profile = space.saved.id
+                Task {
+                    await GitHubWidgetStore.shared.recordVisit(url, profile: profile)
+                    NotificationCenter.default.post(name:.webbyGitHubChanged,object:profile,userInfo:["recentOnly":true])
+                }
+            }
             if tab.isPinned { savePinnedTabs(for: space) }
             scheduleSpaceSave()
             scheduleSessionSave()
@@ -5683,7 +6736,7 @@ private final class SplitLinkWebView: WKWebView {
             homeView.isHidden = true
             webView.isHidden = false
             globe.engine.hide()
-            chromeToggle.isHidden = false
+            applyAddressChrome()
             let token = navigationToken
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                 guard let self, self.navigationToken == token else { return }
@@ -5852,13 +6905,20 @@ private final class SplitLinkWebView: WKWebView {
             homeSearchSurface.stopLoading()
             homeView.isHidden = false
             webView.alphaValue = 0.001
-            chromeToggle.isHidden = true
+            applyAddressChrome()
             globe.engine.showScene("search")
             loadErrorLabel.stringValue = tab.loadError ?? ""
             loadErrorLabel.isHidden = false
             homeSearchField.stringValue = tab.pendingSearchInput ?? tab.searchDraft
             updateNavigation()
         }
+    }
+
+    private func isCommandLink(_ action:WKNavigationAction,source:BrowserTab)->Bool {
+        if action.modifierFlags.contains(.command) {return true}
+        if let intent=commandLinkIntent,intent.source==source.id,ProcessInfo.processInfo.systemUptime-intent.time<0.75 {return true}
+        guard let event=NSApp.currentEvent,[NSEvent.EventType.leftMouseDown,.leftMouseUp].contains(event.type),event.modifierFlags.contains(.command) else{return false}
+        return ProcessInfo.processInfo.systemUptime-event.timestamp<0.75
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -5875,20 +6935,21 @@ private final class SplitLinkWebView: WKWebView {
             decisionHandler(.cancel);openMiniWebby(url:url,profile:ownerSpace(for:source).saved.id);return
         }
         if navigationAction.navigationType == .linkActivated,
-           navigationAction.modifierFlags.contains(.command),
-           navigationAction.targetFrame != nil,
-           let source = tab(for: webView),
+           let source = tab(for: webView),isCommandLink(navigationAction,source:source),
            let url = navigationAction.request.url,
            ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
             let tab = BrowserTab()
             tab.ownerSpaceID = ownerSpace(for: source).saved.id
             tab.title = url.host ?? "New Tab"
+            tab.searchDraft=url.absoluteString
+            tab.showsSearchView=false
             tab.navigationInProgress = true
             displaySpace(for: source).tabs.append(tab)
             if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(tab.id) }
             let background = makeWebView(for: tab)
             background.isHidden = true
             background.load(navigationAction.request)
+            groupBackgroundLink(tab,from:source,url:url)
             refreshTabs()
             decisionHandler(.cancel)
             return
@@ -5940,16 +7001,21 @@ private final class SplitLinkWebView: WKWebView {
         tab.navigationInProgress = true
         displaySpace(for: source).tabs.append(tab)
         if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(tab.id) }
-        let background = navigationAction.modifierFlags.contains(.command)
+        let commandLink=isCommandLink(navigationAction,source:source)
+        let background = commandLink
             || !tabs.contains(where: { $0.id == source.id })
         // Construct with WebKit's exact configuration before selection can create a default view.
         let popup = makeWebView(for: tab, popupConfiguration: configuration)
         if !background { selectTab(tab) }
         popup.isHidden = background
         popup.alphaValue = 1
+        if commandLink,let url=navigationAction.request.url {
+            tab.searchDraft=url.absoluteString
+            groupBackgroundLink(tab,from:source,url:url)
+        }
         if !background {
             homeView.isHidden = true
-            chromeToggle.isHidden = false
+            applyAddressChrome()
         }
         refreshTabs()
         return popup
@@ -6039,6 +7105,47 @@ private final class SplitLinkWebView: WKWebView {
         panel.beginSheetModal(for: window) { response in
             completionHandler(response == .OK ? panel.urls : nil)
         }
+    }
+
+    @objc(_webView:hasVideoInPictureInPictureDidChange:)
+    func webView(_ webView: WKWebView, hasVideoInPictureInPictureDidChange active: Bool) {
+        if let tab = tab(for: webView) {
+            tab.hasPictureInPicture = active
+            if !active { tab.returningPictureInPicture = false }
+        }
+        pipWindowMotion.setActive(spaces.flatMap(\.tabs).contains { $0.hasPictureInPicture } || miniTabs.values.contains { $0.hasPictureInPicture })
+    }
+
+    private func returnVideoInline(_ tab: BrowserTab) {
+        guard tab.hasPictureInPicture, !tab.returningPictureInPicture, !restoringVideoInline,
+              let view = tab.webView, view.fullscreenState == .notInFullscreen else { return }
+        tab.returningPictureInPicture = true
+        pipWindowMotion.cancel()
+        // Let the selected page paint its final geometry before native PiP flies back.
+        // Per-video inline presentation avoids WebKit's crashing close-all callback path.
+        view.callAsyncJavaScript("await new Promise(resolve=>requestAnimationFrame(resolve));window.__webbyReturnVideoInline?.();return true",
+            arguments: [:], in: nil, in: WKContentWorld.world(name: "WebbyVideo")) { [weak tab,weak view] result in
+                guard let tab,tab.webView === view else { return }
+                if case .failure = result { tab.returningPictureInPicture = false }
+            }
+    }
+
+    @objc(_webViewFullscreenMayReturnToInline:)
+    func webViewVideoMayReturnToInline(_ webView: WKWebView) {
+        guard let tab = tab(for: webView), !restoringVideoInline, !tab.returningPictureInPicture else { return }
+        restoringVideoInline = true
+        defer { restoringVideoInline = false }
+        if let host = floatingWindows[tab.id] {
+            host.makeKeyAndOrderFront(nil)
+        } else {
+            if !BrowserExperiment.cyclesNewTabProfiles,
+               let index = spaces.firstIndex(where: { $0.tabs.contains { $0.id == tab.id } }), index != activeSpaceIndex {
+                switchToSpace(index)
+            }
+            selectTab(tab)
+            window.makeKeyAndOrderFront(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc(_webViewDidRequestPointerLock:completionHandler:)
@@ -6358,7 +7465,7 @@ private final class SplitLinkWebView: WKWebView {
         image.image = selected.previewImage ?? selected.favicon ?? NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
         glass.addSubview(image)
         let title = NSTextField(labelWithString: selected.title)
-        title.font = .systemFont(ofSize: 17, weight: .semibold)
+        title.font = WebbyTypography.font(ofSize: 17, weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
         title.frame = NSRect(x: 22, y: 48, width: 396, height: 24); glass.addSubview(title)
         let detail = NSTextField(labelWithString: "\(ownerSpace(for: selected).saved.name) · \(switcherIndex + 1) / \(switcherIDs.count)")
@@ -6390,7 +7497,7 @@ private final class SplitLinkWebView: WKWebView {
         let fileMenu = NSMenu(title: "File")
         let ideItem = fileMenu.addItem(withTitle: "New IDE Tab", action: #selector(openIDE), keyEquivalent: "i")
         ideItem.target = self
-        ideItem.keyEquivalentModifierMask = [.command, .option]
+        ideItem.keyEquivalentModifierMask = [.command, .shift]
         let mini=fileMenu.addItem(withTitle:"New Mini Webby",action:#selector(openMiniAction),keyEquivalent:"")
         mini.target=self
         let promote=fileMenu.addItem(withTitle:"Keep Mini Page in Webby",action:#selector(keepMiniAction),keyEquivalent:"o");promote.target=self
@@ -6448,9 +7555,11 @@ private final class SplitLinkWebView: WKWebView {
         let viewMenu = NSMenu(title: "View")
         let backgroundSettings = viewMenu.addItem(withTitle: "Background & Effects…", action: #selector(openWallpaperSettings), keyEquivalent: "")
         backgroundSettings.target = self
+        let nextPair=viewMenu.addItem(withTitle:"Next Wallpaper Pair",action:#selector(cycleWallpaperPair),keyEquivalent:"w")
+        nextPair.target=self;nextPair.keyEquivalentModifierMask=[.command,.shift]
         let reload = viewMenu.addItem(withTitle: "Reload", action: #selector(reloadPage), keyEquivalent: "r")
         reload.target = self
-        let sidebarItem = viewMenu.addItem(withTitle: "Toggle Tabs Sidebar", action: #selector(toggleSidebar), keyEquivalent: "\\")
+        let sidebarItem = viewMenu.addItem(withTitle: "Show / Hide Tabs", action: #selector(toggleSidebar), keyEquivalent: "\\")
         sidebarItem.target = self
         let fuse = viewMenu.addItem(withTitle: "Fuse All Profile Tabs", action: #selector(toggleFuseMode), keyEquivalent: "F")
         fuse.target = self
@@ -6491,13 +7600,9 @@ private final class SplitLinkWebView: WKWebView {
         guard let fastRule else { return }
         fastModeEnabled.toggle()
         sender.state = fastModeEnabled ? .on : .off
-        for tab in tabs {
-            guard let view = tab.webView else { continue }
-            let controller = view.configuration.userContentController
-            if fastModeEnabled { controller.add(fastRule) }
-            else { controller.remove(fastRule) }
-            if view.url != nil { view.reload() }
-        }
+        // Update every account, including shared popup controllers, once.
+        // Do not reload forms, editors or background tabs to change the policy.
+        applyFastRule(fastRule)
     }
 
     @objc private func copyPerformanceReport() {
@@ -6563,12 +7668,26 @@ private final class SplitLinkWebView: WKWebView {
 
 
 extension BrowserApp {
+    private func toggleMiniWebby(){
+        let hosts=miniTabs.keys.compactMap{floatingWindows[$0] as? MiniWebbyWindow}
+        if let focused=NSApp.keyWindow as? MiniWebbyWindow,focused.isVisible,NSApp.isActive {
+            for host in hosts {miniSuggestions[host.tabID]?.close();host.orderOut(nil)}
+            if let previous=miniPreviousApps[focused.tabID],!previous.isTerminated {previous.activate(options:[.activateIgnoringOtherApps])}
+            return
+        }
+        guard let recent=hosts.max(by:{$0.lastUsed<$1.lastUsed}) else {openMiniWebby();return}
+        if let previous=NSWorkspace.shared.frontmostApplication,previous.processIdentifier != ProcessInfo.processInfo.processIdentifier {miniPreviousApps[recent.tabID]=previous}
+        if recent.isMiniaturized {recent.deminiaturize(nil)}
+        NSApp.activate(ignoringOtherApps:true);recent.makeKeyAndOrderFront(nil);recent.lastUsed=Date()
+        if miniTabs[recent.tabID]?.webView==nil {recent.makeFirstResponder(recent.addressField)}
+    }
     @objc private func openMiniAction(){openMiniWebby()}
     @objc private func keepMiniAction(){(NSApp.keyWindow as? MiniWebbyWindow)?.promote()}
     @discardableResult private func openMiniWebby(url:URL?=nil,profile:UUID?=nil,popupConfiguration:WKWebViewConfiguration?=nil)->BrowserTab {
         let currentMiniOwner=(NSApp.keyWindow as? MiniWebbyWindow).flatMap{miniTabs[$0.tabID]?.ownerSpaceID}
         let tab=BrowserTab();tab.ownerSpaceID=profile ?? currentMiniOwner ?? activeSpace.saved.id;tab.isFloating=true
         miniTabs[tab.id]=tab
+        updateWidgetActivity()
         let pointer=NSEvent.mouseLocation
         let screen=NSScreen.screens.first{$0.frame.contains(pointer)} ?? window.screen
         let mini=MiniWebbyWindow(tabID:tab.id,profiles:spaces.map{($0.saved.id,$0.saved.name)},owner:tab.ownerSpaceID!,screen:screen)
@@ -6595,6 +7714,7 @@ extension BrowserApp {
     }
     private func closeMiniWebby(_ id:UUID,restoreFocus:Bool=true){
         guard let tab=miniTabs.removeValue(forKey:id) else{return}
+        updateWidgetActivity()
         miniSuggestions.removeValue(forKey:id)?.close()
         if let url=tab.webView?.url,["http","https"].contains(url.scheme?.lowercased() ?? ""),let profile=tab.ownerSpaceID {
             var entries=MiniWebbyArchive.entries;entries.insert(MiniWebbyArchive(id:UUID(),title:tab.title,url:url.absoluteString,profile:profile,closed:Date()),at:0);MiniWebbyArchive.entries=entries
@@ -6604,6 +7724,7 @@ extension BrowserApp {
         if restoreFocus,let previous,!previous.isTerminated,miniTabs.isEmpty {previous.activate(options:[.activateIgnoringOtherApps])}
     }
     private func promoteMiniWebby(_ id:UUID,destination:UUID){
+        defer {Motion.reveal(pageArea,character:.split)}
         guard let tab=miniTabs[id],let target=spaces.first(where:{$0.saved.id==destination}) else{return}
         miniSuggestions.removeValue(forKey:id)?.close();miniPreviousApps.removeValue(forKey:id)
         target.tabs.append(tab);miniTabs.removeValue(forKey:id)
@@ -6611,7 +7732,7 @@ extension BrowserApp {
         dockFloatingTab(id:id,activate:true);scheduleSessionSave()
     }
     private func expireMiniWebby(_ id:UUID,hours:Int){
-        guard let tab=miniTabs[id],!tab.hasUnsavedEdits,!tab.captureMayBeActive,!tab.discardCheckInFlight,!tab.navigationInProgress else{return}
+        guard let tab=miniTabs[id],!tab.hasUnsavedEdits,!tab.captureMayBeActive,!tab.hasPictureInPicture,!tab.discardCheckInFlight,!tab.navigationInProgress else{return}
         guard let view=tab.webView else {closeMiniWebby(id,restoreFocus:false);return}
         guard view.cameraCaptureState == .none,view.microphoneCaptureState == .none else{return}
         tab.discardCheckInFlight=true
@@ -6658,14 +7779,29 @@ extension BrowserApp {
         if command == #selector(NSResponder.cancelOperation(_:)){miniSuggestions[id]?.close();field.window?.makeFirstResponder(nil);return true}
         return false
     }
-    func windowDidBecomeKey(_ notification:Notification){if let mini=notification.object as? MiniWebbyWindow {mini.lastUsed=Date()}}
+    func windowDidBecomeKey(_ notification:Notification){
+        if let host=notification.object as? NSWindow,!typographyWindows.contains(host),let root=host.contentView {
+            WebbyTypography.apply(to:root);typographyWindows.add(host)
+        }
+        if let mini=notification.object as? MiniWebbyWindow {mini.lastUsed=Date()}
+        updateWidgetActivity()
+    }
     func application(_ application:NSApplication,open urls:[URL]){
         let valid=Array(urls.filter{["http","https"].contains($0.scheme?.lowercased() ?? "") && $0.host != nil}.prefix(20))
         guard window != nil else {pendingMiniURLs += valid;return}
-        for url in valid {
-            if MiniWebbySettings.externalLinks {openMiniWebby(url:url)}
-            else {addTab(select:true);navigate(url.absoluteString);showBrowserWindow()}
-        }
+        for url in valid {openExternalLink(url)}
+    }
+    private func openExternalLink(_ url:URL) {
+        let profile=BrowserExternalLinks.resolvedProfile(available:spaces.map{$0.saved.id},current:activeSpace.saved.id)
+        if MiniWebbySettings.externalLinks {openMiniWebby(url:url,profile:profile);return}
+        guard let index=spaces.firstIndex(where:{$0.saved.id==profile}) else{return}
+        if !BrowserExperiment.cyclesNewTabProfiles {switchToSpace(index)}
+        let tab=BrowserTab();tab.ownerSpaceID=profile
+        spaces[index].tabs.append(tab)
+        if BrowserExperiment.cyclesNewTabProfiles {fusedTabOrder.append(tab.id)}
+        selectTab(tab)
+        navigate(url.absoluteString,in:tab,profileID:profile)
+        scheduleSessionSave();showBrowserWindow()
     }
 }
 
@@ -6675,8 +7811,13 @@ private final class WallpaperTabFrost:NSVisualEffectView {
 
 extension BrowserApp {
     private func applyWallpaperPresentation(){
+        updateWidgetActivity()
+        wallpaper?.refreshActivity()
         guard let wallpaper,let pageArea,let mainBackdrop,let sidebarBackdrop else{return}
         let full=wallpaper.fillsWindow
+        let motionState="\(full)-\(wallpaper.tabBlurScope)"
+        let artGeometry=wallpaperMotionState != motionState ? Motion.capture([wallpaper],in:content):.empty
+        defer {if wallpaperMotionState != motionState {Motion.settle(artGeometry,views:[wallpaper],in:content,character:.art);Motion.change(sidebarBackdrop,character:.art);Motion.change(wallpaperPaneBlur,character:.art)};wallpaperMotionState=motionState}
         let host=full ? content!:pageArea
         if wallpaperChromeHost !== host {
             NSLayoutConstraint.deactivate(wallpaperConstraints);wallpaper.removeFromSuperview()
@@ -6703,7 +7844,7 @@ extension BrowserApp {
         mainBackdrop.blendingMode = .behindWindow
         mainBackdrop.alphaValue=1-BrowserGlass.backgroundTransparency
         let tabFrost=wallpaper.tabBlurStrength*(1-BrowserGlass.sidebarTransparency*0.86)
-        sidebarBackdrop.blendingMode=full ? .withinWindow:.behindWindow
+        sidebarBackdrop.blendingMode=full || tabsPeekVisible ? .withinWindow:.behindWindow
         sidebarBackdrop.alphaValue=full ? (wallpaper.tabBlurScope==1 ? tabFrost:0):1-BrowserGlass.sidebarTransparency*0.86
         if wallpaperPaneBlur==nil,let horizontalScroll {
             let frost=WallpaperTabFrost();frost.translatesAutoresizingMaskIntoConstraints=false;frost.material = .sidebar;frost.blendingMode = .withinWindow;frost.state = .active
@@ -6711,14 +7852,19 @@ extension BrowserApp {
             NSLayoutConstraint.activate([frost.leadingAnchor.constraint(equalTo:mainArea.leadingAnchor),frost.trailingAnchor.constraint(equalTo:mainArea.trailingAnchor),frost.topAnchor.constraint(equalTo:mainArea.topAnchor),frost.heightAnchor.constraint(equalToConstant:46)])
             wallpaperPaneBlur=frost
         }
-        wallpaperPaneBlur?.isHidden = !full || wallpaper.tabBlurScope != 1 || BrowserTabPlacement.current != .horizontal
+        wallpaperPaneBlur?.isHidden = !full || wallpaper.tabBlurScope != 1 || BrowserTabPlacement.current != .horizontal || tabsHiddenByUser
         wallpaperPaneBlur?.alphaValue=tabFrost
+        if BrowserGlass.matchWebsiteEdge, let edge=websiteEdgeBackdrop { mainArea.addSubview(edge, positioned: .below, relativeTo: horizontalScroll) }
+        for group in Array(groupContainers.values)+Array(horizontalGroupContainers.values) {
+            group.updateGlass(opacity:Double(full && wallpaper.tabBlurScope==0 ? tabFrost:0),material:BrowserGlass.matchPageGlassSidebar ? .popover:.sidebar)
+        }
+        let frostedIDs=Set(tabs.lazy.filter{$0.groupID==nil || $0.isPinned}.map(\.id))
         for row in Array(tabRows.values)+Array(horizontalRows.values) {
             let existing=row.subviews.first{$0 is WallpaperTabFrost} as? WallpaperTabFrost
-            if full && wallpaper.tabBlurScope==0 {
+            if !(BrowserGlass.matchWebsiteEdge && homeView?.isHidden == true && BrowserTabPlacement.current == .horizontal) && full && wallpaper.tabBlurScope==0 && frostedIDs.contains(row.tabID) {
                 let frost=existing ?? WallpaperTabFrost(frame:row.bounds)
                 if existing==nil {frost.material = .sidebar;frost.blendingMode = .withinWindow;frost.state = .active;frost.autoresizingMask=[.width,.height];frost.wantsLayer=true;frost.layer?.cornerRadius=10;frost.layer?.masksToBounds=true;row.addSubview(frost,positioned:.below,relativeTo:row.subviews.first)}
-                frost.alphaValue=tabFrost;frost.isHidden=false
+                frost.alphaValue=tabFrost;frost.isHidden=false;row.updateTabGlassMask()
             } else {existing?.isHidden=true}
         }
     }

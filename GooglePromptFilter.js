@@ -2,7 +2,8 @@
   'use strict';
   // Hide only Google's browser nags and desktop-notification invitations.
   // Account, security, permission and delivery errors remain visible.
-  if (!/^(mail|calendar|docs|drive|meet)\.google\.com$/i.test(location.hostname)) return;
+  // Editors share warning containers with title/menu controls. Never modify them.
+  if (!/^(mail|calendar|drive|meet)\.google\.com$/i.test(location.hostname)) return;
   const pattern = /(?:this browser (?:version )?is (?:no longer |not )supported|(?:browser|browser version).{0,50}(?:no longer supported|unsupported)|enable desktop notifications for gmail|google chat in gmail doesn.t yet support the browser you.re using)/i;
   const roots = new Set();
   let scheduled = false;
@@ -14,7 +15,12 @@
       if (/^(body|html|main)$/i.test(node.localName)) break;
       const rect = node.getBoundingClientRect();
       if (rect.height > 150 || (node.textContent || '').length > 1200) break;
-      if (rect.width >= Math.min(250, innerWidth * 0.5) && rect.height > 10) candidate = node;
+      // Stop at the smallest notice-sized element. Climbing farther can
+      // select Google Docs' entire title/menu/toolbar container.
+      if (rect.width >= Math.min(250, innerWidth * 0.5) && rect.height > 10) {
+        candidate = node;
+        break;
+      }
       if (node.matches('[role="alert"], [role="status"]') && candidate) break;
     }
     if (candidate) candidate.style.setProperty('display', 'none', 'important');

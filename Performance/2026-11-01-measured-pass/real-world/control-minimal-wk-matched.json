@@ -1,0 +1,983 @@
+{
+  "limitations" : [
+    "Separate minimal WK host, same content viewport; not Safari",
+    "OS DNS\/TLS and network\/server variance uncontrolled",
+    "No production sign-ins",
+    "No total WebKit CPU\/GPU or compositor FPS measurement",
+    "Load completion does not establish usable-page success"
+  ],
+  "optimization" : "-O",
+  "samples" : [
+    {
+      "browserHostCPUUntilLoadMs" : 170.81300000000002,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/www.bbc.com\/",
+      "frameOpportunityGapsMs" : [
+        33,
+        33,
+        32,
+        34,
+        33,
+        35,
+        33,
+        33,
+        32,
+        35,
+        32,
+        35,
+        33,
+        32,
+        35,
+        33,
+        33,
+        34,
+        33,
+        34,
+        31,
+        35,
+        32,
+        34,
+        34,
+        33,
+        34,
+        33,
+        33,
+        34,
+        33,
+        32,
+        33,
+        35,
+        33,
+        33,
+        34,
+        32,
+        35
+      ],
+      "nativeLoadWaitMs" : 3220.1768333325163,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 2897,
+        "navigation" : {
+          "connectEnd" : 1,
+          "connectStart" : 1,
+          "decodedBodySize" : 695846,
+          "domainLookupEnd" : 1,
+          "domainLookupStart" : 1,
+          "domComplete" : 2901.0000000000005,
+          "domContentLoadedEventEnd" : 2002.0000000000002,
+          "domContentLoadedEventStart" : 2002.0000000000002,
+          "domInteractive" : 1760,
+          "duration" : 2903,
+          "encodedBodySize" : 98626,
+          "entryType" : "navigation",
+          "fetchStart" : 1,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 2903,
+          "loadEventStart" : 2903,
+          "name" : "https:\/\/www.bbc.com\/",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : 1,
+          "responseEnd" : 47,
+          "responseStart" : 24,
+          "secureConnectionStart" : 1,
+          "serverTiming" : [
+
+          ],
+          "startTime" : 0,
+          "transferSize" : 98926,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+          {
+            "name" : "first-contentful-paint",
+            "startTime" : 1814
+          }
+        ],
+        "readyState" : "complete",
+        "resourceCount" : 112,
+        "title" : "BBC Home | Breaking News, World News, US News, Sports, Business, Innovation, Climate, Culture, Travel, Video & Audio",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 0,
+      "timedOut" : false,
+      "url" : "https:\/\/www.bbc.com\/",
+      "variant" : "minimal-wk-matched-viewport"
+    },
+    {
+      "browserHostCPUUntilLoadMs" : 67.004999999999995,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/github.com\/explore",
+      "frameOpportunityGapsMs" : [
+
+      ],
+      "nativeLoadWaitMs" : 2737.9112916532904,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 1893,
+        "navigation" : {
+          "connectEnd" : 0,
+          "connectStart" : 0,
+          "decodedBodySize" : 438027,
+          "domainLookupEnd" : 0,
+          "domainLookupStart" : 0,
+          "domComplete" : 2576,
+          "domContentLoadedEventEnd" : 1645,
+          "domContentLoadedEventStart" : 1645,
+          "domInteractive" : 1332,
+          "duration" : 2577,
+          "encodedBodySize" : 54535,
+          "entryType" : "navigation",
+          "fetchStart" : 0,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 2577,
+          "loadEventStart" : 2576,
+          "name" : "https:\/\/github.com\/explore",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : 1,
+          "responseEnd" : 1319,
+          "responseStart" : 1250,
+          "secureConnectionStart" : 0,
+          "serverTiming" : [
+
+          ],
+          "startTime" : 0,
+          "transferSize" : 54835,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+          {
+            "name" : "first-contentful-paint",
+            "startTime" : 1612
+          }
+        ],
+        "readyState" : "complete",
+        "resourceCount" : 103,
+        "title" : "Explore GitHub · GitHub",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 0,
+      "timedOut" : false,
+      "url" : "https:\/\/github.com\/explore",
+      "variant" : "minimal-wk-matched-viewport"
+    },
+    {
+      "browserHostCPUUntilLoadMs" : 25.342999999999961,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/developer.mozilla.org\/en-US\/",
+      "frameOpportunityGapsMs" : [
+
+      ],
+      "nativeLoadWaitMs" : 560.35537499701604,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 712,
+        "navigation" : {
+          "connectEnd" : 0,
+          "connectStart" : 0,
+          "decodedBodySize" : 117899,
+          "domainLookupEnd" : 0,
+          "domainLookupStart" : 0,
+          "domComplete" : 393,
+          "domContentLoadedEventEnd" : 175.00000000000003,
+          "domContentLoadedEventStart" : 175.00000000000003,
+          "domInteractive" : 94,
+          "duration" : 393,
+          "encodedBodySize" : 14030,
+          "entryType" : "navigation",
+          "fetchStart" : 0,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 393,
+          "loadEventStart" : 393,
+          "name" : "https:\/\/developer.mozilla.org\/en-US\/",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : 53,
+          "responseEnd" : 91,
+          "responseStart" : 85,
+          "secureConnectionStart" : 0,
+          "serverTiming" : [
+
+          ],
+          "startTime" : 0,
+          "transferSize" : 14330,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+          {
+            "name" : "first-contentful-paint",
+            "startTime" : 213
+          }
+        ],
+        "readyState" : "complete",
+        "resourceCount" : 62,
+        "title" : "MDN Web Docs",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 0,
+      "timedOut" : false,
+      "url" : "https:\/\/developer.mozilla.org\/en-US\/",
+      "variant" : "minimal-wk-matched-viewport"
+    },
+    {
+      "browserHostCPUUntilLoadMs" : 30.895000000000039,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/stackoverflow.com\/questions",
+      "measurementError" : "Error Domain=WKErrorDomain Code=5 \"JavaScript execution returned a result of an unsupported type\" UserInfo={NSLocalizedDescription=JavaScript execution returned a result of an unsupported type}",
+      "nativeLoadWaitMs" : 472.10241665015928,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 16,
+        "navigation" : {
+          "connectEnd" : -138.08000000000001,
+          "connectStart" : -138.08000000000001,
+          "decodedBodySize" : 5795,
+          "domainLookupEnd" : -138.08000000000001,
+          "domainLookupStart" : -138.08000000000001,
+          "domComplete" : 190.44000000000003,
+          "domContentLoadedEventEnd" : 9.1400000000000006,
+          "domContentLoadedEventStart" : 9.1400000000000006,
+          "domInteractive" : 9.1400000000000006,
+          "duration" : 190.46000000000001,
+          "encodedBodySize" : 3413,
+          "entryType" : "navigation",
+          "fetchStart" : -138.08000000000001,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 190.46000000000001,
+          "loadEventStart" : 190.46000000000001,
+          "name" : "https:\/\/stackoverflow.com\/questions",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : -96.02000000000001,
+          "responseEnd" : -65.960000000000008,
+          "responseStart" : -66.200000000000003,
+          "secureConnectionStart" : -138.08000000000001,
+          "serverTiming" : [
+            {
+              "description" : "a53ed77c496315b4",
+              "duration" : 0,
+              "name" : "chlray"
+            }
+          ],
+          "startTime" : 0,
+          "transferSize" : 3713,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+
+        ],
+        "readyState" : "complete",
+        "resourceCount" : 1,
+        "title" : "Just a moment...",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 0,
+      "timedOut" : false,
+      "url" : "https:\/\/stackoverflow.com\/questions",
+      "variant" : "minimal-wk-matched-viewport"
+    },
+    {
+      "browserHostCPUUntilLoadMs" : 15.928000000000054,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/www.wikipedia.org\/",
+      "frameOpportunityGapsMs" : [
+
+      ],
+      "nativeLoadWaitMs" : 366.15287497988902,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 1198,
+        "navigation" : {
+          "connectEnd" : 1,
+          "connectStart" : 1,
+          "decodedBodySize" : 122421,
+          "domainLookupEnd" : 1,
+          "domainLookupStart" : 1,
+          "domComplete" : 194,
+          "domContentLoadedEventEnd" : 191,
+          "domContentLoadedEventStart" : 191,
+          "domInteractive" : 191,
+          "duration" : 194,
+          "encodedBodySize" : 28901,
+          "entryType" : "navigation",
+          "fetchStart" : 1,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 194,
+          "loadEventStart" : 194,
+          "name" : "https:\/\/www.wikipedia.org\/",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : 1,
+          "responseEnd" : 35,
+          "responseStart" : 21,
+          "secureConnectionStart" : 1,
+          "serverTiming" : [
+            {
+              "description" : "hit-front",
+              "duration" : 0,
+              "name" : "cache"
+            },
+            {
+              "description" : "cp4044",
+              "duration" : 0,
+              "name" : "host"
+            },
+            {
+              "description" : "2694013857",
+              "duration" : 0,
+              "name" : "co_id"
+            }
+          ],
+          "startTime" : 0,
+          "transferSize" : 29201,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+          {
+            "name" : "first-contentful-paint",
+            "startTime" : 188
+          }
+        ],
+        "readyState" : "complete",
+        "resourceCount" : 4,
+        "title" : "Wikipedia",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 0,
+      "timedOut" : false,
+      "url" : "https:\/\/www.wikipedia.org\/",
+      "variant" : "minimal-wk-matched-viewport"
+    },
+    {
+      "browserHostCPUUntilLoadMs" : 35.225999999999999,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/www.apple.com\/",
+      "frameOpportunityGapsMs" : [
+
+      ],
+      "nativeLoadWaitMs" : 911.42895832308568,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 1956,
+        "navigation" : {
+          "connectEnd" : 0,
+          "connectStart" : 0,
+          "decodedBodySize" : 253635,
+          "domainLookupEnd" : 0,
+          "domainLookupStart" : 0,
+          "domComplete" : 755,
+          "domContentLoadedEventEnd" : 552,
+          "domContentLoadedEventStart" : 552,
+          "domInteractive" : 456,
+          "duration" : 762,
+          "encodedBodySize" : 42352,
+          "entryType" : "navigation",
+          "fetchStart" : 0,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 762,
+          "loadEventStart" : 762,
+          "name" : "https:\/\/www.apple.com\/",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : 38,
+          "responseEnd" : 135,
+          "responseStart" : 116,
+          "secureConnectionStart" : 0,
+          "serverTiming" : [
+
+          ],
+          "startTime" : 0,
+          "transferSize" : 42652,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+          {
+            "name" : "first-contentful-paint",
+            "startTime" : 283.00000000000006
+          }
+        ],
+        "readyState" : "complete",
+        "resourceCount" : 42,
+        "title" : "Apple",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 0,
+      "timedOut" : false,
+      "url" : "https:\/\/www.apple.com\/",
+      "variant" : "minimal-wk-matched-viewport"
+    },
+    {
+      "browserHostCPUUntilLoadMs" : 34.312999999999988,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/github.com\/explore",
+      "frameOpportunityGapsMs" : [
+
+      ],
+      "nativeLoadWaitMs" : 919.44850000436418,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 1893,
+        "navigation" : {
+          "connectEnd" : 0,
+          "connectStart" : 0,
+          "decodedBodySize" : 438027,
+          "domainLookupEnd" : 0,
+          "domainLookupStart" : 0,
+          "domComplete" : 828.00000000000011,
+          "domContentLoadedEventEnd" : 239.00000000000003,
+          "domContentLoadedEventStart" : 238.00000000000003,
+          "domInteractive" : 72.000000000000014,
+          "duration" : 830.00000000000011,
+          "encodedBodySize" : 54526,
+          "entryType" : "navigation",
+          "fetchStart" : 0,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 830.00000000000011,
+          "loadEventStart" : 829.00000000000011,
+          "name" : "https:\/\/github.com\/explore",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : 0,
+          "responseEnd" : 70,
+          "responseStart" : 37,
+          "secureConnectionStart" : 0,
+          "serverTiming" : [
+
+          ],
+          "startTime" : 0,
+          "transferSize" : 54826,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+          {
+            "name" : "first-contentful-paint",
+            "startTime" : 264
+          }
+        ],
+        "readyState" : "complete",
+        "resourceCount" : 103,
+        "title" : "Explore GitHub · GitHub",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 1,
+      "timedOut" : false,
+      "url" : "https:\/\/github.com\/explore",
+      "variant" : "minimal-wk-matched-viewport"
+    },
+    {
+      "browserHostCPUUntilLoadMs" : 26.364999999999895,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/developer.mozilla.org\/en-US\/",
+      "frameOpportunityGapsMs" : [
+        33,
+        34,
+        33,
+        33,
+        34,
+        33,
+        34,
+        33,
+        33,
+        34,
+        32,
+        34,
+        34,
+        33,
+        33,
+        34,
+        32,
+        33,
+        35,
+        33,
+        33,
+        34,
+        33,
+        33,
+        34,
+        33,
+        32,
+        35,
+        33,
+        33,
+        34,
+        33,
+        33,
+        34,
+        32,
+        34,
+        33,
+        33,
+        34,
+        34,
+        33,
+        34,
+        33,
+        33,
+        33,
+        34,
+        33,
+        33,
+        34,
+        33,
+        33,
+        34,
+        32,
+        34,
+        33
+      ],
+      "nativeLoadWaitMs" : 513.88587499968708,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 712,
+        "navigation" : {
+          "connectEnd" : 0,
+          "connectStart" : 0,
+          "decodedBodySize" : 117899,
+          "domainLookupEnd" : 0,
+          "domainLookupStart" : 0,
+          "domComplete" : 419,
+          "domContentLoadedEventEnd" : 154,
+          "domContentLoadedEventStart" : 154,
+          "domInteractive" : 91,
+          "duration" : 419,
+          "encodedBodySize" : 14039,
+          "entryType" : "navigation",
+          "fetchStart" : 0,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 419,
+          "loadEventStart" : 419,
+          "name" : "https:\/\/developer.mozilla.org\/en-US\/",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : 0,
+          "responseEnd" : 80,
+          "responseStart" : 79,
+          "secureConnectionStart" : 0,
+          "serverTiming" : [
+
+          ],
+          "startTime" : 0,
+          "transferSize" : 14339,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+          {
+            "name" : "first-contentful-paint",
+            "startTime" : 206.00000000000003
+          }
+        ],
+        "readyState" : "complete",
+        "resourceCount" : 62,
+        "title" : "MDN Web Docs",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 1,
+      "timedOut" : false,
+      "url" : "https:\/\/developer.mozilla.org\/en-US\/",
+      "variant" : "minimal-wk-matched-viewport"
+    },
+    {
+      "browserHostCPUUntilLoadMs" : 55.376999999999953,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/stackoverflow.com\/questions",
+      "frameOpportunityGapsMs" : [
+
+      ],
+      "nativeLoadWaitMs" : 1716.3889166549779,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 3255,
+        "navigation" : {
+          "connectEnd" : 0,
+          "connectStart" : 0,
+          "decodedBodySize" : 266812,
+          "domainLookupEnd" : 0,
+          "domainLookupStart" : 0,
+          "domComplete" : 1433,
+          "domContentLoadedEventEnd" : 578,
+          "domContentLoadedEventStart" : 577,
+          "domInteractive" : 430,
+          "duration" : 1438,
+          "encodedBodySize" : 54704,
+          "entryType" : "navigation",
+          "fetchStart" : 0,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 1438,
+          "loadEventStart" : 1433,
+          "name" : "https:\/\/stackoverflow.com\/questions",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : 0,
+          "responseEnd" : 200,
+          "responseStart" : 192,
+          "secureConnectionStart" : 0,
+          "serverTiming" : [
+
+          ],
+          "startTime" : 0,
+          "transferSize" : 55004,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+          {
+            "name" : "first-contentful-paint",
+            "startTime" : 368
+          }
+        ],
+        "readyState" : "complete",
+        "resourceCount" : 119,
+        "title" : "Newest Questions - Stack Overflow",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 1,
+      "timedOut" : false,
+      "url" : "https:\/\/stackoverflow.com\/questions",
+      "variant" : "minimal-wk-matched-viewport"
+    },
+    {
+      "browserHostCPUUntilLoadMs" : 24.511000000000081,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/www.wikipedia.org\/",
+      "frameOpportunityGapsMs" : [
+
+      ],
+      "nativeLoadWaitMs" : 349.47279165498912,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 1198,
+        "navigation" : {
+          "connectEnd" : 0,
+          "connectStart" : 0,
+          "decodedBodySize" : 122421,
+          "domainLookupEnd" : 0,
+          "domainLookupStart" : 0,
+          "domComplete" : 253,
+          "domContentLoadedEventEnd" : 251,
+          "domContentLoadedEventStart" : 250,
+          "domInteractive" : 250,
+          "duration" : 253,
+          "encodedBodySize" : 28901,
+          "entryType" : "navigation",
+          "fetchStart" : 0,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 253,
+          "loadEventStart" : 253,
+          "name" : "https:\/\/www.wikipedia.org\/",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : 0,
+          "responseEnd" : 35,
+          "responseStart" : 35,
+          "secureConnectionStart" : 0,
+          "serverTiming" : [
+            {
+              "description" : "hit-front",
+              "duration" : 0,
+              "name" : "cache"
+            },
+            {
+              "description" : "cp4044",
+              "duration" : 0,
+              "name" : "host"
+            },
+            {
+              "description" : "3590846030",
+              "duration" : 0,
+              "name" : "co_id"
+            }
+          ],
+          "startTime" : 0,
+          "transferSize" : 29201,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+          {
+            "name" : "first-contentful-paint",
+            "startTime" : 192
+          }
+        ],
+        "readyState" : "complete",
+        "resourceCount" : 4,
+        "title" : "Wikipedia",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 1,
+      "timedOut" : false,
+      "url" : "https:\/\/www.wikipedia.org\/",
+      "variant" : "minimal-wk-matched-viewport"
+    },
+    {
+      "browserHostCPUUntilLoadMs" : 30.627999999999929,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/www.apple.com\/",
+      "frameOpportunityGapsMs" : [
+
+      ],
+      "nativeLoadWaitMs" : 723.32358331186697,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 1954,
+        "navigation" : {
+          "connectEnd" : 0,
+          "connectStart" : 0,
+          "decodedBodySize" : 253635,
+          "domainLookupEnd" : 0,
+          "domainLookupStart" : 0,
+          "domComplete" : 0,
+          "domContentLoadedEventEnd" : 0,
+          "domContentLoadedEventStart" : 0,
+          "domInteractive" : 541,
+          "duration" : 0,
+          "encodedBodySize" : 42352,
+          "entryType" : "navigation",
+          "fetchStart" : 0,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 0,
+          "loadEventStart" : 0,
+          "name" : "https:\/\/www.apple.com\/",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : 1,
+          "responseEnd" : 111,
+          "responseStart" : 101,
+          "secureConnectionStart" : 0,
+          "serverTiming" : [
+
+          ],
+          "startTime" : 0,
+          "transferSize" : 42652,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+          {
+            "name" : "first-contentful-paint",
+            "startTime" : 398
+          }
+        ],
+        "readyState" : "interactive",
+        "resourceCount" : 34,
+        "title" : "Apple",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 1,
+      "timedOut" : false,
+      "url" : "https:\/\/www.apple.com\/",
+      "variant" : "minimal-wk-matched-viewport"
+    },
+    {
+      "browserHostCPUUntilLoadMs" : 33.775999999999954,
+      "effects" : {
+        "fastRule" : false,
+        "geist" : false,
+        "glass" : false,
+        "injectedScriptBytes" : 0
+      },
+      "finalURL" : "https:\/\/www.bbc.com\/",
+      "frameOpportunityGapsMs" : [
+
+      ],
+      "nativeLoadWaitMs" : 599.75566665525548,
+      "navigationError" : "not captured by this delegate-free control",
+      "page" : {
+        "domElements" : 2753,
+        "navigation" : {
+          "connectEnd" : 0,
+          "connectStart" : 0,
+          "decodedBodySize" : 696164,
+          "domainLookupEnd" : 0,
+          "domainLookupStart" : 0,
+          "domComplete" : 440,
+          "domContentLoadedEventEnd" : 283.00000000000006,
+          "domContentLoadedEventStart" : 283.00000000000006,
+          "domInteractive" : 163,
+          "duration" : 440,
+          "encodedBodySize" : 98728,
+          "entryType" : "navigation",
+          "fetchStart" : 0,
+          "initiatorType" : "navigation",
+          "loadEventEnd" : 440,
+          "loadEventStart" : 440,
+          "name" : "https:\/\/www.bbc.com\/",
+          "nextHopProtocol" : "h2",
+          "redirectCount" : 0,
+          "redirectEnd" : 0,
+          "redirectStart" : 0,
+          "requestStart" : 1,
+          "responseEnd" : 87.000000000000014,
+          "responseStart" : 82,
+          "secureConnectionStart" : 0,
+          "serverTiming" : [
+
+          ],
+          "startTime" : 0,
+          "transferSize" : 99028,
+          "type" : "navigate",
+          "unloadEventEnd" : 0,
+          "unloadEventStart" : 0,
+          "workerStart" : 0
+        },
+        "paint" : [
+          {
+            "name" : "first-contentful-paint",
+            "startTime" : 155
+          }
+        ],
+        "readyState" : "complete",
+        "resourceCount" : 92,
+        "title" : "BBC Home | Breaking News, World News, US News, Sports, Business, Innovation, Climate, Culture, Travel, Video & Audio",
+        "viewport" : {
+          "height" : 930,
+          "width" : 1472
+        }
+      },
+      "round" : 1,
+      "timedOut" : false,
+      "url" : "https:\/\/www.bbc.com\/",
+      "variant" : "minimal-wk-matched-viewport"
+    }
+  ]
+}

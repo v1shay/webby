@@ -37,6 +37,25 @@ enum BrowserSearchEngine: String, CaseIterable {
     }
 }
 
+/// Address chrome is explicit: pointer proximity never implies navigation intent.
+@MainActor enum BrowserAddressPlacement: String {
+    static let allCases: [Self] = [.strip, .tabBar]
+    case strip, tabBar
+    static var current: Self {
+        get {
+            let raw = UserDefaults.standard.string(forKey: "webbyAddressPlacement") ?? "strip"
+            return raw == "floating" ? .tabBar : Self(rawValue: raw) ?? .strip
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "webbyAddressPlacement") }
+    }
+    var title: String {
+        switch self {
+        case .strip: "Glass Strip · Always Visible"
+        case .tabBar: "Tab Pane · Address Above Pins"
+        }
+    }
+}
+
 @MainActor enum BrowserTabPlacement: String {
     case top, bottom, horizontal
     static var current: Self {
@@ -69,6 +88,38 @@ enum BrowserSearchEngine: String, CaseIterable {
     static func setScene(_ scene: String, for spaceID: UUID) {
         guard IndicatorScenes.all[scene] != nil else { return }
         UserDefaults.standard.set(scene, forKey: "webbyIndicator.\(spaceID.uuidString)")
+    }
+}
+
+@MainActor enum BrowserExternalLinks {
+    static let profileKey="webbyExternalLinksProfile"
+    static var profileID:UUID? {
+        get {UserDefaults.standard.string(forKey:profileKey).flatMap(UUID.init(uuidString:))}
+        set {if let newValue {UserDefaults.standard.set(newValue.uuidString,forKey:profileKey)} else {UserDefaults.standard.removeObject(forKey:profileKey)}}
+    }
+    static func resolvedProfile(available:[UUID],current:UUID)->UUID {
+        profileID.flatMap{available.contains($0) ? $0:nil} ?? current
+    }
+    static var isDefault:Bool {
+        ["http","https"].allSatisfy {scheme in
+            guard let url=URL(string:scheme+"://example.com"),let app=NSWorkspace.shared.urlForApplication(toOpen:url) else{return false}
+            return app.standardizedFileURL.resolvingSymlinksInPath()==Bundle.main.bundleURL.standardizedFileURL.resolvingSymlinksInPath()
+        }
+    }
+    static func requestDefault() {
+        func set(_ schemes:ArraySlice<String>) {
+            guard let scheme=schemes.first else{return}
+            NSWorkspace.shared.setDefaultApplication(at:Bundle.main.bundleURL,toOpenURLsWithScheme:scheme){error in
+                DispatchQueue.main.async {
+                    if let error {
+                        if (error as NSError).code != NSUserCancelledError {
+                            let alert=NSAlert();alert.messageText="We couldn’t change the default browser";alert.informativeText="You can also choose Webby in System Settings → Desktop & Dock → Default web browser.\n\n"+error.localizedDescription;alert.runModal()
+                        }
+                    } else {set(schemes.dropFirst())}
+                }
+            }
+        }
+        set(["https","http"][...])
     }
 }
 
@@ -147,13 +198,17 @@ enum BrowserSearchEngine: String, CaseIterable {
         self.googleConnected = googleConnected
         statusItem = NSStatusBar.system.statusItem(withLength: 30)
         super.init()
-        if let button = statusItem.button { petAnimator = WebbyMenuPetAnimator(button: button) }
+        // The status menu is built when opened, not while the first window is launching.
+        statusItem.button?.image=NSImage(size:NSSize(width:24,height:22))
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.3) { [weak self] in
+            guard let self,let button=self.statusItem.button else{return}
+            self.petAnimator=WebbyMenuPetAnimator(button:button)
+        }
         statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.toolTip = "Webby Settings"
         let menu = NSMenu(title: "Webby")
         menu.delegate = self
         statusItem.menu = menu
-        rebuildMenu(menu)
     }
 
     @objc private func toggleSounds() { WebbySounds.enabled.toggle() }
@@ -164,8 +219,8 @@ enum BrowserSearchEngine: String, CaseIterable {
         // Reuse the real settings/actions so both entry points stay in sync.
         let source = NSMenu(); buildSettingsItems(source)
         let menu = NSMenu(title: "Tab Settings")
-        let titles: Set<String> = ["Tab Layout", "Restore Tabs After Restart", "Offload Idle Tabs",
-            "Glass Effect on Web Pages", "Match Tab Pane to Page Glass"]
+        let titles: Set<String> = ["Tab Layout", "Address Bar", "Restore Tabs After Restart", "Offload Idle Tabs",
+            "Glass Effect on Web Pages", "Match Tab Pane to Page Glass", "Match Tab Bar to Website Edge"]
         for item in source.items where titles.contains(item.title) || item.view?.subviews.contains(where: { $0 is NSSlider }) == true {
             source.removeItem(item); menu.addItem(item)
         }
@@ -176,6 +231,8 @@ enum BrowserSearchEngine: String, CaseIterable {
 
     private func buildSettingsItems(_ menu: NSMenu, grouped: Bool = false) {
         menu.removeAllItems()
+        let glances=menu.addItem(withTitle:"Link Glances on Hover",action:#selector(toggleLinkGlances),keyEquivalent:"")
+        glances.target=self;glances.state=BrowserHoverPreferences.glancesEnabled ? .on:.off
         let sounds = menu.addItem(withTitle: "Subtle Action Sounds", action: #selector(toggleSounds), keyEquivalent: "")
         sounds.target = self; sounds.state = WebbySounds.enabled ? .on : .off
         menu.addItem(.separator())
@@ -187,6 +244,13 @@ enum BrowserSearchEngine: String, CaseIterable {
         reset.target = self
         let wallpaper = menu.addItem(withTitle: "Background & Effects…", action: #selector(openWallpaperAction), keyEquivalent: "")
         wallpaper.target = self
+        let codexWidget=NSMenuItem(title:"Codex Widget",action:nil,keyEquivalent:"")
+        let codexMenu=NSMenu(title:codexWidget.title)
+        let codexInfo = codexMenu.addItem(withTitle:"Uses your existing Codex app",action:nil,keyEquivalent:"")
+        codexInfo.isEnabled = false
+        let openCodex = codexMenu.addItem(withTitle:"Open Codex",action:#selector(openCodexAppWidget),keyEquivalent:"")
+        openCodex.target = self
+        codexWidget.submenu=codexMenu;menu.addItem(codexWidget)
         let backgrounds = NSMenuItem(title: "ASCII Backgrounds", action: nil, keyEquivalent: "")
         let artMenu = NSMenu(title: "ASCII Backgrounds")
         for art in ASCIIArtwork.catalog {
@@ -265,6 +329,14 @@ enum BrowserSearchEngine: String, CaseIterable {
         }
         tabPosition.submenu = positionMenu
         menu.addItem(tabPosition)
+        let addressRoot = NSMenuItem(title: "Address Bar", action: nil, keyEquivalent: "")
+        let addressMenu = NSMenu(title: "Address Bar")
+        for placement in BrowserAddressPlacement.allCases {
+            let item = addressMenu.addItem(withTitle: placement.title, action: #selector(selectAddressPlacement(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = placement.rawValue
+            item.state = BrowserAddressPlacement.current == placement ? .on : .off
+        }
+        addressRoot.submenu = addressMenu; menu.addItem(addressRoot)
         let searchRoot = NSMenuItem(title: "Search Engine for \(currentSpaceName())", action: nil, keyEquivalent: "")
         let searchMenu = NSMenu(title: "Search Engine")
         for engine in BrowserSearchEngine.allCases {
@@ -330,12 +402,17 @@ enum BrowserSearchEngine: String, CaseIterable {
         addGlassSlider(to: menu, title: "Main Background", value: BrowserGlass.backgroundTransparency, tag: 3)
         addGlassSlider(to: menu, title: "Top Bar", value: BrowserGlass.topTransparency, tag: 1)
         addGlassSlider(to: menu, title: "Sidebar", value: BrowserGlass.sidebarTransparency, tag: 2)
+        let geist = menu.addItem(withTitle:"Use Geist in Webby & Websites",action:#selector(toggleGeist),keyEquivalent:"")
+        geist.target=self;geist.state=GlassPageInjector.geistEnabled ? .on:.off
         let pageGlass = menu.addItem(withTitle: "Glass Effect on Web Pages", action: #selector(togglePageGlass), keyEquivalent: "")
         pageGlass.target = self
         pageGlass.state = BrowserGlass.pageInjectionEnabled ? .on : .off
         let matchGlass = menu.addItem(withTitle: "Match Tab Pane to Page Glass", action: #selector(toggleMatchGlass), keyEquivalent: "")
         matchGlass.target = self
         matchGlass.state = BrowserGlass.matchPageGlassSidebar ? .on : .off
+        let edge = menu.addItem(withTitle: "Match Tab Bar to Website Edge", action: #selector(toggleWebsiteEdge), keyEquivalent: "")
+        edge.target = self
+        edge.state = BrowserGlass.matchWebsiteEdge ? .on : .off
         let glassItems = Array(menu.items[glassStart...])
         menu.addItem(.separator())
         let googleRoot = NSMenuItem(title: "Google Widgets for \(currentSpaceName())", action: nil, keyEquivalent: "")
@@ -357,6 +434,8 @@ enum BrowserSearchEngine: String, CaseIterable {
         }
         googleRoot.submenu = googleMenu
         menu.addItem(googleRoot)
+        let github = menu.addItem(withTitle: "GitHub Connection for \(currentSpaceName())…", action: #selector(connectGitHubWidgets), keyEquivalent: "")
+        github.target = self
         menu.addItem(.separator())
         let importItem = menu.addItem(withTitle: "Import Chrome Profiles…", action: #selector(importChromeAction), keyEquivalent: "")
         importItem.target = self
@@ -377,6 +456,24 @@ enum BrowserSearchEngine: String, CaseIterable {
         menu.addItem(.separator())
         let quit = menu.addItem(withTitle: "Quit Webby", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         quit.target = NSApplication.shared
+        let desktop = NSMenuItem(title:"Desktop Widgets…",action:#selector(configureDesktopWidgets),keyEquivalent:"")
+        desktop.target = self
+        menu.addItem(desktop)
+        let browserDefaults=NSMenuItem(title:"Default Browser & External Links",action:nil,keyEquivalent:"")
+        let defaultsMenu=NSMenu(title:browserDefaults.title);browserDefaults.submenu=defaultsMenu
+        let makeDefault=defaultsMenu.addItem(withTitle:BrowserExternalLinks.isDefault ? "Webby Is the Default Browser":"Make Webby the Default Browser…",action:#selector(makeDefaultBrowser),keyEquivalent:"")
+        makeDefault.target=self;makeDefault.isEnabled = !BrowserExternalLinks.isDefault
+        defaultsMenu.addItem(.separator())
+        let heading=defaultsMenu.addItem(withTitle:"Open links from other apps using",action:nil,keyEquivalent:"");heading.isEnabled=false
+        let current=defaultsMenu.addItem(withTitle:"Last-Used Profile",action:#selector(selectExternalProfile(_:)),keyEquivalent:"");current.target=self
+        let linkProfiles=self.profiles()
+        current.state=BrowserExternalLinks.profileID.map{id in linkProfiles.contains{$0.0==id}} == true ? .off:.on
+        for (id,name) in linkProfiles {
+            let item=defaultsMenu.addItem(withTitle:name,action:#selector(selectExternalProfile(_:)),keyEquivalent:"");item.target=self;item.representedObject=id
+            item.state=BrowserExternalLinks.profileID==id ? .on:.off
+        }
+        menu.addItem(browserDefaults)
+        let appIcon=WebbyIconSettings.shared.menuItem();menu.addItem(appIcon)
         guard grouped else { return }
 
         // Reparent the original controls so selectors, checkmarks and sliders stay identical.
@@ -390,13 +487,13 @@ enum BrowserSearchEngine: String, CaseIterable {
         }
         let transparency = section("Glass & Transparency",symbol:"square.on.square",items:glassItems)
         let tabs = section("Tabs & Search",symbol:"rectangle.topthird.inset.filled",
-                           items:[tabPosition,searchRoot,.separator(),restore,offload,.separator(),miniRoot,terminal])
+                           items:[tabPosition,addressRoot,searchRoot,.separator(),glances,restore,offload,.separator(),miniRoot,terminal])
         let accounts = section("Profiles & Fuse",symbol:"person.2",
-                               items:[experiment,.separator(),importItem,signIns,.separator(),deleteItem])
+                               items:[experiment,browserDefaults,.separator(),importItem,signIns,.separator(),deleteItem])
         let appearance = section("Appearance",symbol:"paintpalette",
-                                 items:[profileItem,edit,.separator(),transparency,.separator(),sounds])
+                                 items:[profileItem,edit,appIcon,.separator(),transparency,.separator(),sounds])
         let widgets = section("Widgets & Backgrounds",symbol:"square.grid.2x2",
-                              items:[reset,.separator(),wallpaper,backgrounds,.separator(),googleRoot])
+                              items:[desktop,reset,.separator(),wallpaper,backgrounds,.separator(),codexWidget,googleRoot,github])
         var petItems = [petItem,choosePet]
         if let resetPet { petItems.append(resetPet) }
         petItems += [.separator(),indicatorRoot]
@@ -410,7 +507,11 @@ enum BrowserSearchEngine: String, CaseIterable {
     }
 
     @objc private func showBrowserAction() { showBrowser() }
+    @objc private func openCodexAppWidget() { CodexWidgetHub.open() }
     @objc private func addWidgetAction() { addWidget() }
+    @objc private func toggleLinkGlances() { BrowserHoverPreferences.glancesEnabled.toggle() }
+    @objc private func configureDesktopWidgets() { DesktopWidgetBridge.configure() }
+    @objc private func connectGitHubWidgets() { GitHubWidgetConnection.present(profile: currentSpaceID()) }
     @objc private func toggleASCII(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
         asciiCanvas()?.toggle(id)
@@ -420,6 +521,9 @@ enum BrowserSearchEngine: String, CaseIterable {
         asciiCanvas()?.setBrightness(sender.doubleValue, for: id)
     }
     @objc private func resetWidgetsAction() { resetWidgets() }
+    @objc private func makeDefaultBrowser() {BrowserExternalLinks.requestDefault()}
+    @objc private func selectExternalProfile(_ item:NSMenuItem) {BrowserExternalLinks.profileID=item.representedObject as? UUID}
+
     @objc private func chooseGoogleClientAction() { chooseGoogleClient() }
     @objc private func connectGoogleAction(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let service = GoogleService(rawValue: raw) else { return }
@@ -438,6 +542,11 @@ enum BrowserSearchEngine: String, CaseIterable {
               let placement = BrowserTabPlacement(rawValue: raw) else { return }
         BrowserTabPlacement.current = placement
         tabPlacementChanged()
+    }
+    @objc private func selectAddressPlacement(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let placement = BrowserAddressPlacement(rawValue: raw) else { return }
+        BrowserAddressPlacement.current = placement
+        NotificationCenter.default.post(name: Notification.Name("WebbyAddressPlacementChanged"), object: nil)
     }
     @objc private func selectSearchEngine(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
@@ -472,7 +581,7 @@ enum BrowserSearchEngine: String, CaseIterable {
         let host = NSView(frame: NSRect(x: 0, y: 0, width: 255, height: 43))
         let label = NSTextField(labelWithString: "\(title)  \(Int((value * 100).rounded()))%")
         label.frame = NSRect(x: 16, y: 24, width: 220, height: 16)
-        label.font = .systemFont(ofSize: 11, weight: .medium)
+        label.font = WebbyTypography.font(ofSize: 11, weight: .medium)
         let slider = NSSlider(frame: NSRect(x: 13, y: 2, width: 222, height: 22))
         slider.minValue = 0
         slider.maxValue = tag >= 3 ? 1 : 0.85
@@ -497,7 +606,9 @@ enum BrowserSearchEngine: String, CaseIterable {
         (slider.superview?.subviews.first { $0 is NSTextField } as? NSTextField)?
             .stringValue = "\(name)  \(Int((value * 100).rounded()))%"
     }
+    @objc private func toggleGeist(){GlassPageInjector.geistEnabled.toggle()}
     @objc private func togglePageGlass() { BrowserGlass.pageInjectionEnabled.toggle() }
+    @objc private func toggleWebsiteEdge() { BrowserGlass.matchWebsiteEdge.toggle() }
     @objc private func toggleMatchGlass() { BrowserGlass.matchPageGlassSidebar.toggle() }
     @objc private func importChromeAction() { importChrome() }
     @objc private func deleteProfileAction() { deleteProfile() }
@@ -567,11 +678,11 @@ enum BrowserSearchEngine: String, CaseIterable {
         window.contentView = root
 
         let title = NSTextField(labelWithString: "Your browser, in three colors")
-        title.font = .systemFont(ofSize: 17, weight: .semibold)
+        title.font = WebbyTypography.font(ofSize: 17, weight: .semibold)
         title.frame = NSRect(x: 24, y: 197, width: 360, height: 25)
         root.addSubview(title)
         let detail = NSTextField(labelWithString: "Changes the search beam, globe, tabs, toolbar, and terminal.")
-        detail.font = .systemFont(ofSize: 11)
+        detail.font = WebbyTypography.font(ofSize: 11)
         detail.textColor = .secondaryLabelColor
         detail.frame = NSRect(x: 24, y: 173, width: 372, height: 18)
         root.addSubview(detail)
@@ -587,7 +698,7 @@ enum BrowserSearchEngine: String, CaseIterable {
         for (index, name) in ["Start", "Middle", "End"].enumerated() {
             let x = 24 + CGFloat(index) * 124
             let label = NSTextField(labelWithString: name)
-            label.font = .systemFont(ofSize: 11, weight: .medium)
+            label.font = WebbyTypography.font(ofSize: 11, weight: .medium)
             label.textColor = .secondaryLabelColor
             label.frame = NSRect(x: x, y: 93, width: 55, height: 18)
             root.addSubview(label)

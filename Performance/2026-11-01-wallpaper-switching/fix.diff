@@ -1,0 +1,50 @@
+--- /private/tmp/webby-wallpaper-switch-fix/BrowserWallpaper.before.swift	2026-11-01 16:07:38
++++ /Users/vishayagarwal/Documents/Codex/2026-09-29/can-y/outputs/BrowserWallpaper.swift	2026-11-01 16:14:30
+@@ -239,7 +239,6 @@
+         let visibility = home ? settings.opacity : settings.pageOpacity
+         let visible = settings.path != nil && visibility > 0.001 && (!settings.homeOnly || home || fillsWindow) && window?.occlusionState.contains(.visible) == true
+         let animated = settings.kind != "image" || cachedDelay > 0
+-        updateTicker(visible && animated && settings.motion && Motion.enabled ? 0.05 : 0)
+         isHidden = !visible
+         alphaValue = visibility
+         if visible != lastVisible {
+@@ -249,6 +248,10 @@
+             } else { dirty = true; nextFrame = 0 }
+         }
+         if home != lastWasHome { lastWasHome = home; dirty = true; generation += 1 }
++        // Keep a short-lived wakeup while a first frame is loading/decoding,
++        // including paused HTML/video. Completed static artwork stays timer-free.
++        let preparing = dirty || busy
++        updateTicker(visible && (preparing || (animated && settings.motion && Motion.enabled)) ? 0.05 : 0)
+         guard visible, let path = settings.path, bounds.width > 1, bounds.height > 1 else { return }
+         if settings.kind == "html" {
+             showHTML(path)
+@@ -260,7 +263,12 @@
+             html.takeSnapshot(with: configuration) { [weak self] image, error in
+                 guard let self else { return }
+                 self.busy = false
+-                guard self.generation == token, self.lastVisible else { return }
++                guard self.generation == token else {
++                    self.dirty = true
++                    self.refreshActivity()
++                    return
++                }
++                guard self.lastVisible else { return }
+                 guard let snapshot = image?.cgImage(forProposedRect:nil,context:nil,hints:nil) else {
+                     self.nextFrame = CACurrentMediaTime() + 1
+                     self.errorText?.stringValue = "We couldn’t render this HTML background."
+@@ -380,7 +388,13 @@
+             DispatchQueue.main.async { [weak self] in
+                 guard let self else { return }
+                 self.busy=false
+-                guard self.generation == token else { self.dirty=true; return }
++                guard self.generation == token else {
++                    // A profile/set/size change superseded this frame. With no
++                    // static-image poller, explicitly start the newest request.
++                    self.dirty = true
++                    self.refreshActivity()
++                    return
++                }
+                 self.source=source;self.sourcePath=path;self.cachedDelay=frameDelay;self.decodedStatic=decodedImage
+                 self.gifIndex=(index+1)%max(1,frameCount);self.nextFrame=CACurrentMediaTime()+frameDelay
+                 if let output {

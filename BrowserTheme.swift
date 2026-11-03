@@ -1,4 +1,6 @@
 import AppKit
+import CoreText
+import WebKit
 
 extension Notification.Name {
     static let browserThemeChanged = Notification.Name("BrowserThemeChanged")
@@ -190,5 +192,44 @@ extension Notification.Name {
         let gradients = PetGradients(ambient: recipe, thinking: recipe, working: recipe,
                                      success: recipe, warning: recipe, error: recipe)
         return PetGradientProfile(palette: palette, gradients: gradients)
+    }
+}
+
+// A shared native font factory keeps weights/sizes consistent without changing
+// terminal, editor, or icon fonts. Fonts are registered only in this process.
+enum WebbyTypography {
+    private static let registered:Bool = {
+        var success=false
+        for name in ["Geist-VariableFont_wght","Geist-Italic-VariableFont_wght"] {
+            if let url=Bundle.main.url(forResource:name,withExtension:"ttf",subdirectory:"Fonts/Geist") {
+                success = CTFontManagerRegisterFontsForURL(url as CFURL,.process,nil) || success
+            }
+        }
+        return success
+    }()
+    private static let fontCache:NSCache<NSString,NSFont> = {
+        let cache=NSCache<NSString,NSFont>();cache.countLimit=512;return cache
+    }()
+    static func font(ofSize size:CGFloat,weight:NSFont.Weight = .regular)->NSFont {
+        guard UserDefaults.standard.object(forKey:"webbyGeistEnabled")==nil || UserDefaults.standard.bool(forKey:"webbyGeistEnabled") else{return .systemFont(ofSize:size,weight:weight)}
+        _ = registered
+        let key="\(size):\(weight.rawValue)" as NSString
+        if let cached=fontCache.object(forKey:key) {return cached}
+        let descriptor=NSFontDescriptor(fontAttributes:[.family:"Geist",.traits:[NSFontDescriptor.TraitKey.weight:weight.rawValue]])
+        let resolved=NSFont(descriptor:descriptor,size:size) ?? .systemFont(ofSize:size,weight:weight)
+        fontCache.setObject(resolved,forKey:key);return resolved
+    }
+    @MainActor static func apply(to view:NSView){
+        guard !(view is WKWebView) else{return}
+        func converted(_ current:NSFont)->NSFont {
+            guard !current.isFixedPitch,!current.fontDescriptor.symbolicTraits.contains(.monoSpace) else{return current}
+            let traits=current.fontDescriptor.object(forKey:.traits) as? [NSFontDescriptor.TraitKey:Any]
+            let weight=NSFont.Weight(rawValue:(traits?[.weight] as? NSNumber)?.doubleValue ?? 0)
+            let next=font(ofSize:current.pointSize,weight:weight)
+            return current.fontDescriptor.symbolicTraits.contains(.italic) ? NSFontManager.shared.convert(next,toHaveTrait:.italicFontMask):next
+        }
+        if let control=view as? NSControl,let current=control.font {let next=converted(current);if !current.isEqual(next) {control.font=next}}
+        if let text=view as? NSTextView,let current=text.font {let next=converted(current);if !current.isEqual(next) {text.font=next}}
+        for child in view.subviews {apply(to:child)}
     }
 }

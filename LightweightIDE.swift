@@ -116,10 +116,11 @@ private final class IDELineNumbers: NSRulerView {
 }
 
 @MainActor final class LightweightIDE: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTextViewDelegate, NSSplitViewDelegate {
-    let view = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 1120, height: 760))
+    let view = NSView(frame: NSRect(x: 0, y: 0, width: 1120, height: 760))
     private var window: NSWindow? { view.window }
     var onTitleChange: ((String) -> Void)?
-    var projectURL: URL? { root?.url }
+    var projectURL: URL? { workbench?.projectURL ?? root?.url }
+    private var workbench: CodeWorkbench?
     private let editor = IDEEditor()
     private let outline = NSOutlineView()
     private let fileScroll = NSScrollView()
@@ -140,21 +141,29 @@ private final class IDELineNumbers: NSRulerView {
     private var dirty: Bool { currentFile != nil && editor.string != baseline }
     private let registry = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Webby IDE/projects.json")
 
-    override init() {
+    init(nativeOnly: Bool = false) {
         super.init()
+        if !nativeOnly {
+            let host = CodeWorkbench(); workbench = host
+            host.titleChanged = { [weak self] title in self?.onTitleChange?(title) }
+            host.view.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(host.view)
+            NSLayoutConstraint.activate([host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor), host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor), host.view.topAnchor.constraint(equalTo: view.topAnchor), host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)])
+            return
+        }
         if let data = try? Data(contentsOf: registry), let paths = try? JSONDecoder().decode([String].self, from: data) {
             projectURLs = paths.map { URL(fileURLWithPath: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
         }
         buildView()
         refreshProjects()
     }
-    func show() { view.isHidden = false; view.layoutSubtreeIfNeeded(); updateEditorViewport(); terminal.open(); focus() }
-    func focus() { window?.makeFirstResponder(editor) }
-    func restoreProject(_ url: URL) { setProject(url) }
-    func mayClose() -> Bool { resolveEdits() }
-    func shutdown() { highlightWork?.cancel(); terminal.stop() }
+    func show() { if let workbench { view.isHidden = false; workbench.start(); workbench.focus(); return }; view.isHidden = false; view.layoutSubtreeIfNeeded(); updateEditorViewport(); terminal.open(); focus() }
+    func focus() { if let workbench { workbench.focus(); return }; window?.makeFirstResponder(editor) }
+    func restoreProject(_ url: URL) { if let workbench { workbench.openFolder(url); return }; setProject(url) }
+    func mayClose() -> Bool { workbench?.mayClose() ?? resolveEdits() }
+    func shutdown() { if let workbench { workbench.shutdown(); return }; highlightWork?.cancel(); terminal.stop() }
     private func buildView() {
-        let glass = view
+        let glass = NSVisualEffectView(frame: view.bounds)
+        glass.autoresizingMask = [.width, .height]; view.addSubview(glass)
         glass.material = .underWindowBackground; glass.blendingMode = .behindWindow; glass.state = .active
         let controls = NSStackView()
         controls.spacing = 8; controls.alignment = .centerY
@@ -237,6 +246,7 @@ private final class IDELineNumbers: NSRulerView {
         if let root, let index = projectURLs.firstIndex(of: root.url) { projects.selectItem(at: index + 1) }
     }
     private func rememberProject(_ url: URL) {
+        IDERecentProjects.record(url)
         projectURLs.removeAll { $0 == url }; projectURLs.insert(url, at: 0)
         do {
             try FileManager.default.createDirectory(at: registry.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -271,6 +281,7 @@ private final class IDELineNumbers: NSRulerView {
         return true
     }
     private func setProject(_ url: URL) {
+        defer {Motion.change(view,character:.editor)}
         guard root?.url != url.standardizedFileURL else { return }
         guard allowProjectChange(), resolveEdits() else { refreshProjects(); return }
         root = IDEFile(url.standardizedFileURL); currentFile = nil; baseline = ""; editor.string = ""; editor.isEditable = false
@@ -279,12 +290,13 @@ private final class IDELineNumbers: NSRulerView {
         terminal.open(); terminal.sendCommand("cd -- " + IDEJava.quote(url.path))
         status.stringValue = "\(url.path) · Drop files into the sidebar to import"
     }
-    @objc private func refreshFiles() { root?.children = nil; outline.reloadData(); editorScroll.verticalRulerView?.needsDisplay = true }
+    @objc private func refreshFiles() { root?.children = nil; outline.reloadData(); Motion.change(outline,character:.editor); editorScroll.verticalRulerView?.needsDisplay = true }
     @objc private func openSelectedFile() {
         guard let node = outline.item(atRow: outline.selectedRow) as? IDEFile, !node.directory else { return }
         loadFile(node.url)
     }
     private func loadFile(_ url: URL) {
+        defer {Motion.change(editorScroll,character:.editor)}
         guard url != currentFile, resolveEdits() else { return }
         do {
             let size = (try url.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
@@ -307,7 +319,7 @@ private final class IDELineNumbers: NSRulerView {
                 guard alert.runModal() == .alertFirstButtonReturn else { return false }
             }
             try editor.string.write(to: file, atomically: true, encoding: .utf8)
-            baseline = editor.string; updateFilename(); status.stringValue = "Saved \(file.lastPathComponent)"; return true
+            baseline = editor.string; updateFilename(); Motion.change(status,character:.editor);status.stringValue = "Saved \(file.lastPathComponent)"; return true
         } catch { showError(error); return false }
     }
     private func resolveEdits() -> Bool {
@@ -372,8 +384,9 @@ private final class IDELineNumbers: NSRulerView {
     }
     @objc private func compileJava() { executeJava(run: false) }
     @objc private func runJava() { executeJava(run: true) }
-    @objc private func stopJava() { terminal.interrupt(); marker = nil; status.stringValue = "Interrupt sent · Control-C also stops commands" }
+    @objc private func stopJava() { Motion.change(status,character:.editor);terminal.interrupt(); marker = nil; status.stringValue = "Interrupt sent · Control-C also stops commands" }
     private func executeJava(run: Bool) {
+        Motion.change(status,character:.editor)
         guard let root else { openProject(); return }
         guard marker == nil else { showError(failure("A Java command is already running. Stop it first.")); return }
         guard saveFile() else { return }
@@ -400,6 +413,7 @@ private final class IDELineNumbers: NSRulerView {
         let pattern = "(?:^|[\\r\\n])" + marker + ":([0-9]+)[\\r\\n]"
         if let regex = try? NSRegularExpression(pattern: pattern), let match = regex.firstMatch(in: outputTail, range: NSRange(outputTail.startIndex..., in: outputTail)), let result = Range(match.range(at: 1), in: outputTail) {
             let code = Int(outputTail[result]) ?? 1
+            Motion.change(status,character:.editor)
             self.marker = nil; status.stringValue = code == 0 ? "Finished successfully" : "Exited with status \(code) · See terminal"
         }
         if outputTail.count > 16000 { outputTail = String(outputTail.suffix(8000)) }
@@ -415,7 +429,8 @@ private final class IDELineNumbers: NSRulerView {
     func splitView(_ splitView: NSSplitView, shouldAdjustSizeOfSubview view: NSView) -> Bool { true }
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat { splitView.isVertical ? 170 : 150 }
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat { (splitView.isVertical ? splitView.bounds.width - 340 : splitView.bounds.height - 120) }
-    func saveCurrentFile() { _ = saveFile() }
+    func find(backwards: Bool? = nil) { if let backwards { workbench?.shortcut("g", shift: backwards, keyCode: 5) } else { workbench?.shortcut("f", keyCode: 3) } }
+    func saveCurrentFile() { if let workbench { workbench.save(); return }; _ = saveFile() }
     private func failure(_ message: String) -> NSError { NSError(domain: "WebbyIDE", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     private func showError(_ error: Error) { let alert = NSAlert(); alert.messageText = "Webby IDE"; alert.informativeText = error.localizedDescription; alert.runModal() }
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int { (item as? IDEFile ?? root)?.contents().count ?? 0 }
@@ -425,7 +440,7 @@ private final class IDELineNumbers: NSRulerView {
         guard let node = item as? IDEFile else { return nil }
         let cell = NSTableCellView(); let icon = NSImageView(); let label = NSTextField(labelWithString: node.url.lastPathComponent)
         icon.image = node.directory ? NSImage(systemSymbolName: "folder.fill", accessibilityDescription: nil) : NSWorkspace.shared.icon(forFile: node.url.path)
-        icon.contentTintColor = node.directory ? .systemTeal : nil; label.font = .systemFont(ofSize: 12); label.lineBreakMode = .byTruncatingMiddle
+        icon.contentTintColor = node.directory ? .systemTeal : nil; label.font = WebbyTypography.font(ofSize: 12); label.lineBreakMode = .byTruncatingMiddle
         for view in [icon, label] { view.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(view) }
         NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 16), icon.heightAnchor.constraint(equalToConstant: 16), label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8), label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4), label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
         return cell

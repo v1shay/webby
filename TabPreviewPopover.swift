@@ -28,15 +28,15 @@ import AppKit
 
         placeholder.translatesAutoresizingMaskIntoConstraints = false
         placeholder.alignment = .center
-        placeholder.font = .systemFont(ofSize: 15, weight: .medium)
+        placeholder.font = WebbyTypography.font(ofSize: 15, weight: .medium)
         placeholder.textColor = .secondaryLabelColor
         placeholder.lineBreakMode = .byTruncatingTail
 
         title.translatesAutoresizingMaskIntoConstraints = false
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.font = WebbyTypography.font(ofSize: 13, weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
         address.translatesAutoresizingMaskIntoConstraints = false
-        address.font = .systemFont(ofSize: 11)
+        address.font = WebbyTypography.font(ofSize: 11)
         address.textColor = .secondaryLabelColor
         address.lineBreakMode = .byTruncatingMiddle
 
@@ -90,6 +90,7 @@ import AppKit
     }
 
     private func setThumbnail(_ image: NSImage?) {
+        Motion.change(popover.contentViewController?.view,character:.panel)
         thumbnail.layer?.contents = image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
     }
 

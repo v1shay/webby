@@ -1,0 +1,42 @@
+--- /private/tmp/webby-calculator-focus/before/WidgetCanvas.swift	2026-11-01 16:31:00
++++ /Users/vishayagarwal/Documents/Codex/2026-09-29/can-y/outputs/WidgetCanvas.swift	2026-11-01 16:32:47
+@@ -1059,7 +1059,9 @@
+     }
+ 
+     func setCalculatorHistory(_ entries: [String]) {
+-        calculatorHistory.stringValue = entries.prefix(4).joined(separator: "\n")
++        let text = entries.prefix(4).joined(separator: "\n")
++        guard calculatorHistory.stringValue != text else { return }
++        calculatorHistory.stringValue = text
+         needsLayout = true
+     }
+ 
+@@ -1124,7 +1126,12 @@
+         promptButton.isHidden = true
+         promptGlass.isHidden = true
+         for view in [albumArt, trackTitle, trackArtist, musicPrevious, musicToggle, musicNext,
+-                     musicProgress, calculatorField, calculatorAnswer, calculatorHistory] { view.isHidden = true }
++                     musicProgress, calculatorAnswer, calculatorHistory] { view.isHidden = true }
++        // Hiding an actively edited NSTextField detaches its field editor.
++        // Keep the calculator input visible throughout layout/refresh/resize.
++        if calculatorField.isHidden != (kind != .calculator) {
++            calculatorField.isHidden = kind != .calculator
++        }
+         close.isHidden = compact
+         close.frame = NSRect(x: width - 27, y: height - 29, width: 21, height: 21)
+         skeleton.frame=bounds;skeleton.isHidden = !showSkeleton
+@@ -1490,7 +1497,14 @@
+         let result = answer.rounded() == answer && abs(answer) < 1e15 ? String(format: "%.0f", answer) : String(format: "%.10g", answer)
+         presentCalculatorAnswer(result, confirmed: true)
+         calculatorCalculated?("\(expression) = \(result)")
++    }
++    func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
++        guard control === calculatorField,
++              command == #selector(NSResponder.insertNewline(_:)) || command == NSSelectorFromString("insertNewlineIgnoringFieldEditor:") else { return false }
++        calculatePressed()
++        return true // Calculate in place; keep the caret and normal typing session.
+     }
++
+     func controlTextDidChange(_ obj: Notification) {
+         guard obj.object as? NSTextField === calculatorField else { return }
+         let expression = calculatorField.stringValue

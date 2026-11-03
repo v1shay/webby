@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 import WebKit
 
-struct BrowserLink: Codable {
+struct BrowserLink: Codable, Sendable {
     let title: String
     let url: String
     let visitedAt: Date?

@@ -34,6 +34,8 @@ struct ASCIIArtwork: Codable {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        NotificationCenter.default.addObserver(self,selector:#selector(occlusionChanged(_:)),name:NSWindow.didChangeOcclusionStateNotification,object:nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(motionPreferenceChanged),name:NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,object:nil)
         selection.strokeColor = NSColor.systemTeal.cgColor
         selection.fillColor = nil; selection.lineWidth = 1.5
         handles.strokeColor = NSColor.systemTeal.cgColor
@@ -42,6 +44,7 @@ struct ASCIIArtwork: Codable {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func deselect() { selectedID = nil; updateSelection() }
     private func updateSelection() {
+        Motion.basic(selection,key:"opacity",from:selection.presentation()?.opacity ?? 0,to:1,duration:0.15)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         if let id = selectedID, let card = cards[id] {
             let rect = card.frame.insetBy(dx: 1, dy: 1)
@@ -118,6 +121,7 @@ struct ASCIIArtwork: Codable {
         CATransaction.commit()
     }
     private func rebuild() {
+        Motion.change(self,character:.art)
         timer?.invalidate(); timer = nil; renderer = nil
         subviews.forEach { $0.removeFromSuperview() }; cards.removeAll()
         for entry in placements {
@@ -137,12 +141,25 @@ struct ASCIIArtwork: Codable {
             context.evaluateScript("var backgroundIco = ico.New(94,20,50,8,1,20);")
             renderer = context
             animate()
-            timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self, let window = self.window, window.occlusionState.contains(.visible),
-                          !self.isHiddenOrHasHiddenAncestor, !self.isDragging, Motion.enabled else { return }
-                    self.animate()
-                }
+            refreshActivity()
+        }
+    }
+    override func viewDidMoveToWindow() {super.viewDidMoveToWindow();refreshActivity()}
+    @objc private func occlusionChanged(_ note:Notification) {
+        if note.object as? NSWindow === window {refreshActivity()}
+    }
+    @objc private func motionPreferenceChanged() {refreshActivity()}
+    func refreshActivity() {
+        guard renderer != nil,window?.occlusionState.contains(.visible)==true,!isHiddenOrHasHiddenAncestor,!isDragging,Motion.enabled else {
+            timer?.invalidate();timer=nil;return
+        }
+        guard timer==nil else{return}
+        timer = Timer.scheduledTimer(withTimeInterval:0.1,repeats:true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else{return}
+                self.refreshActivity()
+                guard self.timer != nil else{return}
+                self.animate()
             }
         }
     }
@@ -161,7 +178,7 @@ struct ASCIIArtwork: Codable {
             let right = abs(point.x - original.maxX) <= 16
             let bottom = abs(point.y - original.maxY) <= 16
             resizing = right && bottom ? .corner : right ? .right : bottom ? .bottom : nil
-            updateSelection()
+            updateSelection();refreshActivity()
             return true
         case .leftMouseDragged:
             guard let id = dragID else { return false }
@@ -184,11 +201,11 @@ struct ASCIIArtwork: Codable {
             guard let id = dragID, let rect = cards[id]?.frame, let index = placements.firstIndex(where: { $0.id == id }) else { return false }
             placements[index].x = rect.minX; placements[index].y = rect.minY
             placements[index].width = rect.width; placements[index].height = rect.height
-            dragID = nil; updateSelection(); save(); return true
+            dragID = nil; updateSelection(); save();refreshActivity(); return true
         default: return false
         }
     }
-    deinit { timer?.invalidate() }
+    deinit {timer?.invalidate();NotificationCenter.default.removeObserver(self);NSWorkspace.shared.notificationCenter.removeObserver(self)}
 }
 
 @MainActor private final class ASCIIArtView: NSView {

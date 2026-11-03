@@ -1,5 +1,54 @@
 (() => {
   'use strict';
+  // Prepared surface rules run before page content exists. CSS automatically
+  // handles SPA navigation and new nodes: no geometry reads or DOM crawler.
+  const host = location.hostname.toLowerCase().replace(/^www\./, '');
+  const surface = 'rgba(42,47,51,0.09)';
+  const raised = 'rgba(42,47,51,0.15)';
+  const text = 'rgba(238,241,244,0.94)';
+  const recipes = {
+    'chatgpt.com': { shell: '#__next,#root,#main,main,nav,header,[data-testid="conversation-turns"]', tokens: ['--main-surface-primary','--main-surface-secondary','--main-surface-tertiary','--sidebar-surface-primary','--sidebar-surface-secondary','--bg-primary','--bg-secondary','--bg-tertiary'], ink: ['--text-primary','--text-secondary','--text-tertiary'] },
+    'github.com': { shell: '.application-main,.AppHeader,.AppHeader-globalBar,.AppHeader-localBar,.Header,.js-header-wrapper', tokens: ['--bgColor-default','--bgColor-muted','--bgColor-inset','--color-canvas-default','--color-canvas-subtle','--color-canvas-inset'], ink: ['--fgColor-default','--fgColor-muted','--color-fg-default','--color-fg-muted'] },
+    'youtube.com': { shell: 'ytd-app,#masthead-container,ytd-mini-guide-renderer,tp-yt-app-drawer,#guide-content', tokens: ['--yt-spec-base-background','--yt-spec-raised-background','--yt-spec-menu-background','--yt-spec-brand-background-primary','--yt-spec-general-background-a'], ink: ['--yt-spec-text-primary','--yt-spec-text-secondary'] },
+    'mail.google.com': { shell: '.nH,.bkL,.aAU,.aeJ,.aeF,.AO', labels: '.aeN,.aeN a,.gb,.gb a,[role="navigation"]' },
+    'calendar.google.com': { shell: '#gb,header,[role="main"],[role="navigation"]', google: true },
+    'drive.google.com': { shell: '#gb,header,[role="main"],[role="navigation"]', google: true },
+    // Keep the editor canvas, slide artwork, menus and layout entirely intact.
+    'docs.google.com': { shell: '.docs-titlebar,.docs-menubar,.docs-toolbar-wrapper,.docs-navigation-tab-bar,.docs-material-gm-dialog-title', labels: '.docs-titlebar,.docs-menubar .goog-menuitem-label,.docs-toolbar-wrapper .goog-toolbar-button', google: true },
+    'google.com': { shell: '#searchform,#appbar,#gb,#rcnt,#search,#rso', google: true },
+    'linkedin.com': { shell: '.global-nav,.global-nav__content,.scaffold-layout,.scaffold-layout__main,.scaffold-layout__aside,.artdeco-card,.scaffold-finite-scroll__content', tokens: ['--color-background-container','--color-background-canvas','--color-background-container-tint','--voyager-color-background-container','--voyager-color-background-canvas'], ink: ['--color-text','--color-text-low-emphasis'] },
+    'instagram.com': { shell: '[id^="mount_"],main,nav,header,[role="main"],[role="navigation"]' },
+    'tiktok.com': { shell: '#root,main,header,nav,[data-e2e="top-banner"],[data-e2e="recommend-list-item-container"]' },
+    'x.com': { shell: '#react-root,header,main,[data-testid="primaryColumn"],[data-testid="sidebarColumn"]' },
+    'reddit.com': { shell: 'shreddit-app,shreddit-feed,header,nav,main,#AppRouter-main-content', tokens: ['--color-neutral-background','--color-neutral-background-weak','--color-neutral-background-medium','--color-neutral-background-strong'], ink: ['--color-neutral-content','--color-neutral-content-strong','--color-neutral-content-weak'] },
+    'devpost.com': { shell: '#container,#content,main,header,nav,.site-header,.page-header' }
+  };
+  const recipe = recipes[host] || (host.endsWith('.schoology.com') ? {
+    shell: '#body,#main,#main-content-wrapper,#content-wrapper,#center-top,#center-main,#left-nav,header,nav',
+    labels: '#header,#left-nav,#center-top'
+  } : null);
+  if (recipe) {
+    let declarations = (recipe.tokens || []).map(name => `${name}:${surface} !important;`).join('') +
+      (recipe.ink || []).map(name => `${name}:${text} !important;`).join('');
+    if (recipe.google) {
+      for (const name of ['surface','surface-container','surface-container-low','surface-container-high','background'])
+        declarations += `--gm3-sys-color-${name}:${surface} !important;`;
+      declarations += `--gm3-sys-color-on-surface:${text} !important;--gm3-sys-color-on-surface-variant:${text} !important;`;
+    }
+    let prepared = `html,body{background-color:transparent !important;} :root{${declarations}} ${recipe.shell}{background-color:${surface} !important;}`;
+    if (recipe.labels) prepared += `${recipe.labels}{color:${text} !important;}`;
+    // Token-free sites need only native structural surfaces, never all divs.
+    // Their photographs, canvases, media, editors and status colors are untouched.
+    try {
+      const sheet = new CSSStyleSheet(); sheet.replaceSync(prepared);
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    } catch (_) {
+      const sheet = document.createElement('style'); sheet.textContent = prepared;
+      document.documentElement.appendChild(sheet);
+    }
+    // Other layouts retain bounded correction for explicit text colors.
+    if (recipe.tokens || ['docs.google.com','calendar.google.com','drive.google.com'].includes(host)) return;
+  }
 
   // One document stylesheet changes only surfaces selected below. Native AppKit
   // supplies the blur; this script never adds a per-element backdrop filter.
@@ -64,8 +113,7 @@
   function surfaceAlpha(element, rect) {
     const tag = element.localName;
     if (tag === 'html' || tag === 'body') return 0;
-    if (element.closest(media)) return null;
-
+    // prepare() already excludes media and all of its descendants.
     const role = element.getAttribute('role') || '';
     const names = `${element.id} ${typeof element.className === 'string' ? element.className : ''} ${role}`;
     if (rect.width < 20 || rect.height < 14) return null;
@@ -151,8 +199,12 @@
   function enqueueTree(node, force) {
     if (!(node instanceof Element) || node.matches(`${media},${nonvisual}`)) return;
     const existing = queuedTrees.get(node);
-    if (existing) { existing.force ||= force; return; }
-    const job = { element: node, force };
+    if (existing) {
+      if (force && existing.entered) existing.revisit = true;
+      existing.force ||= force;
+      return;
+    }
+    const job = { element: node, force, entered: false, child: null, revisit: false };
     queuedTrees.set(node, job);
     trees.push(job);
   }
@@ -166,9 +218,11 @@
     if (document.hidden) { hiddenDirty = true; return; }
     const began = performance.now();
     let budget = Math.min(batchLimit, began < interactingUntil ? 8 : 64);
-    const deadline = began + 4;
+    const frameBudget = began < interactingUntil ? 1.5 : 3;
+    const deadline = began + frameBudget;
     const batch = [];
     while (budget > 0 && performance.now() < deadline && (pending.size || trees.length)) {
+      const consumesBudget = pending.size > 0 || !trees[trees.length - 1].entered;
       if (pending.size) {
         const element = pending.values().next().value;
         pending.delete(element);
@@ -177,24 +231,39 @@
         const plan = prepare(element, force);
         if (plan) batch.push(plan);
       } else {
-        const { element, force } = trees.pop();
-        queuedTrees.delete(element);
-        if (!element.isConnected) continue;
-        // Added subtrees are walked once, within the per-frame budget.
-        if (mainFrame) {
-          for (let child = element.lastElementChild; child; child = child.previousElementSibling) enqueueTree(child, force);
+        const job = trees[trees.length - 1];
+        const { element, force } = job;
+        if (!element.isConnected) {
+          trees.pop(); queuedTrees.delete(element); budget--; continue;
         }
-        const plan = prepare(element, force);
-        if (plan) batch.push(plan);
+        if (!job.entered) {
+          job.entered = true;
+          job.child = mainFrame ? element.firstElementChild : null;
+          const plan = prepare(element, force);
+          if (plan) batch.push(plan);
+        } else if (job.child) {
+          // Advance one child per budget slot. A wide subtree must never enqueue
+          // thousands of descendants synchronously in a single animation frame.
+          const child = job.child;
+          if (child.parentElement !== element) {
+            job.child = element.firstElementChild;
+          } else {
+            job.child = child.nextElementSibling;
+            enqueueTree(child, force);
+          }
+        } else {
+          trees.pop(); queuedTrees.delete(element);
+          if (job.revisit) enqueueTree(element, true);
+        }
       }
-      budget--;
+      if (consumesBudget) budget--;
     }
     const measurements = batch.map(measure);
     measurements.forEach(apply);
     // Adapt using the complete prepare/read/write cost, not preparation alone.
     const elapsed = performance.now() - began;
     if (elapsed > 0.25) {
-      const wanted = Math.max(4, Math.min(64, Math.floor(Math.max(1, batch.length) * 4 / elapsed)));
+      const wanted = Math.max(4, Math.min(64, Math.floor(Math.max(1, batch.length) * frameBudget / elapsed)));
       batchLimit = Math.max(4, Math.round(batchLimit * 0.5 + wanted * 0.5));
     }
     if (pending.size || trees.length) schedule();
@@ -258,13 +327,19 @@
   function processPageShell() {
     const shallow = [{ element: document.documentElement, depth: 0 }];
     const batch = [];
-    while (shallow.length && batch.length < (mainFrame ? 24 : 8)) {
+    const limit = mainFrame ? 24 : 8;
+    while (shallow.length && batch.length < limit) {
       const { element, depth } = shallow.shift();
       if (!element || element.matches(`${media},${nonvisual}`)) continue;
       const plan = prepare(element, true);
       if (plan) batch.push(plan);
       if (depth < 2) {
-        for (const child of element.children) shallow.push({ element: child, depth: depth + 1 });
+        for (const child of element.children) {
+          // This is the first-paint shell, not the full bounded crawler. Never
+          // allocate a queue for thousands of siblings just to consume 24.
+          if (shallow.length + batch.length >= limit) break;
+          if (!child.matches(`${media},${nonvisual}`)) shallow.push({ element: child, depth: depth + 1 });
+        }
       }
     }
     batch.map(measure).forEach(apply);

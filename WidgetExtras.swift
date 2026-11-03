@@ -167,55 +167,100 @@ enum WidgetSystemData {
 
 struct ExpressionCalculator {
     private let characters: [Character]
+    private let answer: Double
     private var index = 0
-
-    init(_ expression: String) { characters = Array(expression.replacingOccurrences(of: "×", with: "*").replacingOccurrences(of: "÷", with: "/")) }
-
-    mutating func evaluate() -> Double? {
-        guard let answer = sum() else { return nil }
-        spaces()
-        return index == characters.count && answer.isFinite ? answer : nil
+    private var depth = 0
+    init(_ expression: String, ans: Double = 0) {
+        characters = Array(expression.lowercased().replacingOccurrences(of: "×", with: "*").replacingOccurrences(of: "÷", with: "/").replacingOccurrences(of: "−", with: "-").replacingOccurrences(of: "**", with: "^"))
+        answer = ans
     }
-
+    mutating func evaluate() -> Double? {
+        guard characters.count <= 2048, let value = sum() else { return nil }
+        spaces()
+        return index == characters.count && value.isFinite ? value : nil
+    }
     private mutating func spaces() { while index < characters.count && characters[index].isWhitespace { index += 1 } }
     private mutating func eat(_ c: Character) -> Bool {
-        spaces()
-        guard index < characters.count && characters[index] == c else { return false }
-        index += 1
-        return true
+        spaces(); guard index < characters.count, characters[index] == c else { return false }; index += 1; return true
     }
     private mutating func sum() -> Double? {
-        guard var result = product() else { return nil }
+        guard var v = product() else { return nil }
         while true {
-            if eat("+") { guard let rhs = product() else { return nil }; result += rhs }
-            else if eat("-") { guard let rhs = product() else { return nil }; result -= rhs }
-            else { return result }
+            if eat("+") { guard let r = product() else { return nil }; v += r }
+            else if eat("-") { guard let r = product() else { return nil }; v -= r }
+            else { return v }
         }
     }
     private mutating func product() -> Double? {
-        guard var result = signedPower() else { return nil }
+        guard var v = unary() else { return nil }
         while true {
-            if eat("*") { guard let rhs = signedPower() else { return nil }; result *= rhs }
-            else if eat("/") { guard let rhs = signedPower(), rhs != 0 else { return nil }; result /= rhs }
-            else { return result }
+            if eat("*") { guard let r = unary() else { return nil }; v *= r }
+            else if eat("/") { guard let r = unary(), r != 0 else { return nil }; v /= r }
+            else {
+                spaces()
+                guard index < characters.count else { return v }
+                let c = characters[index]
+                if c == "(" || c == "√" || c == "π" || c.isLetter { guard let r = unary() else { return nil }; v *= r }
+                else { return v }
+            }
         }
     }
-    private mutating func signedPower() -> Double? {
-        if eat("+") { return signedPower() }
-        if eat("-") { return signedPower().map { -$0 } }
-        return power()
-    }
-    private mutating func power() -> Double? {
-        guard let base = primary() else { return nil }
-        if eat("^") { guard let exponent = signedPower() else { return nil }; return pow(base, exponent) }
-        return base
+    private mutating func unary() -> Double? {
+        depth += 1; defer { depth -= 1 }; guard depth < 96 else { return nil }
+        if eat("+") { return unary() }
+        if eat("-") { return unary().map { -$0 } }
+        guard var v = primary() else { return nil }
+        while true {
+            if eat("!") {
+                guard v >= 0, v <= 170, v.rounded() == v else { return nil }
+                v = v < 2 ? 1 : (2...Int(v)).reduce(1.0) { $0 * Double($1) }
+            } else if eat("%") { v /= 100 }
+            else if eat("°") { v *= .pi / 180 }
+            else { break }
+        }
+        if eat("^") { guard let r = unary() else { return nil }; v = pow(v, r) }
+        return v
     }
     private mutating func primary() -> Double? {
-        if eat("(") { guard let result = sum(), eat(")") else { return nil }; return result }
-        spaces()
-        let start = index
+        if eat("(") { guard let v = sum(), eat(")") else { return nil }; return v }
+        if eat("√") { guard let v = unary() else { return nil }; return sqrt(v) }
+        if eat("π") { return .pi }
+        spaces(); let start = index
+        if index < characters.count, characters[index].isLetter {
+            while index < characters.count && characters[index].isLetter { index += 1 }
+            let name = String(characters[start..<index])
+            if name == "pi" { return .pi }; if name == "e" { return M_E }; if name == "ans" { return answer }
+            guard eat("(") else { return nil }
+            var args: [Double] = []
+            guard let first = sum() else { return nil }; args.append(first)
+            while eat(",") { guard args.count < 16, let v = sum() else { return nil }; args.append(v) }
+            guard eat(")") else { return nil }
+            if args.count == 2 {
+                switch name { case "pow": return pow(args[0], args[1]); case "log": return log(args[0]) / log(args[1]); case "min": return min(args[0], args[1]); case "max": return max(args[0], args[1]); case "root": return pow(args[0], 1 / args[1]); default: return nil }
+            }
+            guard args.count == 1 else { return nil }; let x = args[0]
+            switch name {
+            case "sqrt", "sqrrt": return sqrt(x)
+            case "cbrt": return cbrt(x)
+            case "sin": return sin(x); case "cos": return cos(x); case "tan": return tan(x)
+            case "asin", "arcsin": return asin(x); case "acos", "arccos": return acos(x); case "atan", "arctan": return atan(x)
+            case "sinh": return sinh(x); case "cosh": return cosh(x); case "tanh": return tanh(x)
+            case "ln": return log(x); case "log": return log10(x); case "exp": return exp(x)
+            case "abs": return abs(x); case "floor": return floor(x); case "ceil": return ceil(x); case "round": return x.rounded()
+            default: return nil
+            }
+        }
         while index < characters.count && (characters[index].isNumber || characters[index] == ".") { index += 1 }
         guard index > start else { return nil }
+        // An exponent is scientific notation only when followed by digits.
+        let mantissaEnd = index
+        if index < characters.count, characters[index] == "e" {
+            index += 1
+            if index < characters.count && (characters[index] == "+" || characters[index] == "-") { index += 1 }
+            let digits = index
+            while index < characters.count && characters[index].isNumber { index += 1 }
+            if digits == index { index = mantissaEnd }
+        }
         return Double(String(characters[start..<index]))
     }
 }
@@ -240,5 +285,24 @@ struct ExpressionCalculator {
               let encoded = try? JSONEncoder().encode(Cover(url:url,data:png)) else { return nil }
         UserDefaults.standard.set(encoded,forKey:key)
         return NSImage(cgImage:thumbnail,size:NSSize(width:thumbnail.width,height:thumbnail.height))
+    }
+}
+
+// Text prompts use ChatGPT's own URL handoff. Attachment prompts stay off the
+// URL so their separate composer bridge cannot race an automatic text send.
+enum ChatGPTWidgetRoute {
+    static func url(prompt:String,hasImages:Bool)->URL {
+        var route=URLComponents(string:"https://chatgpt.com/")!
+        if !hasImages && !prompt.isEmpty {route.queryItems=[URLQueryItem(name:"q",value:prompt)];route.percentEncodedQuery=route.percentEncodedQuery?.replacingOccurrences(of:"+",with:"%2B")}
+        return route.url!
+    }
+}
+
+enum WidgetBrandImages {
+    static let spotify:NSImage? = load("Spotify","png")
+    static let googleCalendar:NSImage? = load("GoogleCalendar","svg")
+    private static func load(_ name:String,_ ext:String)->NSImage? {
+        guard let url=Bundle.main.url(forResource:name,withExtension:ext,subdirectory:"WidgetBrands"),let image=NSImage(contentsOf:url) else{return nil}
+        image.isTemplate=false;return image
     }
 }
