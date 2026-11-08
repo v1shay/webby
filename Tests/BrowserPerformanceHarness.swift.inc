@@ -801,7 +801,7 @@ extension BrowserApp {
             view.configuration.websiteDataStore.httpCookieStore.setCookie(foreignCookie) { continuation.resume() }
         }
         let crossSite=base.replacingOccurrences(of:"127.0.0.1",with:"localhost")+"/download-fixture"
-        let crossJS="(()=>{const a=document.createElement('a');a.href=\(String(data:try JSONEncoder().encode(crossSite),encoding:.utf8)!);a.download='cross.txt';document.body.append(a);a.click()})()"
+        let crossJS="(()=>{const a=document.createElement('a');a.href=\(String(data:try JSONEncoder().encode(crossSite),encoding:.utf8)!);a.download='cross.txt';document.body.append(a);a.click();return true})()"
         _ = try await view.evaluateJavaScript(crossJS)
         try await waitFor("Cross-site download did not reject the request without cookies",timeout:20) {
             self.downloads.widgetLines.filter { $0.contains("Failed:") }.count >= 2
