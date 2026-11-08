@@ -46,6 +46,32 @@ import WebKit
         Motion.basic(ambient, key: "opacity", from: old, to: ambient.opacity, duration: 0.18)
     }
 
+    func animateIncomingFile() {
+        guard Motion.enabled, let layer, window != nil, !isHidden else { return }
+        let file = CAShapeLayer()
+        let path = CGMutablePath()
+        path.addRoundedRect(in: CGRect(x: -4, y: -5, width: 8, height: 10), cornerWidth: 1.5, cornerHeight: 1.5)
+        file.path = path
+        file.fillColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        file.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        layer.addSublayer(file)
+        let travel = CAKeyframeAnimation(keyPath: "position")
+        travel.values = [CGPoint(x: bounds.midX, y: bounds.maxY + 5),
+                         CGPoint(x: bounds.midX, y: bounds.midY + 5),
+                         CGPoint(x: bounds.midX, y: bounds.midY)]
+        let fade = CAKeyframeAnimation(keyPath: "opacity")
+        fade.values = [0, 1, 1, 0]
+        fade.keyTimes = [0, 0.15, 0.7, 1]
+        let animation = CAAnimationGroup()
+        animation.animations = [travel, fade]
+        animation.duration = 0.65
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { file.removeFromSuperlayer() }
+        file.add(animation, forKey: "incomingFile")
+        CATransaction.commit()
+    }
+
     override func mouseDown(with event: NSEvent) { onClick?() }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }
@@ -60,15 +86,7 @@ private final class DownloadDestinations {
     func reserve(_ name: String, completion: @escaping (Result<URL, Error>) -> Void) {
         queue.async { [self] in
             let result = Result<URL, Error> {
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                let stem = (name as NSString).deletingPathExtension
-                let ext = (name as NSString).pathExtension
-                var candidate = folder.appendingPathComponent(name)
-                var suffix = 2
-                while FileManager.default.fileExists(atPath: candidate.path) || reserved.contains(candidate.path) {
-                    let next = ext.isEmpty ? "\(stem) \(suffix)" : "\(stem) \(suffix).\(ext)"
-                    candidate = folder.appendingPathComponent(next); suffix += 1
-                }
+                let candidate = try destination(for: name)
                 reserved.insert(candidate.path)
                 return candidate
             }
@@ -76,6 +94,27 @@ private final class DownloadDestinations {
         }
     }
     func release(_ url: URL) { queue.async { self.reserved.remove(url.path) } }
+
+    func store(_ temporary: URL, as name: String) throws -> URL {
+        try queue.sync {
+            let target = try destination(for: name)
+            try FileManager.default.moveItem(at: temporary, to: target)
+            return target
+        }
+    }
+
+    private func destination(for name: String) throws -> URL {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let stem = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        var candidate = folder.appendingPathComponent(name)
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: candidate.path) || reserved.contains(candidate.path) {
+            let next = ext.isEmpty ? "\(stem) \(suffix)" : "\(stem) \(suffix).\(ext)"
+            candidate = folder.appendingPathComponent(next); suffix += 1
+        }
+        return candidate
+    }
 }
 
 @MainActor final class BrowserDownloads: NSObject, NSMenuDelegate, WKDownloadDelegate {
@@ -91,17 +130,22 @@ private final class DownloadDestinations {
     private var entries: [Entry] = []
     private var active = [ObjectIdentifier: Int]()
     private var retainedDownloads = [ObjectIdentifier: WKDownload]()
+    private var sessionDownloads = [UUID: (session: URLSession?, task: URLSessionDownloadTask?, index: Int)]()
+    private let defaults: UserDefaults
     private let destinations: DownloadDestinations
     private let menu = NSMenu(title: "Downloads")
-    var hasActiveDownloads: Bool { !active.isEmpty }
+    var hasActiveDownloads: Bool { !active.isEmpty || !sessionDownloads.isEmpty }
 
-    init(directory: URL? = nil) {
-        destinations = DownloadDestinations(folder: directory ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+    convenience init(directory: URL) { self.init(destinationFolder: directory) }
+
+    init(destinationFolder: URL? = nil, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        destinations = DownloadDestinations(folder: destinationFolder ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads"))
         super.init()
         menu.delegate = self
         button.onClick = { [weak self] in self?.showMenu() }
-        let saved = Array((UserDefaults.standard.stringArray(forKey: "browserRecentDownloads") ?? []).suffix(30))
+        let saved = Array((defaults.stringArray(forKey: "browserRecentDownloads") ?? []).suffix(30))
         entries = saved.compactMap { path in
             return Entry(name: URL(fileURLWithPath: path).lastPathComponent,
                          url: URL(fileURLWithPath: path), progress: nil, status: "Finished")
@@ -121,12 +165,83 @@ private final class DownloadDestinations {
     }
 
     func attach(_ download: WKDownload) {
-        guard active[ObjectIdentifier(download)] == nil else { return }
-        retainedDownloads[ObjectIdentifier(download)] = download
+        let id = ObjectIdentifier(download)
+        guard active[id] == nil else { return }
+        retainedDownloads[id] = download
         download.delegate = self
         let index = entries.count
         entries.append(Entry(name: "Downloading…", url: nil, progress: download.progress, status: "Downloading"))
-        active[ObjectIdentifier(download)] = index
+        active[id] = index
+        button.animateIncomingFile()
+    }
+
+    /// Re-fetch safe GET downloads through URLSession. WKDownload's destination
+    /// handoff can block WebKit's main thread in the macOS sandbox service.
+    /// Cookie storage is private to this transfer and retains domain scoping.
+    func startGET(_ request: URLRequest, from store: WKHTTPCookieStore, sourceURL: URL?, suggestedFilename: String?, expectedMIMEType: String? = nil) {
+        let id = UUID(), index = entries.count
+        entries.append(Entry(name: suggestedFilename ?? request.url?.lastPathComponent ?? "Downloading…", url: nil, progress: nil, status: "Downloading"))
+        sessionDownloads[id] = (nil, nil, index)
+        button.animateIncomingFile()
+        let allocator = destinations
+        store.getAllCookies { [weak self] cookies in
+            Task { @MainActor [weak self] in
+                guard let self, self.sessionDownloads[id] != nil else { return }
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.urlCache = nil
+                configuration.httpShouldSetCookies = true
+                // URLSession has no knowledge of WebKit's site context. Avoid
+                // sending profile cookies to a different host on a cross-site
+                // link; SameSite and third-party policies must not be bypassed.
+                let sourceHost = sourceURL?.host?.lowercased()
+                let destinationHost = request.url?.host?.lowercased()
+                if let destinationHost, sourceHost == destinationHost {
+                    for cookie in cookies {
+                        let domain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn:".")).lowercased()
+                        guard destinationHost == domain || destinationHost.hasSuffix("." + domain) else { continue }
+                        configuration.httpCookieStorage?.setCookie(cookie)
+                    }
+                }
+                let session = URLSession(configuration: configuration)
+                var cleanRequest = request
+                // Cookie headers must be generated by URLSession for each host,
+                // rather than forwarded unchanged across redirects.
+                cleanRequest.setValue(nil, forHTTPHeaderField: "Cookie")
+                cleanRequest.setValue(nil, forHTTPHeaderField: "Range")
+                cleanRequest.setValue(nil, forHTTPHeaderField: "If-Range")
+                cleanRequest.setValue(nil, forHTTPHeaderField: "If-None-Match")
+                cleanRequest.setValue(nil, forHTTPHeaderField: "If-Modified-Since")
+                let task = session.downloadTask(with: cleanRequest) { [weak self] temporary, response, error in
+                    var result: Result<URL, Error>
+                    if let error { result = .failure(error) }
+                    else if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                        result = .failure(NSError(domain:"WebbyDownload",code:http.statusCode,userInfo:[NSLocalizedDescriptionKey:"Server returned HTTP \(http.statusCode)"]))
+                    } else if let http = response as? HTTPURLResponse, http.statusCode == 206 {
+                        result = .failure(NSError(domain:"WebbyDownload",code:206,userInfo:[NSLocalizedDescriptionKey:"The server returned only part of the file"]))
+                    } else if let expectedMIMEType, expectedMIMEType.lowercased() != "text/html",
+                              response?.mimeType?.lowercased() == "text/html" {
+                        result = .failure(NSError(domain:"WebbyDownload",code:0,userInfo:[NSLocalizedDescriptionKey:"The server returned a web page instead of the requested file"]))
+                    } else if let temporary {
+                        result = Result {
+                            let proposed = response?.suggestedFilename ?? suggestedFilename ?? request.url?.lastPathComponent ?? "Download"
+                            return try allocator.store(temporary, as: Self.safeFilename(proposed))
+                        }
+                    } else { result = .failure(NSError(domain:"WebbyDownload",code:0,userInfo:[NSLocalizedDescriptionKey:"No downloaded file was returned"])) }
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, let transfer=self.sessionDownloads.removeValue(forKey:id), self.entries.indices.contains(transfer.index) else { return }
+                        transfer.session?.finishTasksAndInvalidate()
+                        self.entries[transfer.index].progress = nil
+                        switch result {
+                        case .success(let url): self.entries[transfer.index].name=url.lastPathComponent;self.entries[transfer.index].url=url;self.entries[transfer.index].status="Finished";self.persistRecent()
+                        case .failure(let error): self.entries[transfer.index].status="Failed: \(error.localizedDescription)"
+                        }
+                    }
+                }
+                self.sessionDownloads[id] = (session,task,index)
+                self.entries[index].progress=task.progress
+                task.resume()
+            }
+        }
     }
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
@@ -151,7 +266,7 @@ private final class DownloadDestinations {
         }
     }
 
-    static func safeFilename(_ suggested: String) -> String {
+    nonisolated static func safeFilename(_ suggested: String) -> String {
         let name = (suggested as NSString).lastPathComponent
             .components(separatedBy: .controlCharacters).joined()
             .replacingOccurrences(of: ":", with: "-")
@@ -172,7 +287,7 @@ private final class DownloadDestinations {
         entries[index].progress = nil
         entries[index].status = status
         // Indices remain stable while other downloads are in flight.
-        if active.isEmpty && entries.count > 30 { entries = Array(entries.suffix(30)) }
+        if !hasActiveDownloads && entries.count > 30 { entries = Array(entries.suffix(30)) }
         persistRecent()
     }
 
@@ -184,8 +299,15 @@ private final class DownloadDestinations {
 
     @objc private func cancelDownload(_ item: NSMenuItem) {
         guard let entryID = item.representedObject as? UUID,
-              let index = entries.firstIndex(where: { $0.id == entryID }),
-              let id = active.first(where: { $0.value == index })?.key,
+              let index = entries.firstIndex(where: { $0.id == entryID }) else { return }
+        if let id = sessionDownloads.first(where: { $0.value.index == index })?.key,
+           let transfer = sessionDownloads.removeValue(forKey: id) {
+            transfer.session?.invalidateAndCancel()
+            entries[index].progress = nil
+            entries[index].status = "Cancelled"
+            return
+        }
+        guard let id = active.first(where: { $0.value == index })?.key,
               let download = retainedDownloads[id] else { return }
         // Mark terminal before cancellation, so a late failure callback is harmless.
         download.delegate = nil
@@ -194,7 +316,7 @@ private final class DownloadDestinations {
     }
 
     private func persistRecent() {
-        UserDefaults.standard.set(entries.compactMap { entry -> String? in
+        defaults.set(entries.compactMap { entry -> String? in
             guard entry.status == "Finished" else { return nil }
             return entry.url?.path
         }.suffix(30).map { $0 }, forKey: "browserRecentDownloads")

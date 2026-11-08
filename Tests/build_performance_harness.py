@@ -11,7 +11,7 @@ source=source.replace('LightweightIDE()', 'LightweightIDE(nativeOnly: true)')
 source=source.replace('    private func scheduleSpaceSave() {','    private func scheduleSpaceSave() {\n        return // Test copy never writes real browser profiles.',1)
 source=source.replace('    private func loadCookieHosts(for space: BrowserSpace) {','    private func loadCookieHosts(for space: BrowserSpace) {\n        return // Never read personal cookies in a fixture.',1)
 source=source.replace('configuration.websiteDataStore = ownerSpace(for: tab).dataStore','configuration.websiteDataStore = Self.performanceStore')
-source=source.replace('    static func main() {','    static func main() {\n        if CommandLine.arguments.count == 3 {\n            if ProcessInfo.processInfo.environment["WEBBY_TEST_IDE_PURE"] == "1" { try! IDEProjectWidgetChecks.pure(); return }; BrowserApp.launchPerformanceChecks(base: CommandLine.arguments[1], output: URL(fileURLWithPath: CommandLine.arguments[2])); return\n        }',1)
+source=source.replace('    static func main() {','    static func main() {\n        WBPrepareApplication()\n        if CommandLine.arguments.count == 3 {\n            if ProcessInfo.processInfo.environment["WEBBY_TEST_IDE_PURE"] == "1" { try! IDEProjectWidgetChecks.pure(); return }; BrowserApp.launchPerformanceChecks(base: CommandLine.arguments[1], output: URL(fileURLWithPath: CommandLine.arguments[2])); return\n        }',1)
 # Fixture-only traces never run against personal tabs.
 source=source.replace('    private func navigationFailed(in webView: WKWebView, error: Error) {', '    private func navigationFailed(in webView: WKWebView, error: Error) {\n        print("FIXTURE failure",(error as NSError).code)')
 source=source.replace('    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {', '    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {\n        print("FIXTURE provisional",(error as NSError).code,tab(for:webView)?.currentNavigation === navigation)')
@@ -42,20 +42,23 @@ if not resources.exists(): shutil.copytree(root/'Webby.app/Contents/Resources',r
 for asset in (root/'WidgetBrands').iterdir(): shutil.copy2(asset,resources/'WidgetBrands'/asset.name)
 (resources/'Fonts/Geist').mkdir(parents=True,exist_ok=True)
 for font in (root/'Fonts/Geist').iterdir(): shutil.copy2(font,resources/'Fonts/Geist'/font.name)
-for name in ['FastRules.json','VideoControls.js','GeistPage.js','glass-page.js','PasswordFieldProbe.js','GooglePromptFilter.js','ChromeTone.js','ChatGPTWidget.js','LinkPreview.js']:
+for name in ['FastRules.json','VideoControls.js','GeistPage.js','glass-page.js','PasswordFieldProbe.js','GooglePromptFilter.js','ChromeTone.js','ChatGPTWidget.js','LinkPreview.js','SchoologyDark.js']:
     shutil.copy2(sourcefile(name),resources/name)
 optimization=os.environ.get('WEBBY_TEST_OPTIMIZATION','-Onone')
-plistlib.dump({'WebbyTestOptimization':optimization,'CFBundleIdentifier':'local.webby.performance-tests','CFBundleExecutable':'Webby','CFBundleName':'Webby Performance Tests','CFBundlePackageType':'APPL','LSMinimumSystemVersion':'13.0'},(app/'Contents/Info.plist').open('wb'))
+plistlib.dump({'WebbyTestOptimization':optimization,'CFBundleIdentifier':'local.webby.performance-tests','CFBundleExecutable':'Webby','CFBundleName':'Webby Performance Tests','CFBundlePackageType':'APPL','LSMinimumSystemVersion':'14.0'},(app/'Contents/Info.plist').open('wb'))
 cache=work/'module-cache';cache.mkdir(exist_ok=True)
 obj=work/'PTYLauncher.o'
-subprocess.run(['clang','-O2','-target','arm64-apple-macos13.0','-c',str(root/'PTYLauncher.c'),'-o',str(obj)],check=True)
+subprocess.run(['clang','-O2','-target','arm64-apple-macos14.0','-c',str(root/'PTYLauncher.c'),'-o',str(obj)],check=True)
 files=re.findall(r'"\$script_dir/([^"\n]+\.swift)"',(root/'build.sh').read_text())
 files=[str(copy if f=='BrowserApp.swift' else (identity_copy if f=='IDEIdentity.swift' else workbench_copy if f=='CodeWorkbench.swift' else widget_copy if f=='WidgetCanvas.swift' else (menu_copy if f=='BrowserMenuBar.swift' else codex_copy if f=='CodexAppWidgets.swift' else wallpaper_copy if f=='BrowserWallpaper.swift' else download_copy if f=='BrowserDownloads.swift' else sourcefile(f)))) for f in files if f!='CompileRules.swift']
-args=['swiftc',optimization,'-parse-as-library','-target','arm64-apple-macos13.0','-module-cache-path',str(cache)]
+args=['swiftc',optimization,'-parse-as-library','-target','arm64-apple-macos14.0','-module-cache-path',str(cache)]
+bridge=work/'ChromiumBridge.o'
+subprocess.run(['clang++','-std=c++20','-fobjc-arc','-O2','-target','arm64-apple-macos14.0','-I',str(root/'Vendor/CEF'),'-c',str(root/'ChromiumBridge.mm'),'-o',str(bridge)],check=True)
+args+=['-import-objc-header',str(root/'ChromiumBridge.h')]
 for framework in ['AppKit','WebKit','AVFoundation','Security','CryptoKit','IOKit','JavaScriptCore','CoreImage','ImageIO','Carbon','WidgetKit']:args+=['-framework',framework]
 background_target=root.parent/'work/code-background-target'
-subprocess.run([str(Path.home()/'.cargo/bin/cargo'),'build','--release','--offline','--manifest-path',str(root/'Vendor/CodeBackground/Cargo.toml'),'--target-dir',str(background_target)],check=True)
-args+=files+[str(obj),str(background_target/'release/libwebby_code_background.a'),'-lc++','-lsqlite3','-o',str(mac/'Webby')]
+subprocess.run([str(Path.home()/'.cargo/bin/cargo'),'build','--release','--locked','--offline','--target','aarch64-apple-darwin','--manifest-path',str(root/'Vendor/CodeBackground/Cargo.toml'),'--target-dir',str(background_target)],check=True)
+args+=files+[str(obj),str(bridge),str(background_target/'aarch64-apple-darwin/release/libwebby_code_background.a'),'-lc++','-lsqlite3','-o',str(mac/'Webby')]
 def capture(command):
     result=subprocess.run(command,capture_output=True,text=True)
     return {'exit':result.returncode,'output':result.stdout.strip(),'error':result.stderr.strip()}

@@ -9,6 +9,42 @@ struct BrowserCredential {
     let password: String
 }
 
+enum BrowserPasswordFill {
+    static func origin(for url: URL) -> String? {
+        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased(), !host.isEmpty else { return nil }
+        var parts = URLComponents(); parts.scheme = "https"; parts.host = host
+        if let port = url.port, port != 443 { parts.port = port }
+        return parts.string
+    }
+
+    static func script(for credential: BrowserCredential, at url: URL) -> String? {
+        guard url.host?.lowercased() == credential.host.lowercased(), let origin = origin(for: url),
+              let data = try? JSONSerialization.data(withJSONObject: [origin, credential.username, credential.password]),
+              let values = String(data: data, encoding: .utf8) else { return nil }
+        return """
+        (() => {
+          const values = \(values);
+          if (location.protocol !== 'https:' || location.origin !== values[0]) return false;
+          const [,username,password] = values;
+          const pass = [...document.querySelectorAll('input[type=password]')].find(e => !e.disabled && !e.value);
+          const user = [...document.querySelectorAll('input')].find(e =>
+            !e.disabled && !e.value && (e.autocomplete === 'username' ||
+            (e.type === 'email' && e.name === 'identifier') ||
+            (pass && (e.type === 'email' || /user|email|login/i.test(e.name || e.id || '')))));
+          if (!pass && !user) return false;
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+          for (const [field,value] of [[user,username],[pass,password]]) {
+            if (!field || !value) continue;
+            setter.call(field,value);
+            field.dispatchEvent(new Event('input',{bubbles:true}));
+            field.dispatchEvent(new Event('change',{bubbles:true}));
+          }
+          return true;
+        })();
+        """
+    }
+}
+
 enum BrowserPasswords {
     private static let service = "local.plainwebkit.browser.passwords"
 
@@ -17,8 +53,7 @@ enum BrowserPasswords {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecReturnAttributes as String: true,
-            kSecReturnData as String: true
+            kSecReturnAttributes as String: true
         ]
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
@@ -26,13 +61,18 @@ enum BrowserPasswords {
         let prefix = space.uuidString + "|"
         return rows.compactMap { row in
             guard let account = row[kSecAttrAccount as String] as? String,
-                  account.hasPrefix(prefix),
-                  let data = row[kSecValueData as String] as? Data,
-                  let password = String(data: data, encoding: .utf8) else { return nil }
+                  account.hasPrefix(prefix) else { return nil }
             let parts = account.dropFirst(prefix.count).split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
             guard parts.count == 2 else { return nil }
             let domain = String(parts[0])
             guard host == nil || domain == host else { return nil }
+            // Retrieve secret data only for this profile and matching website.
+            let exact: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service, kSecAttrAccount as String: account,
+                kSecMatchLimit as String: kSecMatchLimitOne, kSecReturnData as String: true]
+            var secret: CFTypeRef?
+            guard SecItemCopyMatching(exact as CFDictionary, &secret) == errSecSuccess,
+                  let data = secret as? Data, let password = String(data: data, encoding: .utf8) else { return nil }
             return BrowserCredential(host: domain, username: String(parts[1]), password: password)
         }.sorted { ($0.host, $0.username) < ($1.host, $1.username) }
     }

@@ -37,6 +37,10 @@ struct SavedBrowserSpace: Codable {
     }
 
     var dataStore: WKWebsiteDataStore {
+        if BrowserEngineChecks.active {
+            if let cachedDataStore { return cachedDataStore }
+            let store = WKWebsiteDataStore.nonPersistent(); cachedDataStore = store; return store
+        }
         guard saved.chromeDirectory != nil else { return .default() }
         if let cachedDataStore { return cachedDataStore }
         let store: WKWebsiteDataStore

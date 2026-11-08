@@ -21,6 +21,18 @@ class Handler(BaseHTTPRequestHandler):
                     if path == '/download-slow': time.sleep(0.03)
             except (BrokenPipeError, ConnectionResetError): pass
             return
+        if path in ('/download-fixture','/download-once'):
+            if 'webby_download_auth=ok' not in self.headers.get('Cookie',''):
+                self.send_response(403);self.send_header('Content-Disposition','attachment; filename="webby-fixture.txt"');self.end_headers();return
+            if path == '/download-once' and self.counts[path] > 1:
+                self.send_response(403);self.end_headers();return
+            body=b'webby-integration-download\n'
+            self.send_response(200);self.send_header('Content-Type','application/octet-stream')
+            self.send_header('Content-Disposition','attachment; filename="webby-fixture.txt"')
+            self.send_header('Content-Length',str(len(body)));self.end_headers()
+            try:self.wfile.write(body)
+            except (BrokenPipeError,ConnectionResetError):pass
+            return
         if path == '/video.mp4':
             body=(Path(__file__).parent/'Fixtures/video.mp4').read_bytes()
             start,end=0,len(body)-1
@@ -53,6 +65,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/favicon.ico': self.send_response(404); self.end_headers(); return
         else:
             content = '<h1>Visible content before the slow image finishes</h1><p>This is an isolated Webby test page.</p>'
+            if path == '/download-page': content = '<a id="download" href="/download-fixture">download</a><a id="attribute" href="/download-fixture" download>attribute download</a><a id="blank" href="/download-fixture" target="_blank">new window download</a><a id="once" href="/download-once">one-use download</a>'
             if path == '/video': content = """<video id=video controls preload=auto width=640 height=360 src='/video.mp4'></video><br><button id=start onclick="window.videoClicks=(window.videoClicks||0)+1;const v=document.getElementById('video');v.volume=.37;v.muted=false;v.playbackRate=1.25;v.currentTime=4;v.play()">Start video</button><button id=full onclick="fetch('/full-click');document.getElementById('video').requestFullscreen().then(()=>fetch('/full-ok')).catch(e=>fetch('/full-error?'+encodeURIComponent(e.name+':'+e.message)))">Website fullscreen</button>"""
             if path == '/video-frame': content = "<iframe id=player src='/video' width=700 height=470 allow='picture-in-picture; fullscreen' allowfullscreen></iframe>"
             if path == '/chatgpt': content = """<textarea id=prompt-textarea></textarea><input type=file accept='image/*' multiple><div id=previews></div><button data-testid=send-button disabled>Send</button><script>const editor=document.querySelector('textarea'),send=document.querySelector('button');editor.addEventListener('input',()=>send.disabled=!editor.value);document.querySelector('input').addEventListener('change',e=>{window.uploaded=[...e.target.files].map(x=>x.name);document.getElementById('previews').innerHTML=window.uploaded.map(x=>'<button aria-label=Remove>'+x+'</button>').join('')});send.onclick=()=>window.sent={text:editor.value,files:window.uploaded||[]};</script>"""
@@ -68,6 +81,7 @@ class Handler(BaseHTTPRequestHandler):
             body = ('<!doctype html><html><head><title>Webby '+path+'</title><style>body{background:#fff;color:#111;font:18px -apple-system;padding:32px}</style></head><body>'+content+'</body></html>').encode(); mime = 'text/html'
         self.send_response(200);
         if path == '/geist': self.send_header('Content-Security-Policy', "font-src 'none'; style-src 'none'")
+        if path == '/download-page': self.send_header('Set-Cookie','webby_download_auth=ok; Path=/; HttpOnly; SameSite=Lax')
         self.send_header('Content-Type', mime); self.send_header('Content-Length', str(len(body))); self.end_headers()
         try: self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError): pass

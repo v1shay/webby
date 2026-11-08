@@ -53,6 +53,15 @@ enum CalendarSubscription {
               let data = value as? Data, let text = String(data: data, encoding: .utf8) else { return nil }
         return URL(string: text)
     }
+    static func isConfigured(profile: UUID) -> Bool {
+        var q = query(profile)
+        q[kSecReturnAttributes as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        q[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        // Status checks must not decrypt a secret or block startup on a
+        // Keychain dialog after the local app's code signature changes.
+        return SecItemCopyMatching(q as CFDictionary, nil) == errSecSuccess
+    }
     static func remove(profile: UUID) { SecItemDelete(query(profile) as CFDictionary); CalendarSnapshotCache.remove(profile) }
     static func save(_ text: String, profile: UUID) throws {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)

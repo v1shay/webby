@@ -39,3 +39,13 @@ Only Mini Webby's shortcut is currently user-configurable. Other menu actions wi
 Hover the address/search button briefly to reveal the address bar without focusing it. It retreats after you leave; clicking/typing keeps editing active.
 
 Disable automatic link previews under **Tabs & Search → Link Glances on Hover**.
+
+## Rendering engines
+
+- **⇧⌘E** switches the current tab between WebKit and Chromium. A loaded page asks before reloading; an empty tab switches immediately.
+- **⌥⇧⌘E** opens a new tab using the other engine.
+- Click the search icon in either address field to switch engines.
+- Choose **Default Rendering Engine** in Webby Settings to set the engine for new tabs. Existing tabs keep their engine.
+- Blue/cyan gradients indicate WebKit; blue/green/yellow/red gradients indicate Chromium. Tab underlines retain the engine color in the background.
+
+Each engine has separate website storage and sign-ins. Switching reloads the URL; unsaved page state does not transfer.

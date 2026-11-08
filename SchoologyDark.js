@@ -4,6 +4,9 @@
   // TinyMCE/srcdoc editors inherit Schoology's origin but have no hostname.
   if (!host && location.protocol === 'about:') {try {host = parent.location.hostname.toLowerCase();} catch (_) {}}
   if (host !== 'schoology.com' && !host.endsWith('.schoology.com')) return;
+  const installed = Symbol.for('webby.schoology.theme');
+  if (document[installed]) return;
+  document[installed] = true;
   // Supplied lexically by GlassPageInjector, rather than a page-writable global.
   const glass = typeof webbySchoologyGlass !== 'undefined' && webbySchoologyGlass;
   const palette = glass ? {
