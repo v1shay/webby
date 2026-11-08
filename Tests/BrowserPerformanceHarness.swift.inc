@@ -30,7 +30,10 @@ extension BrowserApp {
         let b = BrowserSpace(.init(id: UUID(), name: "Fixture B", chromeDirectory: nil, bookmarks: [], history: []))
         spaces = [a,b]
         for space in spaces { UserDefaults.standard.set(Data("[]".utf8), forKey: "webbyWidgetCanvas.\(space.saved.id.uuidString)") }
-        downloads = BrowserDownloads()
+        if ProcessInfo.processInfo.environment["WEBBY_TEST_DOWNLOADS"] == "only" {
+            let folder=output.deletingLastPathComponent().appendingPathComponent("downloads",isDirectory:true)
+            downloads = BrowserDownloads(destinationFolder:folder,defaults:UserDefaults(suiteName:"webby-download-browser-test-"+UUID().uuidString)!)
+        } else { downloads = BrowserDownloads() }
         if ProcessInfo.processInfo.environment["WEBBY_REAL_CORPUS"] != nil {
             BrowserGlass.pageInjectionEnabled = ProcessInfo.processInfo.environment["WEBBY_REAL_VARIANT"] != "webby-no-glass"
             appliedPageInjection = BrowserGlass.pageInjectionEnabled
@@ -78,6 +81,16 @@ extension BrowserApp {
         if ProcessInfo.processInfo.environment["WEBBY_TEST_CHROME_TONE"] == "only" {
             try await verifyChromeTone(base:base)
             try Data("{\"passed\":true,\"websiteEdge\":true}".utf8).write(to:output)
+            exit(0)
+        }
+        if ProcessInfo.processInfo.environment["WEBBY_TEST_DOWNLOADS"] == "only" {
+            try await verifyDownloads(base:base,folder:output.deletingLastPathComponent().appendingPathComponent("downloads"))
+            try Data("{\"passed\":true}".utf8).write(to:output)
+            exit(0)
+        }
+        if ProcessInfo.processInfo.environment["WEBBY_TEST_LINKS"] == "only" {
+            try await verifyLinkOpening(base:base)
+            try Data("{\"passed\":true}".utf8).write(to:output)
             exit(0)
         }
         if ProcessInfo.processInfo.environment["WEBBY_TEST_GROUPS"] == "only" {
@@ -640,6 +653,36 @@ extension BrowserApp {
         print("PASS: finger tracking, cancellation, interrupted spring, snapshot cleanup, unchanged view geometry")
     }
 
+    private func verifyDownloads(base:String,folder:URL) async throws {
+        let source=try await loadFixture("/download-page",base:base)
+        guard let view=source.webView else { throw PerformanceTestFailure(message:"Missing download web view") }
+        for (index,link) in ["download","attribute","blank"].enumerated() {
+            _ = try await view.evaluateJavaScript("document.getElementById('\(link)').click(); true")
+            let name=index == 0 ? "webby-fixture.txt" : "webby-fixture \(index+1).txt"
+            let destination=folder.appendingPathComponent(name)
+            try await waitFor("Download did not finish: \(link)",timeout:20) {
+                FileManager.default.fileExists(atPath:destination.path) && !self.downloads.hasActiveDownloads
+            }
+            let text=try String(contentsOf:destination,encoding:.utf8)
+            try expect(text=="webby-integration-download\n","Download contents incorrect: \(link)")
+        }
+        _ = try await view.evaluateJavaScript("document.getElementById('once').click(); true")
+        try await waitFor("One-use download failure was not reported",timeout:20) { self.downloads.widgetLines.contains { $0.contains("Failed:") } }
+        try expect(!downloads.hasActiveDownloads,"Failed one-use download remained active")
+        let foreignCookie=HTTPCookie(properties:[.domain:"localhost",.path:"/",.name:"webby_download_auth",.value:"ok"])!
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void,Never>) in
+            view.configuration.websiteDataStore.httpCookieStore.setCookie(foreignCookie) { continuation.resume() }
+        }
+        let crossSite=base.replacingOccurrences(of:"127.0.0.1",with:"localhost")+"/download-fixture"
+        let crossJS="(()=>{const a=document.createElement('a');a.href=\(String(data:try JSONEncoder().encode(crossSite),encoding:.utf8)!);a.download='cross.txt';document.body.append(a);a.click()})()"
+        _ = try await view.evaluateJavaScript(crossJS)
+        try await waitFor("Cross-site download did not reject the request without cookies",timeout:20) {
+            self.downloads.widgetLines.filter { $0.contains("Failed:") }.count >= 2
+        }
+        try expect(!FileManager.default.fileExists(atPath:folder.appendingPathComponent("cross.txt").path),"Cross-site download unexpectedly received profile cookies")
+        print("PASS: authenticated browser downloads, download attribute, target blank, duplicate names, one-use error, cross-site cookie isolation")
+    }
+
     private func verifyLinkOpening(base:String) async throws {
         let source = try await loadFixture("/links",base:base)
         let view = source.webView!
@@ -701,6 +744,10 @@ extension BrowserApp {
         activeTabID=nil;selectTab(source)
         _ = try await view.evaluateJavaScript("document.getElementById('normal').click(); true")
         try await waitFor("Same-tab link failed") { view.url?.query == "normal=1" && !source.navigationInProgress }
+        goBack()
+        try await waitFor("Back navigation failed") { view.url?.path == "/links" && source.navigationTiming.finished != nil && view.canGoForward }
+        goForward()
+        try await waitFor("Forward navigation failed") { view.url?.query == "normal=1" && source.navigationTiming.finished != nil }
         _ = try await blank.webView!.evaluateJavaScript("window.close(); true")
         try await waitFor("Script-closed popup remains registered") { self.tab(id:blank.id) == nil }
         SitePermission.set(2,for:.popups,host:"127.0.0.1",profile:profile)

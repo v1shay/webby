@@ -285,7 +285,7 @@ enum WidgetAlignment {
             }
             UserDefaults.standard.set(true, forKey: fullCanvasKey)
         }
-        if CalendarSubscription.url(profile: profile) != nil, !placements.contains(where: { $0.kind == .calendar }),
+        if CalendarSubscription.isConfigured(profile: profile), !placements.contains(where: { $0.kind == .calendar }),
            !UserDefaults.standard.bool(forKey: "webbyCalendarFeedAdded.\(profile.uuidString)") {
             placements.append(.init(kind: .calendar, x: 12, y: 12, width: 350, height: 370))
             UserDefaults.standard.set(true, forKey: "webbyCalendarFeedAdded.\(profile.uuidString)")

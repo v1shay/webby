@@ -419,6 +419,36 @@ final class GlassButton: NSButton {
 }
 
 final class GlassAddressSurface: NSView, NSTextFieldDelegate {
+    private let engineGlow = CAGradientLayer()
+    private let engineRim = CAGradientLayer()
+    private let engineRimMask = CAShapeLayer()
+    private var renderingEngine: BrowserEngine?
+    var onSwitchEngine: (() -> Void)?
+
+    func setRenderingEngine(_ engine: BrowserEngine) {
+        guard renderingEngine != engine else { return }
+        renderingEngine = engine
+        if engineGlow.superlayer == nil {
+            engineGlow.startPoint = CGPoint(x: 0, y: 0.2)
+            engineGlow.endPoint = CGPoint(x: 1, y: 0.8)
+            engineGlow.cornerRadius = 16
+            glaze.addSublayer(engineGlow)
+            engineRim.startPoint = CGPoint(x: 0, y: 0)
+            engineRim.endPoint = CGPoint(x: 1, y: 1)
+            engineRim.mask = engineRimMask
+            engineRimMask.fillColor = nil
+            engineRimMask.strokeColor = NSColor.white.cgColor
+            engineRimMask.lineWidth = 1.5
+            layer?.addSublayer(engineRim)
+        }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        engineGlow.colors = engine.colors.map { $0.withAlphaComponent(0.17).cgColor }
+        engineRim.colors = engine.colors.map { $0.withAlphaComponent(0.85).cgColor }
+        CATransaction.commit()
+        searchIcon.contentTintColor = engine.colors[1]
+        toolTip = "\(engine.name) · Click the search icon or press ⇧⌘E to switch rendering engine"
+        needsLayout = true
+    }
     override var mouseDownCanMoveWindow: Bool { false }
     var onBeginEditing: ((NSTextField) -> Void)?
     var onChange: ((NSTextField) -> Void)?
@@ -540,6 +570,14 @@ final class GlassAddressSurface: NSView, NSTextFieldDelegate {
 
     override func layout() {
         super.layout()
+        engineGlow.frame = bounds
+        engineGlow.cornerRadius = expandedCornerRadius
+        engineRim.frame = bounds
+        engineRimMask.frame = bounds
+        let engineRadius = suggestionsAttached ? expandedCornerRadius : (layer?.cornerRadius ?? 16)
+        engineGlow.cornerRadius = engineRadius
+        engineRim.opacity = suggestionsAttached ? 0 : 1
+        engineRimMask.path = CGPath(roundedRect: bounds.insetBy(dx: 0.8, dy: 0.8), cornerWidth: engineRadius, cornerHeight: engineRadius, transform: nil)
         if !suggestionsAttached { addressCornerRadius = layer?.cornerRadius ?? 16 }
         glassBackdrop.frame = bounds
         glassBackdrop.layer?.cornerRadius = suggestionsAttached ? 0 : (layer?.cornerRadius ?? 16)
@@ -580,6 +618,10 @@ final class GlassAddressSurface: NSView, NSTextFieldDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if searchIcon.frame.insetBy(dx: -8, dy: -8).contains(point), let onSwitchEngine {
+            onSwitchEngine(); return
+        }
         window?.makeFirstResponder(field)
     }
 

@@ -50,10 +50,13 @@ subprocess.run(['clang','-O2','-target','arm64-apple-macos13.0','-c',str(root/'P
 files=re.findall(r'"\$script_dir/([^"\n]+\.swift)"',(root/'build.sh').read_text())
 files=[str(copy if f=='BrowserApp.swift' else (identity_copy if f=='IDEIdentity.swift' else workbench_copy if f=='CodeWorkbench.swift' else widget_copy if f=='WidgetCanvas.swift' else (menu_copy if f=='BrowserMenuBar.swift' else codex_copy if f=='CodexAppWidgets.swift' else wallpaper_copy if f=='BrowserWallpaper.swift' else sourcefile(f)))) for f in files if f!='CompileRules.swift']
 args=['swiftc',optimization,'-parse-as-library','-target','arm64-apple-macos13.0','-module-cache-path',str(cache)]
+bridge=work/'ChromiumBridge.o'
+subprocess.run(['clang++','-std=c++20','-fobjc-arc','-O2','-target','arm64-apple-macos13.0','-I',str(root/'Vendor/CEF'),'-c',str(root/'ChromiumBridge.mm'),'-o',str(bridge)],check=True)
+args+=['-import-objc-header',str(root/'ChromiumBridge.h')]
 for framework in ['AppKit','WebKit','AVFoundation','Security','CryptoKit','IOKit','JavaScriptCore','CoreImage','ImageIO','Carbon','WidgetKit']:args+=['-framework',framework]
 background_target=root.parent/'work/code-background-target'
 subprocess.run([str(Path.home()/'.cargo/bin/cargo'),'build','--release','--offline','--manifest-path',str(root/'Vendor/CodeBackground/Cargo.toml'),'--target-dir',str(background_target)],check=True)
-args+=files+[str(obj),str(background_target/'release/libwebby_code_background.a'),'-lc++','-lsqlite3','-o',str(mac/'Webby')]
+args+=files+[str(obj),str(bridge),str(background_target/'release/libwebby_code_background.a'),'-lc++','-lsqlite3','-o',str(mac/'Webby')]
 def capture(command):
     result=subprocess.run(command,capture_output=True,text=True)
     return {'exit':result.returncode,'output':result.stdout.strip(),'error':result.stderr.strip()}

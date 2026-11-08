@@ -219,7 +219,7 @@ enum BrowserSearchEngine: String, CaseIterable {
         // Reuse the real settings/actions so both entry points stay in sync.
         let source = NSMenu(); buildSettingsItems(source)
         let menu = NSMenu(title: "Tab Settings")
-        let titles: Set<String> = ["Tab Layout", "Address Bar", "Restore Tabs After Restart", "Offload Idle Tabs",
+        let titles: Set<String> = ["Tab Layout", "Address Bar", "Default Rendering Engine", "Restore Tabs After Restart", "Offload Idle Tabs",
             "Glass Effect on Web Pages", "Match Tab Pane to Page Glass", "Match Tab Bar to Website Edge"]
         for item in source.items where titles.contains(item.title) || item.view?.subviews.contains(where: { $0 is NSSlider }) == true {
             source.removeItem(item); menu.addItem(item)
@@ -337,6 +337,18 @@ enum BrowserSearchEngine: String, CaseIterable {
             item.state = BrowserAddressPlacement.current == placement ? .on : .off
         }
         addressRoot.submenu = addressMenu; menu.addItem(addressRoot)
+        let renderingRoot = NSMenuItem(title: "Default Rendering Engine", action: nil, keyEquivalent: "")
+        let renderingMenu = NSMenu(title: "Default Rendering Engine")
+        for engine in BrowserEngine.allCases {
+            let item = renderingMenu.addItem(withTitle: engine.name, action: #selector(selectRenderingEngine(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = engine.rawValue
+            item.state = BrowserEngine.defaultEngine == engine ? .on : .off
+            item.isEnabled = engine != .chromium || WBChromiumAvailable()
+        }
+        renderingMenu.addItem(.separator())
+        let hint = renderingMenu.addItem(withTitle: "New tabs only · Switch current tab: ⇧⌘E", action: nil, keyEquivalent: "")
+        hint.isEnabled = false
+        renderingRoot.submenu = renderingMenu; menu.addItem(renderingRoot)
         let searchRoot = NSMenuItem(title: "Search Engine for \(currentSpaceName())", action: nil, keyEquivalent: "")
         let searchMenu = NSMenu(title: "Search Engine")
         for engine in BrowserSearchEngine.allCases {
@@ -537,6 +549,11 @@ enum BrowserSearchEngine: String, CaseIterable {
         BrowserExperiment.cyclesNewTabProfiles.toggle()
         experimentChanged()
     }
+    @objc private func selectRenderingEngine(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let engine = BrowserEngine(rawValue: raw) else { return }
+        BrowserEngine.defaultEngine = engine
+    }
+
     @objc private func selectTabPlacement(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let placement = BrowserTabPlacement(rawValue: raw) else { return }

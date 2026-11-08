@@ -7,3 +7,7 @@ WebbyIconPreview.png
 # Python-generated caches
 __pycache__/
 *.py[cod]
+
+# Official CEF binary distribution; pin and fetch with fetch-chromium.py.
+Vendor/CEF/*
+!Vendor/CEF/version.json

@@ -54,12 +54,19 @@ swiftc -O -module-cache-path "$module_cache" -framework WebKit \
 
 clang -O2 -target arm64-apple-macos13.0 -c "$script_dir/PTYLauncher.c" -o "$module_cache/PTYLauncher.o"
 
+# The bridge dynamically loads CEF on first use; WebKit-only sessions do not
+# start Chromium helpers. Keep the sandbox enabled in every helper process.
+clang++ -std=c++20 -fobjc-arc -O2 -target arm64-apple-macos13.0 -I "$script_dir/Vendor/CEF" \
+  -c "$script_dir/ChromiumBridge.mm" -o "$module_cache/ChromiumBridge.o"
+sh "$script_dir/build-chromium.sh" "$app"
+
 background_target="$script_dir/../work/code-background-target"
 "${HOME}/.cargo/bin/cargo" build --release --offline --manifest-path "$script_dir/Vendor/CodeBackground/Cargo.toml" --target-dir "$background_target"
 mkdir -p "$app/Contents/Resources/CodeBackground"
 cp "$script_dir/Vendor/CodeBackground/Monocode-MIT.txt" "$script_dir/Vendor/CodeBackground/NOTICE.md" "$script_dir/Vendor/CodeBackground/ThirdPartyLicenses.txt" "$app/Contents/Resources/CodeBackground/"
 
-swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$module_cache" -framework AppKit -framework WebKit -framework AVFoundation -framework Security -framework CryptoKit -framework IOKit -framework JavaScriptCore -framework Carbon -framework WidgetKit \
+swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$module_cache" -import-objc-header "$script_dir/ChromiumBridge.h" -framework AppKit -framework WebKit -framework AVFoundation -framework Security -framework CryptoKit -framework IOKit -framework JavaScriptCore -framework Carbon -framework WidgetKit \
+  "$script_dir/BrowserEngine.swift" \
   "$script_dir/PlainWebKitBrowser.swift" \
   "$script_dir/BrowserGlass.swift" \
   "$script_dir/GlassPageInjector.swift" \
@@ -96,6 +103,7 @@ swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$m
   "$script_dir/IndicatorScenes.swift" \
   "$script_dir/NotchIndicatorEngine.swift" \
   "$module_cache/PTYLauncher.o" \
+  "$module_cache/ChromiumBridge.o" \
   "$background_target/release/libwebby_code_background.a" \
   -lsqlite3 -lc++ -framework CoreImage -framework ImageIO \
   -o "$app/Contents/MacOS/Webby"
@@ -115,6 +123,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>NSAppleEventsUsageDescription</key><string>Webby reads and controls Spotify for its music widget.</string>
   <key>NSCameraUsageDescription</key><string>Allow a website you choose to use the camera.</string>
   <key>NSMicrophoneUsageDescription</key><string>Allow a website you choose to use the microphone.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key><string>Websites you choose may use Bluetooth to connect to a nearby phone or security key for sign-in.</string>
   <key>NSLocationWhenInUseUsageDescription</key><string>Allow a website you choose to use your location.</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>Web pages</string><key>CFBundleTypeRole</key><string>Viewer</string><key>CFBundleURLSchemes</key><array><string>http</string><string>https</string></array></dict></array>
