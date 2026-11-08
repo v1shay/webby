@@ -23,6 +23,8 @@ void WBChromiumShutdown(void);
 @property(nonatomic, readonly) BOOL canGoBack;
 @property(nonatomic, readonly) BOOL canGoForward;
 @property(nonatomic, readonly) BOOL protectsFromDiscard;
+@property(nonatomic, readonly) BOOL hasActiveDownloads;
+@property(nonatomic, copy, nullable) BOOL (^allowsDownload)(void);
 - (BOOL)openURL:(NSString *)url profile:(NSString *)profile;
 - (void)navigate:(NSString *)url;
 - (void)goBack;

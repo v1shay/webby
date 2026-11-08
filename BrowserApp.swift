@@ -2151,7 +2151,8 @@ private final class WebsiteFrameRim: NSView {
             return .terminateNow
         }
         if spaces.flatMap(\.tabs).contains(where: { $0.ide?.mayClose() == false }) { return .terminateCancel }
-        if downloads?.hasActiveDownloads == true {
+        if downloads?.hasActiveDownloads == true ||
+            spaces.flatMap(\.tabs).contains(where: { $0.chromiumView?.hasActiveDownloads == true }) {
             let alert = NSAlert()
             alert.messageText = "Downloads are still running"
             alert.informativeText = "Quitting stops these downloads. Let’s finish them first, or quit now."
@@ -7470,21 +7471,21 @@ private final class WebsiteFrameRim: NSView {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.shouldPerformDownload,
-           let tab = tab(for: webView), let host = webView.url?.host,
+           let tab = tab(for: webView), let host = webView.url?.host ?? tab.lastMainFrameSourceURL?.host,
            SitePermission.choice(.downloads, host: host, profile: ownerSpace(for: tab).saved.id) == 2 {
             decisionHandler(.cancel)
             return
         }
         if navigationAction.targetFrame?.isMainFrame != false, let tab = tab(for:webView) {
             tab.lastMainFrameRequest = navigationAction.request
-            tab.lastMainFrameSourceURL = webView.url
+            tab.lastMainFrameSourceURL = webView.url ?? tab.lastMainFrameSourceURL
         }
         if navigationAction.shouldPerformDownload,
            let url = navigationAction.request.url, ["http","https"].contains(url.scheme?.lowercased() ?? ""),
            (navigationAction.request.httpMethod ?? "GET").uppercased() == "GET",
            navigationAction.request.httpBody == nil, navigationAction.request.httpBodyStream == nil {
             decisionHandler(.cancel)
-            downloads.startGET(navigationAction.request,from:webView.configuration.websiteDataStore.httpCookieStore,sourceURL:webView.url,suggestedFilename:nil)
+            downloads.startGET(navigationAction.request,from:webView.configuration.websiteDataStore.httpCookieStore,sourceURL:webView.url ?? tab(for: webView)?.lastMainFrameSourceURL,suggestedFilename:nil)
             return
         }
         if navigationAction.navigationType == .linkActivated,
@@ -7520,7 +7521,7 @@ private final class WebsiteFrameRim: NSView {
         let disposition = (navigationResponse.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased() ?? ""
         let isDownload = !navigationResponse.canShowMIMEType || disposition.contains("attachment")
-        if isDownload, let tab = tab(for: webView), let host = webView.url?.host,
+        if isDownload, let tab = tab(for: webView), let host = webView.url?.host ?? tab.lastMainFrameSourceURL?.host,
            SitePermission.choice(.downloads, host: host, profile: ownerSpace(for: tab).saved.id) == 2 {
             decisionHandler(.cancel)
         } else if isDownload, navigationResponse.isForMainFrame,
@@ -7559,10 +7560,14 @@ private final class WebsiteFrameRim: NSView {
         guard let source = self.tab(for: webView) else { return nil }
         if miniTabs[source.id] != nil {
             let mini=openMiniWebby(profile:ownerSpace(for:source).saved.id,popupConfiguration:configuration)
+            mini.lastMainFrameRequest = navigationAction.request
+            mini.lastMainFrameSourceURL = webView.url
             return mini.webView
         }
         let tab = BrowserTab()
         tab.ownerSpaceID = ownerSpace(for: source).saved.id
+        tab.lastMainFrameRequest = navigationAction.request
+        tab.lastMainFrameSourceURL = webView.url
         tab.showsSearchView = false
         tab.navigationInProgress = true
         displaySpace(for: source).tabs.append(tab)
@@ -8236,6 +8241,11 @@ extension BrowserApp {
         page.translatesAutoresizingMaskIntoConstraints = false
         page.isHidden = !show
         tab.chromiumView = page
+        page.allowsDownload = { [weak self, weak tab] in
+            guard let self, let tab else { return false }
+            guard let host = tab.pageURL?.host else { return true }
+            return SitePermission.choice(.downloads, host: host, profile: self.ownerSpace(for: tab).saved.id) != 2
+        }
         page.eventHandler = { [weak self, weak tab, weak page] event, value in
             guard let self, let tab, let page, tab.chromiumView === page else { return }
             switch event {

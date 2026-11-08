@@ -411,10 +411,16 @@ static cef_client_t *makeClient(WBChromiumView *view) {
     };
     client->api.get_download_handler = [](cef_client_t *s) {
         auto *h = new Handler<cef_download_handler_t>(owner(s));
-        h->api.can_download = [](cef_download_handler_t *, cef_browser_t *b, const cef_string_t *, const cef_string_t *) -> int { Incoming incoming(b); return 1; };
+        h->api.can_download = [](cef_download_handler_t *s, cef_browser_t *b, const cef_string_t *, const cef_string_t *) -> int {
+            Incoming incoming(b);
+            WBChromiumView *page = owner(s);
+            return page && (!page.allowsDownload || page.allowsDownload());
+        };
         h->api.on_before_download = [](cef_download_handler_t *s, cef_browser_t *b, cef_download_item_t *item, const cef_string_t *, cef_before_download_callback_t *callback) -> int {
             Incoming incomingBrowser(b); Incoming incomingItem(item); Incoming incomingCallback(callback);
-            [owner(s) download:item->get_id(item) active:YES];
+            WBChromiumView *page = owner(s);
+            if (!page || (page.allowsDownload && !page.allowsDownload())) return 1;
+            [page download:item->get_id(item) active:YES];
             Text path(@""); callback->cont(callback, &path.value, 1); return 1;
         };
         h->api.on_download_updated = [](cef_download_handler_t *s, cef_browser_t *b, cef_download_item_t *item, cef_download_item_callback_t *callback) {
@@ -457,7 +463,8 @@ static cef_client_t *makeClient(WBChromiumView *view) {
 - (BOOL)loading { return _loading; }
 - (BOOL)canGoBack { return _canGoBack; }
 - (BOOL)canGoForward { return _canGoForward; }
-- (BOOL)protectsFromDiscard { return _protectsFromDiscard || _captureGranted || _fullscreen || _downloads.count > 0; }
+- (BOOL)hasActiveDownloads { return _downloads.count > 0; }
+- (BOOL)protectsFromDiscard { return _protectsFromDiscard || _captureGranted || _fullscreen || self.hasActiveDownloads; }
 - (void)setCapturing { _captureGranted = YES; }
 - (void)setFullscreen:(BOOL)fullscreen { _fullscreen = fullscreen; }
 - (void)download:(int)identifier active:(BOOL)active {

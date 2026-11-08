@@ -90,7 +90,13 @@
     if (![page openURL:[self.base stringByAppendingString:@"/second"] profile:[self.root stringByAppendingPathComponent:profile]]) [self fail:@"Additional Chromium tab failed"];
 }
 - (void)finish {
-    if (!self.webkitLoaded) [self fail:@"WebKit did not finish alongside Chromium"];
+    if (!self.webkitLoaded) {
+        // Chromium can reach this point before WebKit's process finishes launching.
+        // The existing overall deadline still catches a stalled WebKit load.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
+                       dispatch_get_main_queue(), ^{ [self finish]; });
+        return;
+    }
     [self.chromium closePage]; [self.chromium removeFromSuperview];
     for (WBChromiumView *page in self.extra) { [page closePage]; [page removeFromSuperview]; }
     [self.extra removeAllObjects];
