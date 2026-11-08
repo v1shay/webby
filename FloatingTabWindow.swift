@@ -27,12 +27,12 @@ import AppKit
         minSize = NSSize(width: 320, height: 220)
         titlebarAppearsTransparent = true
 
-        let backdrop = NSVisualEffectView()
+        let backdrop = WebbyGlassBackdrop()
         backdrop.material = .hudWindow
         backdrop.blendingMode = .behindWindow
         backdrop.state = .active
         backdrop.translatesAutoresizingMaskIntoConstraints = false
-        let bar = NSVisualEffectView()
+        let bar = WebbyGlassBackdrop()
         bar.material = .hudWindow
         bar.blendingMode = .withinWindow
         bar.state = .active

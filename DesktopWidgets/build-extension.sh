@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+webby_arch="${WEBBY_ARCH:-$(uname -m)}"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 app="$1"
 work="$root/../work/desktop-widget-build"
@@ -9,7 +10,7 @@ python3 "$root/DesktopWidgets/generate-providers.py" "$work/providers"
 printf '["AppIntent","WidgetConfigurationIntent","AppEntity","EntityQuery","AppEnum"]\n' > "$work/protocols.json"
 swiftc -O -whole-module-optimization -emit-const-values-path "$work/WebbyWidgets.swiftconstvalues" \
   -Xfrontend -const-gather-protocols-file -Xfrontend "$work/protocols.json" -parse-as-library -application-extension -module-name WebbyWidgets \
-  -target arm64-apple-macos14.0 -module-cache-path "$work/module-cache" \
+  -target "${webby_arch}-apple-macos14.0" -module-cache-path "$work/module-cache" \
   -framework SwiftUI -framework WidgetKit -framework AppIntents -framework AppKit \
   -framework Security -framework JavaScriptCore -framework CryptoKit -framework IOKit \
   "$root/DesktopWidgets/Shared.swift" "$root/DesktopWidgets/Widgets.swift" \
@@ -29,10 +30,10 @@ plistlib.dump({'CFBundleIdentifier':'local.plainwebkit.browser.desktopwidgets','
 plistlib.dump({'com.apple.security.app-sandbox':True,'com.apple.security.network.client':True,'com.apple.security.temporary-exception.files.home-relative-path.read-write':['/Library/Application Support/Webby Desktop Widgets/']},open(sys.argv[2],'wb'))
 PY
 xcrun appintentsmetadataprocessor --output "$ext/Contents/Resources" --module-name WebbyWidgets \
-  --target-triple arm64-apple-macos14.0 --binary-file "$ext/Contents/MacOS/WebbyWidgets" \
+  --target-triple "${webby_arch}-apple-macos14.0" --binary-file "$ext/Contents/MacOS/WebbyWidgets" \
   --swift-const-vals "$work/WebbyWidgets.swiftconstvalues" --compile-time-extraction \
   --source-files "$root/DesktopWidgets/Widgets.swift" --sdk-root "$(xcrun --show-sdk-path)" \
   --toolchain-dir "$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain" \
   --xcode-version "$(xcodebuild -version | awk '/Build version/{print $3}')" --platform-family macOS --deployment-target 14.0 --force
 test -s "$ext/Contents/Resources/Metadata.appintents/extract.actionsdata"
-codesign --force --sign "${WEBBY_SIGN_IDENTITY:-system local code signing}" --entitlements "$work/entitlements.plist" "$ext"
+codesign --force --sign "${WEBBY_SIGN_IDENTITY:--}" --entitlements "$work/entitlements.plist" "$ext"

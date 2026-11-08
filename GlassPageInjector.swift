@@ -5,6 +5,7 @@ import WebKit
     private static let marker = "/* Webby glass-page v1 */"
 
     private static let promptSource = Bundle.main.url(forResource: "GooglePromptFilter", withExtension: "js").flatMap { try? String(contentsOf: $0) }
+    private static let schoologySource = Bundle.main.url(forResource: "SchoologyDark", withExtension: "js").flatMap { try? String(contentsOf: $0) }
     private static let glassSource = Bundle.main.url(forResource: "glass-page", withExtension: "js").flatMap { try? String(contentsOf: $0) }
 
     static var geistEnabled:Bool {
@@ -39,6 +40,10 @@ import WebKit
     static func install(into configuration: WKWebViewConfiguration) {
         let controller = configuration.userContentController
         installGeist(into:controller)
+        let schoologyMarker = "/* Webby Schoology dark */"
+        if !controller.userScripts.contains(where: { $0.source.hasPrefix(schoologyMarker) }), let source = schoologySource {
+            controller.addUserScript(WKUserScript(source:schoologyMarker + "\n(() => { const webbySchoologyGlass = \(BrowserGlass.pageInjectionEnabled);\n" + source + "\n})();",injectionTime:.atDocumentStart,forMainFrameOnly:false))
+        }
         let promptMarker = "/* Webby Google prompt filter */"
         if !controller.userScripts.contains(where: { $0.source.hasPrefix(promptMarker) }),
            let source = promptSource {
@@ -53,14 +58,26 @@ import WebKit
                                               forMainFrameOnly: false))
     }
 
+    // Private WebKit backing control is optional. Unknown OS versions keep their
+    // native backing instead of raising an uncatchable KVC exception.
+    static func setDrawsBackground(_ value: Bool, on view: WKWebView) {
+        for name in ["setDrawsBackground:", "_setDrawsBackground:"] {
+            let selector = NSSelectorFromString(name)
+            guard view.responds(to: selector), let implementation = view.method(for: selector) else { continue }
+            typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+            unsafeBitCast(implementation, to: Setter.self)(view, selector, value)
+            return
+        }
+    }
+
     static func makeWebViewTransparent(_ view: WKWebView) {
         guard BrowserGlass.pageInjectionEnabled else { return }
         // underPageBackgroundColor only controls the color behind/around the
         // page. On macOS 13 WebKit can still draw an opaque view backing. There
-        // is no public macOS drawsBackground setter, so keep this KVC workaround
+        // is no public macOS drawsBackground setter, so keep this guarded workaround
         // isolated here and use it only for the existing browser web views.
         view.underPageBackgroundColor = .clear
-        view.setValue(false, forKey: "drawsBackground")
+        setDrawsBackground(false, on: view)
     }
 }
 

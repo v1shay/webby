@@ -88,8 +88,37 @@ enum Motion {
     }
 }
 
+// Resolve the public macOS 26 class at runtime so older SDK builds and
+// macOS 14 installations never link against an unavailable AppKit symbol.
+@MainActor class WebbyGlassBackdrop: NSVisualEffectView {
+    private var liquid:NSView?
+    private var checked=false
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard !checked,window != nil else{return}
+        checked=true
+        guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion>=26,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
+              let type=NSClassFromString("NSGlassEffectView") as? NSView.Type else{return}
+        let view=type.init(frame:bounds)
+        view.autoresizingMask=[.width,.height]
+        addSubview(view,positioned:.below,relativeTo:subviews.first)
+        liquid=view
+    }
+    override func layout() {
+        super.layout()
+        guard let liquid else{return}
+        liquid.frame=bounds
+        let selector=NSSelectorFromString("setCornerRadius:")
+        if liquid.responds(to:selector),let implementation=liquid.method(for:selector) {
+            typealias Setter = @convention(c) (AnyObject,Selector,CGFloat)->Void
+            unsafeBitCast(implementation,to:Setter.self)(liquid,selector,layer?.cornerRadius ?? 0)
+        }
+    }
+}
+
 final class GlassPanel: NSView {
-    let materialView = NSVisualEffectView()
+    let materialView = WebbyGlassBackdrop()
     private let tint = CAGradientLayer()
     private let topLight = CAGradientLayer()
     private let progressLine = CAGradientLayer()
@@ -426,7 +455,7 @@ final class GlassAddressSurface: NSView, NSTextFieldDelegate {
     var onCommand: ((NSTextField, Selector) -> Bool)?
     var onExpandedEntranceBeam: (() -> Void)?
     private let field: NSTextField
-    private let glassBackdrop = NSVisualEffectView()
+    private let glassBackdrop = WebbyGlassBackdrop()
     private let glazeView = NSView()
     private let glaze = CAGradientLayer()
     private let searchIcon = NSImageView()

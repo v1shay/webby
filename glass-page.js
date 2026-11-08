@@ -2,7 +2,11 @@
   'use strict';
   // Prepared surface rules run before page content exists. CSS automatically
   // handles SPA navigation and new nodes: no geometry reads or DOM crawler.
-  const host = location.hostname.toLowerCase().replace(/^www\./, '');
+  let host = location.hostname.toLowerCase().replace(/^www\./, '');
+  if (!host && location.protocol === 'about:') {try {host = parent.location.hostname.toLowerCase().replace(/^www\./, '');} catch (_) {}}
+  // Schoology owns a coordinated black/glass palette in SchoologyDark.js.
+  // A second surface crawler would fight its cards, menus and text rules.
+  if (host === 'schoology.com' || host.endsWith('.schoology.com')) return;
   const surface = 'rgba(42,47,51,0.09)';
   const raised = 'rgba(42,47,51,0.15)';
   const text = 'rgba(238,241,244,0.94)';
@@ -23,10 +27,7 @@
     'reddit.com': { shell: 'shreddit-app,shreddit-feed,header,nav,main,#AppRouter-main-content', tokens: ['--color-neutral-background','--color-neutral-background-weak','--color-neutral-background-medium','--color-neutral-background-strong'], ink: ['--color-neutral-content','--color-neutral-content-strong','--color-neutral-content-weak'] },
     'devpost.com': { shell: '#container,#content,main,header,nav,.site-header,.page-header' }
   };
-  const recipe = recipes[host] || (host.endsWith('.schoology.com') ? {
-    shell: '#body,#main,#main-content-wrapper,#content-wrapper,#center-top,#center-main,#left-nav,header,nav',
-    labels: '#header,#left-nav,#center-top'
-  } : null);
+  const recipe = recipes[host] || null;
   if (recipe) {
     let declarations = (recipe.tokens || []).map(name => `${name}:${surface} !important;`).join('') +
       (recipe.ink || []).map(name => `${name}:${text} !important;`).join('');

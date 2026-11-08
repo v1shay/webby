@@ -564,7 +564,7 @@ private final class TerminalScreenView: NSView {
 
 }
 
-final class NativeTerminalPane: NSVisualEffectView {
+final class NativeTerminalPane: WebbyGlassBackdrop {
     private let session = PTYSession()
     private let screen = TerminalScreenView(frame: .zero)
     private let gradientTint = CAGradientLayer()

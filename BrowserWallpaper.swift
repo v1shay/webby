@@ -125,6 +125,15 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
     weak var homepage: NSView?
     var presentationChanged:(()->Void)?
     var chromeColorChanged:(()->Void)?
+    var isSuppressed = false
+    var isResizing = false {
+        didSet {
+            guard oldValue != isResizing else { return }
+            if isResizing { player?.pause(); updateTicker(0) }
+            else { refreshActivity() }
+        }
+    }
+    private var resizeWakePending = false
     private var lastChromeColorUpdate:CFTimeInterval=0
     var fillsWindow:Bool {UserDefaults.standard.bool(forKey:"webbyWallpaperFullWindow.\(profile.uuidString)")}
     var tabBlurScope:Int {UserDefaults.standard.object(forKey:"webbyWallpaperTabBlurScope.\(profile.uuidString)")==nil ? 1:UserDefaults.standard.integer(forKey:"webbyWallpaperTabBlurScope.\(profile.uuidString)")}
@@ -216,7 +225,13 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
         if lastSize != bounds.size {
             lastSize = bounds.size; dirty = true; generation += 1
             // A static wallpaper has no poller. Resizing explicitly wakes it.
-            DispatchQueue.main.async { [weak self] in self?.refreshActivity() }
+            guard !isResizing, !isSuppressed, !resizeWakePending else { return }
+            resizeWakePending = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.resizeWakePending = false
+                self.refreshActivity()
+            }
         }
     }
     private func resetSource() {
@@ -237,7 +252,7 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
     private func tick() {
         let home = homepage?.isHidden == false
         let visibility = home ? settings.opacity : settings.pageOpacity
-        let visible = settings.path != nil && visibility > 0.001 && (!settings.homeOnly || home || fillsWindow) && window?.occlusionState.contains(.visible) == true
+        let visible = !isSuppressed && settings.path != nil && visibility > 0.001 && (!settings.homeOnly || home || fillsWindow) && window?.occlusionState.contains(.visible) == true
         let animated = settings.kind != "image" || cachedDelay > 0
         isHidden = !visible
         alphaValue = visibility
@@ -250,6 +265,7 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
         if home != lastWasHome { lastWasHome = home; dirty = true; generation += 1 }
         // Keep a short-lived wakeup while a first frame is loading/decoding,
         // including paused HTML/video. Completed static artwork stays timer-free.
+        guard !isResizing else { return }
         let preparing = dirty || busy
         updateTicker(visible && (preparing || (animated && settings.motion && Motion.enabled)) ? 0.05 : 0)
         guard visible, let path = settings.path, bounds.width > 1, bounds.height > 1 else { return }
@@ -310,7 +326,7 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
         configuration.websiteDataStore = .nonPersistent()
         configuration.mediaTypesRequiringUserActionForPlayback = [.audio, .video]
         let view = WKWebView(frame: bounds, configuration: configuration)
-        view.setValue(false, forKey: "drawsBackground")
+        GlassPageInjector.setDrawsBackground(false, on: view)
         // The host never accepts mouse/key events, keeping widgets above interactive.
         addSubview(view, positioned: .below, relativeTo: surface)
         html = view // Keep the previous frame until the processed HTML frame is ready.
@@ -432,7 +448,7 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
         if let settingsWindow {settingsWindow.makeKeyAndOrderFront(nil);return}
         let window=NSWindow(contentRect:NSRect(x:0,y:0,width:510,height:740),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         window.title="Background · Let’s make it yours";window.isReleasedWhenClosed=false
-        let glass=NSVisualEffectView();glass.material = .hudWindow;glass.blendingMode = .behindWindow;glass.state = .active
+        let glass=WebbyGlassBackdrop();glass.material = .hudWindow;glass.blendingMode = .behindWindow;glass.state = .active
         window.contentView=glass
         let scroll=NSScrollView();scroll.hasVerticalScroller=true;scroll.drawsBackground=false;scroll.translatesAutoresizingMaskIntoConstraints=false
         let document=WallpaperDocument();document.translatesAutoresizingMaskIntoConstraints=false;scroll.documentView=document;glass.addSubview(scroll)

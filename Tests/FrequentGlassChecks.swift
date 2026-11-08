@@ -4,14 +4,16 @@ import WebKit
     @MainActor static func main() throws {
         NSApplication.shared.setActivationPolicy(.accessory)
         let source=try String(contentsOfFile:CommandLine.arguments[1])
-        let check=Runner(source);check.start();NSApplication.shared.run();withExtendedLifetime(check){}
+        let schoology=try String(contentsOf:URL(fileURLWithPath:CommandLine.arguments[1]).deletingLastPathComponent().appendingPathComponent("SchoologyDark.js"))
+        let check=Runner(source,schoology:schoology);check.start();NSApplication.shared.run();withExtendedLifetime(check){}
     }
 }
 @MainActor final class Runner:NSObject,WKNavigationDelegate {
     let source:String
+    let schoology:String
     let hosts=["chatgpt.com","github.com","www.youtube.com","mail.google.com","calendar.google.com","drive.google.com","docs.google.com","www.google.com","www.linkedin.com","www.instagram.com","www.tiktok.com","x.com","www.reddit.com","devpost.com","fuhsd.schoology.com"]
     var index=0;var window:NSWindow!;var web:WKWebView!
-    init(_ source:String){self.source=source}
+    init(_ source:String,schoology:String){self.source=source;self.schoology=schoology}
     func start(){
         let config=WKWebViewConfiguration();config.websiteDataStore = .nonPersistent()
         let instrumentation="""
@@ -20,7 +22,7 @@ import WebKit
         const rect=Element.prototype.getBoundingClientRect;
         Element.prototype.getBoundingClientRect=function(){reads.rects++;return rect.call(this)};
         """
-        config.userContentController.addUserScript(WKUserScript(source:instrumentation+source,injectionTime:.atDocumentStart,forMainFrameOnly:false))
+        config.userContentController.addUserScript(WKUserScript(source:instrumentation+"\n(() => { const webbySchoologyGlass = true;\n"+schoology+"\n})();\n"+source,injectionTime:.atDocumentStart,forMainFrameOnly:false))
         web=WKWebView(frame:NSRect(x:0,y:0,width:1000,height:700),configuration:config);web.navigationDelegate=self
         window=NSWindow(contentRect:web.frame,styleMask:[.titled],backing:.buffered,defer:false);window.contentView=web;window.makeKeyAndOrderFront(nil)
         load()

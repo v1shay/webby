@@ -88,7 +88,7 @@ struct MiniWebbyArchive: Codable {
         if let preferences {preferences.makeKeyAndOrderFront(nil);return}
         let panel=NSPanel(contentRect:NSRect(x:0,y:0,width:430,height:210),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         panel.title="Mini Webby Shortcut";panel.isReleasedWhenClosed=false
-        let glass=NSVisualEffectView(frame:NSRect(x:0,y:0,width:430,height:210));glass.material = .hudWindow;glass.blendingMode = .behindWindow;glass.state = .active;panel.contentView=glass
+        let glass=WebbyGlassBackdrop(frame:NSRect(x:0,y:0,width:430,height:210));glass.material = .hudWindow;glass.blendingMode = .behindWindow;glass.state = .active;panel.contentView=glass
         let heading=NSTextField(labelWithString:"A quick window, from anywhere.");heading.font = WebbyTypography.font(ofSize:18,weight:.semibold);heading.frame=NSRect(x:24,y:155,width:385,height:26);glass.addSubview(heading)
         let hint=NSTextField(wrappingLabelWithString:"Click the shortcut, then press Command, Option, or Control plus one key. Escape cancels.");hint.frame=NSRect(x:24,y:110,width:382,height:38);glass.addSubview(hint)
         let recorder=MiniShortcutRecorder(title:MiniWebbyHotKey.label,target:nil,action:nil);recorder.bezelStyle = .rounded;recorder.frame=NSRect(x:24,y:59,width:200,height:38);glass.addSubview(recorder)
@@ -170,7 +170,7 @@ struct MiniWebbyArchive: Codable {
         for view in [wallpaper,home,contentHost]{view.translatesAutoresizingMaskIntoConstraints=false;root.addSubview(view)}
         wallpaper.homepage=home;wallpaper.show(profile:owner)
         for view in [wallpaper,home]{NSLayoutConstraint.activate([view.leadingAnchor.constraint(equalTo:root.leadingAnchor),view.trailingAnchor.constraint(equalTo:root.trailingAnchor),view.topAnchor.constraint(equalTo:root.topAnchor),view.bottomAnchor.constraint(equalTo:root.bottomAnchor)])}
-        let search=NSVisualEffectView();search.material = .hudWindow;search.blendingMode = .withinWindow;search.state = .active;search.wantsLayer=true;search.layer?.cornerRadius=22;search.layer?.masksToBounds=true;search.layer?.borderWidth=1;search.layer?.borderColor=NSColor.white.withAlphaComponent(0.3).cgColor
+        let search=WebbyGlassBackdrop();search.material = .hudWindow;search.blendingMode = .withinWindow;search.state = .active;search.wantsLayer=true;search.layer?.cornerRadius=22;search.layer?.masksToBounds=true;search.layer?.borderWidth=1;search.layer?.borderColor=NSColor.white.withAlphaComponent(0.3).cgColor
         for view in [search,indicator,progress]{view.translatesAutoresizingMaskIntoConstraints=false;root.addSubview(view)}
         addressField.translatesAutoresizingMaskIntoConstraints=false;search.addSubview(addressField)
         addressField.cell=MiniSearchCell(textCell:"");addressField.isEditable=true;addressField.isSelectable=true;addressField.isEnabled=true;addressField.usesSingleLineMode=true;addressField.cell?.isScrollable=true;addressField.alignment = .center;addressField.placeholderString="Search or enter a URL";addressField.font = WebbyTypography.font(ofSize:16);addressField.focusRingType = .none;addressField.isBordered=false;addressField.drawsBackground=false
@@ -230,7 +230,7 @@ struct MiniWebbyArchive: Codable {
     @objc private func copyAccount(){if let id=account.selectedItem?.representedObject as? UUID {copyInProfile?(id)}}
 }
 
-@MainActor private final class MiniGlassRoot:NSVisualEffectView {
+@MainActor private final class MiniGlassRoot:WebbyGlassBackdrop {
     var arrange:(()->Void)?
     override func layout(){super.layout();arrange?()}
     override var mouseDownCanMoveWindow:Bool {true}

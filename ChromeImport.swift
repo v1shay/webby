@@ -54,20 +54,39 @@ enum BrowserSpaceStore {
             .appendingPathComponent("ChromeSpaces.json")
     }
 
-    static func load() -> [SavedBrowserSpace] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let spaces = try? JSONDecoder().decode([SavedBrowserSpace].self, from: data),
-              !spaces.isEmpty else { return [] }
-        return spaces
+    static func load(from url: URL = fileURL) throws -> [SavedBrowserSpace] {
+        func decode(_ data: Data) throws -> [SavedBrowserSpace] {
+            let spaces = try JSONDecoder().decode([SavedBrowserSpace].self, from: data)
+            guard !spaces.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
+            return spaces
+        }
+        let backup = url.appendingPathExtension("last-good")
+        do { return try decode(Data(contentsOf: url)) }
+        catch {
+            if let data = try? Data(contentsOf: backup), let restored = try? decode(data) { return restored }
+            let failure = error as NSError
+            if failure.domain == NSCocoaErrorDomain && failure.code == NSFileReadNoSuchFileError,
+               !FileManager.default.fileExists(atPath: backup.path) { return [] }
+            // Corrupt or inaccessible settings must never look like a fresh install.
+            throw error
+        }
     }
 
-    static func save(_ spaces: [SavedBrowserSpace]) throws {
-        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        try encoder.encode(spaces).write(to: fileURL, options: .atomic)
+    static func save(_ spaces: [SavedBrowserSpace], to url: URL = fileURL) throws {
+        guard !spaces.isEmpty else { throw CocoaError(.fileWriteInvalidFileName) }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(spaces)
+        let backup = url.appendingPathExtension("last-good")
+        if let previous = try? Data(contentsOf: url),
+           let valid = try? JSONDecoder().decode([SavedBrowserSpace].self, from: previous), !valid.isEmpty {
+            try previous.write(to: backup, options: .atomic)
+        } else if !FileManager.default.fileExists(atPath: backup.path) {
+            try data.write(to: backup, options: .atomic)
+        }
+        try data.write(to: url, options: .atomic)
     }
+
 }
 
 struct ChromeProfileSource {

@@ -19,6 +19,8 @@ harness=(root/'Tests/BrowserPerformanceHarness.swift.inc').read_text()
 if 'private func saveSessionTabs(wait:' not in source: harness=harness.replace('saveSessionTabs(wait: true)','saveSessionTabs()')
 source+='\n'+harness+'\nextension BrowserApp { static let performanceStore = WKWebsiteDataStore.nonPersistent() }\n'
 copy=work/'BrowserApp.swift';copy.write_text(source)
+download_copy=work/'BrowserDownloads.swift'
+download_copy.write_text(sourcefile('BrowserDownloads.swift').read_text()+'\n'+(root/'Tests/DownloadHarness.swift.inc').read_text())
 workbench_copy=work/'CodeWorkbench.swift'
 workbench_source=(root/'CodeWorkbench.swift').read_text().replace('private var process: Process?', 'fileprivate var process: Process?').replace('private var clients =', 'fileprivate var clients =')
 workbench_copy.write_text(workbench_source+'\n'+(root/'Tests/CodeWorkbenchHarness.swift.inc').read_text())
@@ -40,7 +42,7 @@ if not resources.exists(): shutil.copytree(root/'Webby.app/Contents/Resources',r
 for asset in (root/'WidgetBrands').iterdir(): shutil.copy2(asset,resources/'WidgetBrands'/asset.name)
 (resources/'Fonts/Geist').mkdir(parents=True,exist_ok=True)
 for font in (root/'Fonts/Geist').iterdir(): shutil.copy2(font,resources/'Fonts/Geist'/font.name)
-for name in ['VideoControls.js','GeistPage.js','glass-page.js','PasswordFieldProbe.js','GooglePromptFilter.js','ChromeTone.js','ChatGPTWidget.js','LinkPreview.js']:
+for name in ['FastRules.json','VideoControls.js','GeistPage.js','glass-page.js','PasswordFieldProbe.js','GooglePromptFilter.js','ChromeTone.js','ChatGPTWidget.js','LinkPreview.js']:
     shutil.copy2(sourcefile(name),resources/name)
 optimization=os.environ.get('WEBBY_TEST_OPTIMIZATION','-Onone')
 plistlib.dump({'WebbyTestOptimization':optimization,'CFBundleIdentifier':'local.webby.performance-tests','CFBundleExecutable':'Webby','CFBundleName':'Webby Performance Tests','CFBundlePackageType':'APPL','LSMinimumSystemVersion':'13.0'},(app/'Contents/Info.plist').open('wb'))
@@ -48,7 +50,7 @@ cache=work/'module-cache';cache.mkdir(exist_ok=True)
 obj=work/'PTYLauncher.o'
 subprocess.run(['clang','-O2','-target','arm64-apple-macos13.0','-c',str(root/'PTYLauncher.c'),'-o',str(obj)],check=True)
 files=re.findall(r'"\$script_dir/([^"\n]+\.swift)"',(root/'build.sh').read_text())
-files=[str(copy if f=='BrowserApp.swift' else (identity_copy if f=='IDEIdentity.swift' else workbench_copy if f=='CodeWorkbench.swift' else widget_copy if f=='WidgetCanvas.swift' else (menu_copy if f=='BrowserMenuBar.swift' else codex_copy if f=='CodexAppWidgets.swift' else wallpaper_copy if f=='BrowserWallpaper.swift' else sourcefile(f)))) for f in files if f!='CompileRules.swift']
+files=[str(copy if f=='BrowserApp.swift' else (identity_copy if f=='IDEIdentity.swift' else workbench_copy if f=='CodeWorkbench.swift' else widget_copy if f=='WidgetCanvas.swift' else (menu_copy if f=='BrowserMenuBar.swift' else codex_copy if f=='CodexAppWidgets.swift' else wallpaper_copy if f=='BrowserWallpaper.swift' else download_copy if f=='BrowserDownloads.swift' else sourcefile(f)))) for f in files if f!='CompileRules.swift']
 args=['swiftc',optimization,'-parse-as-library','-target','arm64-apple-macos13.0','-module-cache-path',str(cache)]
 for framework in ['AppKit','WebKit','AVFoundation','Security','CryptoKit','IOKit','JavaScriptCore','CoreImage','ImageIO','Carbon','WidgetKit']:args+=['-framework',framework]
 background_target=root.parent/'work/code-background-target'

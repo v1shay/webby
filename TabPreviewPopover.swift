@@ -10,7 +10,7 @@ import AppKit
     private(set) var tabID: UUID?
 
     init() {
-        let root = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 340, height: 240))
+        let root = WebbyGlassBackdrop(frame: NSRect(x: 0, y: 0, width: 340, height: 240))
         root.material = .popover
         root.blendingMode = .behindWindow
         root.state = .active

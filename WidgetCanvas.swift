@@ -103,6 +103,112 @@ private struct WidgetPlacement: Codable {
     var referenceHeight: CGFloat? = nil
 }
 
+struct HomepageLayout: RawRepresentable, CaseIterable, Equatable {
+    let rawValue:Int
+    init?(rawValue:Int) {guard (0..<45).contains(rawValue) else{return nil};self.rawValue=rawValue}
+    static let allCases=(0..<45).map{HomepageLayout(rawValue:$0)!}
+    static let header=HomepageLayout(rawValue:0)!,centered=HomepageLayout(rawValue:1)!,footer=HomepageLayout(rawValue:2)!
+    var searchPosition:Int {rawValue%3}
+    var pattern:Int {rawValue/3}
+    static let families=["Equal Grid","Feature Left","Feature Right","Cinema","Tall Feature","Two Features","Editorial","Mosaic","Golden Split","Wide Columns","Stacked Rows","Alternating Rows","Gallery","Compact Tiles","Panorama"]
+    var title:String { Self.families[pattern]+" · "+["Search Above","Search Centered","Search Below"][searchPosition] }
+    func frames(count:Int,in regions:[NSRect])->[NSRect] {
+        if pattern==0 {return Self.frames(count:count,in:regions)}
+        guard count>0,!regions.isEmpty else{return []}
+        var result:[NSRect]=[],remaining=count
+        for (index,region) in regions.enumerated() {
+            let n=Int(ceil(Double(remaining)/Double(regions.count-index)));remaining-=n
+            result += tiles(n,in:region)
+        }
+        return result
+    }
+    private func tiles(_ n:Int,in r:NSRect)->[NSRect] {
+        guard n>0 else{return []};if n==1{return [r]}
+        let gap:CGFloat=16
+        func grid(_ count:Int,_ area:NSRect)->[NSRect] {Self.frames(count:count,in:[area])}
+        func divide(_ area:NSRect,_ vertical:Bool,_ fraction:CGFloat)->(NSRect,NSRect) {
+            if vertical {
+                let size=max(0,area.width-gap),a=size*fraction
+                return (NSRect(x:area.minX,y:area.minY,width:a,height:area.height),NSRect(x:area.minX+a+gap,y:area.minY,width:size-a,height:area.height))
+            }
+            let size=max(0,area.height-gap),a=size*fraction
+            return (NSRect(x:area.minX,y:area.minY,width:area.width,height:a),NSRect(x:area.minX,y:area.minY+a+gap,width:area.width,height:size-a))
+        }
+        var frames:[NSRect]=[]
+        switch pattern {
+        case 0: return grid(n,r)
+        case 1,2,4,8:
+            let (a,b)=divide(r,true,pattern==8 ? 0.618:pattern==4 ? 0.38:0.56)
+            frames=pattern==2 ? grid(n-1,a)+[b] : [a]+grid(n-1,b)
+        case 3,14:
+            let (a,b)=divide(r,false,pattern==14 ? 0.35:0.59)
+            frames=[a]+grid(n-1,b)
+        case 5:
+            if n<=2 {let (a,b)=divide(r,true,0.5);frames=[a,b]}
+            else {let (a,b)=divide(r,false,0.59);let (left,right)=divide(a,true,0.5);frames=[left,right]+grid(n-2,b)}
+        case 6,9:
+            let (a,b)=divide(r,true,pattern==6 ? 0.62:0.5)
+            let left=max(1,n/2);frames=grid(left,a)+grid(n-left,b)
+        case 10,11:
+            let rows=min(n,3),base=n/rows,extra=n%rows
+            let h=(r.height-gap*CGFloat(rows-1))/CGFloat(rows)
+            for row in 0..<rows {
+                let count=base+(row<extra ? 1:0),area=NSRect(x:r.minX,y:r.minY+CGFloat(row)*(h+gap),width:r.width,height:h)
+                if pattern==11 && count>1 {
+                    let (a,b)=divide(area,true,row%2==0 ? 0.62:0.38)
+                    frames += row%2==0 ? [a]+grid(count-1,b):grid(count-1,a)+[b]
+                } else {frames += grid(count,area)}
+            }
+        case 12:
+            let columns=min(n,3),w=(r.width-gap*CGFloat(columns-1))/CGFloat(columns)
+            for column in 0..<columns {
+                let count=n/columns+(column<n%columns ? 1:0)
+                frames += grid(count,NSRect(x:r.minX+CGFloat(column)*(w+gap),y:r.minY,width:w,height:r.height))
+            }
+        case 13:
+            let equal=grid(n,r),w=min(230,equal.first?.width ?? 230),h=min(150,equal.first?.height ?? 150)
+            frames=equal.map{NSRect(x:$0.midX-w/2,y:$0.midY-h/2,width:w,height:h)}
+        default:
+            func mosaic(_ count:Int,_ area:NSRect,_ depth:Int)->[NSRect] {
+                if count==1{return [area]}
+                let first=max(1,count/2),vertical=area.width>area.height*1.15
+                let ratio=CGFloat(first)/CGFloat(count)+(depth%2==0 ? 0.08:-0.08)
+                let (a,b)=divide(area,vertical,min(0.72,max(0.28,ratio)))
+                return mosaic(first,a,depth+1)+mosaic(count-first,b,depth+1)
+            }
+            frames=mosaic(n,r,0)
+        }
+        // Dense/small windows use a readable equal grid instead of thin slivers.
+        if frames.count != n || frames.contains(where:{$0.width<64 || $0.height<64}) {return grid(n,r)}
+        return frames
+    }
+    static func frames(count:Int,in regions:[NSRect])->[NSRect] {
+        guard count>0,!regions.isEmpty else{return []}
+        let gap:CGFloat=16
+        var best:[NSRect]=[];var bestScore = -Double.infinity
+        for columns in 1...count {
+            let rows=Int(ceil(Double(count)/Double(columns*regions.count)))
+            let width=(regions.map(\.width).min()! - gap*CGFloat(columns-1))/CGFloat(columns)
+            let height=(regions.map(\.height).min()! - gap*CGFloat(rows-1))/CGFloat(rows)
+            guard width>0,height>0 else{continue}
+            let score=Double(min(width,height))*2-abs(log(Double(width/max(1,height))/1.45))*45
+            if score<=bestScore {continue};bestScore=score;best=[]
+            var remaining=count
+            for (regionIndex,region) in regions.enumerated() {
+                let n=Int(ceil(Double(remaining)/Double(regions.count-regionIndex)));remaining-=n
+                let usedRows=Int(ceil(Double(n)/Double(columns)))
+                let startY=region.midY-(CGFloat(usedRows)*height+CGFloat(max(0,usedRows-1))*gap)/2
+                for i in 0..<n {
+                    let row=i/columns,col=i%columns,inRow=min(columns,n-row*columns)
+                    let startX=region.midX-(CGFloat(inRow)*width+CGFloat(max(0,inRow-1))*gap)/2
+                    best.append(NSRect(x:startX+CGFloat(col)*(width+gap),y:startY+CGFloat(row)*(height+gap),width:width,height:height))
+                }
+            }
+        }
+        return best
+    }
+}
+
 // Canvas coordinates are flipped: minimum Y is the top edge.
 enum WidgetAlignment {
     static func fit(_ proposed: NSRect, in bounds: NSRect) -> NSRect {
@@ -324,6 +430,20 @@ enum WidgetAlignment {
         placements.append(WidgetPlacement(kind: kind, x: chosen.x, y: chosen.y, width: width, height: height))
         save()
         rebuild()
+    }
+
+    func arrange(in regions:[NSRect],style:HomepageLayout = .header) {
+        let frames=style.frames(count:placements.count,in:regions)
+        guard frames.count==placements.count else{return}
+        let geometry=Motion.capture(Array(cards.values),in:self)
+        for i in placements.indices {
+            let f=frames[i];placements[i].x=f.minX;placements[i].y=f.minY
+            placements[i].width=f.width;placements[i].height=f.height
+            placements[i].referenceWidth=bounds.width;placements[i].referenceHeight=bounds.height
+            cards[placements[i].kind]?.frame=f
+        }
+        save();needsLayout=true;layoutSubtreeIfNeeded()
+        Motion.settle(geometry,views:Array(cards.values),in:self,character:.widget)
     }
 
     func resetPositions() {
@@ -575,7 +695,7 @@ enum WidgetAlignment {
 
 }
 
-@MainActor private final class WidgetGlassBackdrop: NSVisualEffectView {
+@MainActor private final class WidgetGlassBackdrop: WebbyGlassBackdrop {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
@@ -623,7 +743,7 @@ enum WidgetAlignment {
     private let hourLabels: [NSTextField] = (0..<5).map { _ in NSTextField(labelWithString: "") }
     private let promptField = NSTextField(string: "")
     private let promptButton = NSButton(title: "↗", target: nil, action: nil)
-    private let promptGlass = NSVisualEffectView()
+    private let promptGlass = WebbyGlassBackdrop()
     private let albumArt = NSImageView()
     private let spotifyBrand = NSImageView()
     private let trackTitle = NSTextField(labelWithString: "")

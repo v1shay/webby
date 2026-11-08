@@ -130,6 +130,7 @@ enum BrowserSearchEngine: String, CaseIterable {
     private let addWidget: () -> Void
     private let resetWidgets: () -> Void
     private let asciiCanvas: () -> ASCIIBackgroundCanvas?
+    private let editWindowAppearance: () -> Void
     private let openWallpaper: () -> Void
     private let miniMenu: () -> NSMenu
     private let currentSpaceName: () -> String
@@ -171,11 +172,13 @@ enum BrowserSearchEngine: String, CaseIterable {
          googleConnected: @escaping (GoogleService) -> Bool,
          asciiCanvas: @escaping () -> ASCIIBackgroundCanvas? = { nil },
          openWallpaper: @escaping () -> Void = {},
+         editWindowAppearance: @escaping () -> Void = {},
          miniMenu: @escaping () -> NSMenu = { NSMenu(title:"Mini Webby") }) {
         self.showBrowser = showBrowser
         self.addWidget = addWidget
         self.resetWidgets = resetWidgets
         self.asciiCanvas = asciiCanvas
+        self.editWindowAppearance = editWindowAppearance
         self.openWallpaper = openWallpaper
         self.miniMenu = miniMenu
         self.currentSpaceName = currentSpaceName
@@ -220,7 +223,7 @@ enum BrowserSearchEngine: String, CaseIterable {
         let source = NSMenu(); buildSettingsItems(source)
         let menu = NSMenu(title: "Tab Settings")
         let titles: Set<String> = ["Tab Layout", "Address Bar", "Restore Tabs After Restart", "Offload Idle Tabs",
-            "Glass Effect on Web Pages", "Match Tab Pane to Page Glass", "Match Tab Bar to Website Edge"]
+            "Window Appearance…", "Glass Effect on Web Pages", "Match Tab Pane to Page Glass", "Match Tab Bar to Website Edge"]
         for item in source.items where titles.contains(item.title) || item.view?.subviews.contains(where: { $0 is NSSlider }) == true {
             source.removeItem(item); menu.addItem(item)
         }
@@ -240,10 +243,24 @@ enum BrowserSearchEngine: String, CaseIterable {
         show.target = self
         let widget = menu.addItem(withTitle: "Add Widget…", action: #selector(addWidgetAction), keyEquivalent: "")
         widget.target = self
+        let arrange=NSMenuItem(title:"Arrange Homepage",action:nil,keyEquivalent:"")
+        let layouts=NSMenu(title:arrange.title)
+        for (index,family) in HomepageLayout.families.enumerated() {
+            let familyItem=NSMenuItem(title:family,action:nil,keyEquivalent:"")
+            let choices=NSMenu(title:family)
+            for style in HomepageLayout.allCases where style.pattern==index {
+                let item=choices.addItem(withTitle:["Search Above","Search Centered","Search Below"][style.searchPosition],action:#selector(arrangeHomepage(_:)),keyEquivalent:"")
+                item.target=self;item.tag=style.rawValue
+            }
+            familyItem.submenu=choices;layouts.addItem(familyItem)
+        }
+        arrange.submenu=layouts;menu.addItem(arrange)
         let reset = menu.addItem(withTitle: "Reset Widget Positions", action: #selector(resetWidgetsAction), keyEquivalent: "")
         reset.target = self
         let wallpaper = menu.addItem(withTitle: "Background & Effects…", action: #selector(openWallpaperAction), keyEquivalent: "")
         wallpaper.target = self
+        let windowStyle = menu.addItem(withTitle: "Window Appearance…", action: #selector(editWindowAppearanceAction), keyEquivalent: "")
+        windowStyle.target = self
         let codexWidget=NSMenuItem(title:"Codex Widget",action:nil,keyEquivalent:"")
         let codexMenu=NSMenu(title:codexWidget.title)
         let codexInfo = codexMenu.addItem(withTitle:"Uses your existing Codex app",action:nil,keyEquivalent:"")
@@ -420,6 +437,8 @@ enum BrowserSearchEngine: String, CaseIterable {
         let client = googleMenu.addItem(withTitle: "Choose Desktop OAuth Client…", action: #selector(chooseGoogleClientAction), keyEquivalent: "")
         client.target = self
         googleMenu.addItem(.separator())
+        let configureCalendar=googleMenu.addItem(withTitle:"Set or Replace Calendar iCal Link…",action:#selector(connectGoogleAction(_:)),keyEquivalent:"")
+        configureCalendar.target=self;configureCalendar.representedObject=GoogleService.calendar.rawValue
         for service in GoogleService.allCases {
             let connected = googleConnected(service)
             let serviceTitle: String
@@ -491,9 +510,9 @@ enum BrowserSearchEngine: String, CaseIterable {
         let accounts = section("Profiles & Fuse",symbol:"person.2",
                                items:[experiment,browserDefaults,.separator(),importItem,signIns,.separator(),deleteItem])
         let appearance = section("Appearance",symbol:"paintpalette",
-                                 items:[profileItem,edit,appIcon,.separator(),transparency,.separator(),sounds])
+                                 items:[windowStyle,profileItem,edit,appIcon,.separator(),transparency,.separator(),sounds])
         let widgets = section("Widgets & Backgrounds",symbol:"square.grid.2x2",
-                              items:[desktop,reset,.separator(),wallpaper,backgrounds,.separator(),codexWidget,googleRoot,github])
+                              items:[desktop,arrange,reset,.separator(),wallpaper,backgrounds,.separator(),codexWidget,googleRoot,github])
         var petItems = [petItem,choosePet]
         if let resetPet { petItems.append(resetPet) }
         petItems += [.separator(),indicatorRoot]
@@ -519,6 +538,9 @@ enum BrowserSearchEngine: String, CaseIterable {
     @objc private func asciiBrightnessChanged(_ sender: NSSlider) {
         guard let id = sender.identifier?.rawValue else { return }
         asciiCanvas()?.setBrightness(sender.doubleValue, for: id)
+    }
+    @objc private func arrangeHomepage(_ sender:NSMenuItem) {
+        NotificationCenter.default.post(name:Notification.Name("WebbyArrangeHomepage"),object:sender.tag)
     }
     @objc private func resetWidgetsAction() { resetWidgets() }
     @objc private func makeDefaultBrowser() {BrowserExternalLinks.requestDefault()}
@@ -646,6 +668,7 @@ enum BrowserSearchEngine: String, CaseIterable {
 
     @objc private func clearCustomPet() { BrowserTheme.clearCustomPet() }
 
+    @objc private func editWindowAppearanceAction() { editWindowAppearance() }
     @objc private func openWallpaperAction() { openWallpaper() }
     @objc private func showSettings() {
         if settingsWindow == nil { makeSettingsWindow() }
@@ -670,7 +693,7 @@ enum BrowserSearchEngine: String, CaseIterable {
         window.title = "Webby Gradient • \(currentSpaceName())"
         window.center()
         window.isReleasedWhenClosed = false
-        let root = NSVisualEffectView(frame: window.contentView?.bounds ?? .zero)
+        let root = WebbyGlassBackdrop(frame: window.contentView?.bounds ?? .zero)
         root.material = .popover
         root.blendingMode = .behindWindow
         root.state = .active

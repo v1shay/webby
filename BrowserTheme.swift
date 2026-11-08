@@ -26,6 +26,7 @@ extension Notification.Name {
             UserDefaults.standard.removeObject(forKey: key(name, space: space))
         }
         UserDefaults.standard.removeObject(forKey: key("browserCustomIconPetURL", space: space))
+        UserDefaults.standard.removeObject(forKey: BrowserWindowStyle.key(for: space))
     }
     private static let catalog: GradientCatalog? = {
         guard let url = Bundle.main.url(forResource: "gradient_profiles", withExtension: "json"),
@@ -155,8 +156,8 @@ extension Notification.Name {
         CATransaction.commit()
     }
 
-    private static func hex(_ color: NSColor) -> String {
-        let rgb = color.usingColorSpace(.sRGB) ?? color
+    static func hex(_ color: NSColor) -> String {
+        let rgb = color.usingColorSpace(.sRGB) ?? .black
         let red = min(255, max(0, Int((rgb.redComponent * 255).rounded())))
         let green = min(255, max(0, Int((rgb.greenComponent * 255).rounded())))
         let blue = min(255, max(0, Int((rgb.blueComponent * 255).rounded())))
@@ -231,5 +232,194 @@ enum WebbyTypography {
         if let control=view as? NSControl,let current=control.font {let next=converted(current);if !current.isEqual(next) {control.font=next}}
         if let text=view as? NSTextView,let current=text.font {let next=converted(current);if !current.isEqual(next) {text.font=next}}
         for child in view.subviews {apply(to:child)}
+    }
+}
+
+/// Window paint is separate from the profile's icon gradient and saved wallpaper.
+struct BrowserWindowStyle: Codable, Equatable {
+    enum Background: Int, Codable, CaseIterable {
+        case wallpaper, solid, gradient
+
+        var title: String {
+            switch self {
+            case .wallpaper: return "Wallpaper & Glass"
+            case .solid: return "Solid Color"
+            case .gradient: return "Two-Color Gradient"
+            }
+        }
+    }
+
+    enum Direction: Int, Codable, CaseIterable {
+        case down, across, diagonal
+
+        var title: String {
+            switch self {
+            case .down: return "Top to Bottom"
+            case .across: return "Left to Right"
+            case .diagonal: return "Diagonal"
+            }
+        }
+    }
+
+    var background: Background = .wallpaper
+    var start = "#A4AF96"
+    var end = "#C6B7A8"
+    var direction: Direction = .diagonal
+
+    static let insetKey = "webbyInsetWebsiteFrame"
+    static var inset: Bool {
+        UserDefaults.standard.object(forKey: insetKey) as? Bool ?? true
+    }
+
+    static func load(for profile: UUID) -> Self {
+        guard let data = UserDefaults.standard.data(forKey: key(for: profile)) else { return Self() }
+        return (try? JSONDecoder().decode(Self.self, from: data)) ?? Self()
+    }
+
+    func save(for profile: UUID) {
+        if let data = try? JSONEncoder().encode(self) {
+            UserDefaults.standard.set(data, forKey: Self.key(for: profile))
+        }
+    }
+
+    static func key(for profile: UUID) -> String { "webbyWindowStyle.\(profile.uuidString)" }
+
+    var hasColor: Bool { background != .wallpaper }
+
+    @MainActor var colors: [NSColor] {
+        background == .solid ? [BrowserTheme.color(start), BrowserTheme.color(start)]
+            : [BrowserTheme.color(start), BrowserTheme.color(end)]
+    }
+
+    @MainActor private var chromeColors: [NSColor] {
+        colors.map { $0.blended(withFraction: 0.10, of: .black) ?? $0 }
+    }
+
+    @MainActor var representativeColor: NSColor {
+        let stops = chromeColors
+        return stops[0].blended(withFraction: 0.5, of: stops[1]) ?? stops[0]
+    }
+
+    @MainActor var usesDarkText: Bool {
+        let rgb = representativeColor
+        return rgb.redComponent * 0.2126 + rgb.greenComponent * 0.7152 + rgb.blueComponent * 0.0722 > 0.55
+    }
+
+    @MainActor func paint(_ layer: CAGradientLayer) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.colors = chromeColors.map(\.cgColor)
+        switch direction {
+        case .down: (layer.startPoint, layer.endPoint) = (CGPoint(x: 0.5, y: 1), CGPoint(x: 0.5, y: 0))
+        case .across: (layer.startPoint, layer.endPoint) = (CGPoint(x: 0, y: 0.5), CGPoint(x: 1, y: 0.5))
+        case .diagonal: (layer.startPoint, layer.endPoint) = (CGPoint(x: 1, y: 1), .zero)
+        }
+        CATransaction.commit()
+    }
+}
+
+@MainActor final class BrowserWindowStyleEditor: NSObject {
+    private let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 394, height: 294),
+                                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    private let background = NSPopUpButton()
+    private let direction = NSPopUpButton()
+    private let start = NSColorWell()
+    private let end = NSColorWell()
+    private let preview = CAGradientLayer()
+    private let previewPage = CALayer()
+    private let inset = NSButton(checkboxWithTitle: "Inset website frame", target: nil, action: nil)
+    private var profile: UUID?
+    var onApply: (() -> Void)?
+
+    override init() {
+        super.init()
+        panel.isReleasedWhenClosed = false
+        guard let root = panel.contentView else { return }
+
+        let previewHost = NSView(frame: NSRect(x: 22, y: 182, width: 350, height: 90))
+        previewHost.wantsLayer = true
+        previewHost.layer?.cornerRadius = 12
+        previewHost.layer?.masksToBounds = true
+        preview.frame = previewHost.bounds
+        previewHost.layer?.addSublayer(preview)
+        previewPage.cornerRadius = 7
+        preview.addSublayer(previewPage)
+        root.addSubview(previewHost)
+
+        func label(_ title: String, x: CGFloat, y: CGFloat) {
+            let field = NSTextField(labelWithString: title)
+            field.textColor = .secondaryLabelColor
+            field.frame = NSRect(x: x, y: y, width: 100, height: 18)
+            root.addSubview(field)
+        }
+        label("Background", x: 22, y: 144)
+        background.frame = NSRect(x: 125, y: 137, width: 247, height: 28)
+        background.addItems(withTitles: BrowserWindowStyle.Background.allCases.map(\.title))
+        label("Colors", x: 22, y: 108)
+        start.frame = NSRect(x: 125, y: 101, width: 55, height: 27)
+        end.frame = NSRect(x: 189, y: 101, width: 55, height: 27)
+        start.setAccessibilityLabel("Start color")
+        end.setAccessibilityLabel("End color")
+        direction.frame = NSRect(x: 249, y: 101, width: 123, height: 27)
+        direction.addItems(withTitles: BrowserWindowStyle.Direction.allCases.map(\.title))
+        inset.frame = NSRect(x: 22, y: 62, width: 350, height: 25)
+        for control: NSControl in [background, direction, start, end, inset] {
+            control.target = self
+            control.action = #selector(updatePreview)
+            root.addSubview(control)
+        }
+        let apply = NSButton(title: "Apply", target: self, action: #selector(apply))
+        apply.bezelStyle = .rounded
+        apply.keyEquivalent = "\r"
+        apply.frame = NSRect(x: 285, y: 17, width: 87, height: 30)
+        root.addSubview(apply)
+    }
+
+    func open(profile: UUID, name: String) {
+        self.profile = profile
+        let style = BrowserWindowStyle.load(for: profile)
+        background.selectItem(at: style.background.rawValue)
+        direction.selectItem(at: style.direction.rawValue)
+        start.color = BrowserTheme.color(style.start)
+        end.color = BrowserTheme.color(style.end)
+        inset.state = BrowserWindowStyle.inset ? .on : .off
+        panel.title = "Window Appearance · \(name)"
+        updatePreview()
+        panel.center()
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private var style: BrowserWindowStyle {
+        BrowserWindowStyle(background: BrowserWindowStyle.Background(rawValue: background.indexOfSelectedItem) ?? .wallpaper,
+                           start: BrowserTheme.hex(start.color), end: BrowserTheme.hex(end.color),
+                           direction: BrowserWindowStyle.Direction(rawValue: direction.indexOfSelectedItem) ?? .diagonal)
+    }
+
+    @objc private func updatePreview() {
+        var sample = style
+        start.isEnabled = sample.hasColor
+        end.isEnabled = sample.background == .gradient
+        direction.isEnabled = end.isEnabled
+        if !sample.hasColor {
+            sample.start = "#323842"
+            sample.end = "#22242C"
+        }
+        sample.paint(preview)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let gap: CGFloat = inset.state == .on ? 6 : 0
+        previewPage.frame = CGRect(x: 64 + gap, y: gap, width: 286 - 2 * gap, height: 90 - 2 * gap)
+        previewPage.cornerRadius = gap == 0 ? 0 : 7
+        previewPage.backgroundColor = NSColor(white: 1, alpha: 0.86).cgColor
+        CATransaction.commit()
+    }
+
+    @objc private func apply() {
+        guard let profile else { return }
+        style.save(for: profile)
+        UserDefaults.standard.set(inset.state == .on, forKey: BrowserWindowStyle.insetKey)
+        onApply?()
+        panel.close()
     }
 }

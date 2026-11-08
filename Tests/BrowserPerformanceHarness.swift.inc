@@ -24,6 +24,8 @@ extension BrowserApp {
         try expect(Bundle.main.bundleIdentifier == "local.webby.performance-tests", "Test bundle identity is not isolated")
         BrowserExperiment.cyclesNewTabProfiles = false
         BrowserTabPlacement.current = .top
+        UserDefaults.standard.set(true, forKey: BrowserWindowStyle.insetKey)
+        UserDefaults.standard.set(false, forKey: "sidebarHidden")
         UserDefaults.standard.set(true, forKey: "webbyRestoreTabs")
         UserDefaults.standard.set(1, forKey: "webbyOffloadMinutes")
         let a = BrowserSpace(.init(id: UUID(), name: "Fixture A", chromeDirectory: nil, bookmarks: [], history: []))
@@ -40,6 +42,33 @@ extension BrowserApp {
         NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: .browserThemeChanged, object: nil)
         BrowserTheme.activate(a.saved.id)
         themeChanged()
+        if ProcessInfo.processInfo.environment["WEBBY_TEST_WINDOW_FRAME"] == "only" {
+            try await verifyWindowFrame(base: base, output: output, other: b)
+            exit(0)
+        }
+        if ProcessInfo.processInfo.environment["WEBBY_TEST_RELIABILITY"] == "only" {
+            try await verifyReliability(base: base, output: output)
+            exit(0)
+        }
+        if ProcessInfo.processInfo.environment["WEBBY_TEST_HOME_LAYOUTS"] == "only" {
+            for kind in [WebbyWidget.weather,.stocks,.calculator,.music,.codexUsage] {widgetCanvas.addWidget(kind)}
+            for style in HomepageLayout.allCases {
+                arrangeHomepage(Notification(name:Notification.Name("WebbyArrangeHomepage"),object:style.rawValue))
+                content.layoutSubtreeIfNeeded()
+                let search=widgetCanvas.convert(homeCenter.bounds,from:homeCenter)
+                let frames=widgetCanvas.subviews.filter{$0 is GlassWidgetCard}.map(\.frame)
+                try expect(frames.count==5,"Arrange changed widget membership")
+                for (i,f) in frames.enumerated() {
+                    try expect(widgetCanvas.bounds.insetBy(dx:-1,dy:-1).contains(f),"Arranged widget escaped canvas")
+                    try expect(!f.intersects(search),"Widget overlaps search block")
+                    if style.pattern==0 {try expect(abs(f.width-frames[0].width)<1 && abs(f.height-frames[0].height)<1,"Widget sizes differ")}
+                    for other in frames.dropFirst(i+1) {try expect(!f.intersects(other),"Arranged widgets overlap")}
+                }
+            }
+            try Data("{\"passed\":true,\"homepageLayouts\":true}".utf8).write(to:output)
+            print("PASS: 45 homepage layouts, actual flipped coordinates, equal and varied sizes, no widget/search overlap")
+            exit(0)
+        }
         if ProcessInfo.processInfo.environment["WEBBY_TEST_LOADING_RIM"] == "only" {
             toolbar.resetProgress();toolbar.setProgress(0.4)
             content.layoutSubtreeIfNeeded()
@@ -275,15 +304,19 @@ extension BrowserApp {
         try verifyWallpaperPresentation()
         try expect(CodexAppTransport.startArguments()==["app-server","daemon","start"],"Codex fallback must use the shared daemon, never a private server")
         try expect(CodexAppData.link("invalid") == nil,"Codex link accepted an invalid chat id")
-        try await verifyMiniWebby(base:base)
+        let coreOnly = ProcessInfo.processInfo.environment["WEBBY_TEST_CORE_ONLY"] == "1"
+        if !coreOnly { try await verifyMiniWebby(base:base) }
         try await verifyGeist(base:base)
-        try await verifyVideoPresentation(base:base)
-        try await verifyChromeTone(base:base)
+        if !coreOnly {
+            try await verifyVideoPresentation(base:base)
+            try await verifyChromeTone(base:base)
+        }
         try await verifyProfileMotion()
         try await verifyLinkOpening(base:base)
         func p95(_ values: [Double]) -> Double { let a=values.sorted(); return a[max(0,min(a.count-1,Int(ceil(Double(a.count)*0.95))-1))] }
         var result: [String: Any] = [:]
         result["passed"] = true
+        result["skipped"] = coreOnly ? ["Mini Webby key-window toggle", "native fullscreen/PiP", "live website-edge rendering"] : []
         result["restoredTabs"] = 80
         result["untouchedTabsStillUnloaded"] = 79
         result["slowPageRevealSeconds"] = timing.presented! - timing.started
@@ -310,6 +343,100 @@ extension BrowserApp {
         print("Browser integration checks passed. Report: \(output.path)")
         exit(0)
     }
+    private func verifyWindowFrame(base: String, output: URL, other: BrowserSpace) async throws {
+        let original = activeSpace.saved.id
+        let style = BrowserWindowStyle(background: .gradient, start: "#A4AF96", end: "#C6B7A8")
+        style.save(for: original)
+        BrowserWindowStyle(background: .solid, start: "#25384B").save(for: other.saved.id)
+        themeChanged()
+        let page = try await loadFixture("/tone", base: base)
+        let second = try await loadFixture("/plain", base: base)
+        renderSplit([page.id, second.id])
+        guard let pageView = page.webView, let secondView = second.webView else {
+            throw PerformanceTestFailure(message: "Fixture web views were lost")
+        }
+        content.layoutSubtreeIfNeeded()
+        try expect(pageArea.layer?.masksToBounds == true && !websiteFrameShadow.isHidden,
+                   "Inset frame did not clip or cast a shadow")
+        try expect(abs(pageArea.frame.minX - 8) < 1 && abs(mainArea.bounds.maxX - pageArea.frame.maxX - 8) < 1,
+                   "Website frame was not inset from both sides")
+        try expect(!windowPaintView.isHidden && windowPaint.frame.size == content.bounds.size && windowPaint.colors?.count == 2,
+                   "One gradient did not fill the full window")
+        try expect(wallpaper.isSuppressed && mainBackdrop.isHidden, "Wallpaper and glass cover the profile color")
+
+        if ProcessInfo.processInfo.environment["WEBBY_CAPTURE_WINDOW_FRAME"] == "1" {
+            window.makeKeyAndOrderFront(nil)
+            hideTrafficLights()
+            NSApp.activate(ignoringOtherApps: true)
+            try await Task.sleep(nanoseconds: 400_000_000)
+            if let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming]),
+               let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
+                try data.write(to: output.deletingLastPathComponent().appendingPathComponent("window-frame.png"))
+            }
+        }
+
+        resizeSidebar(to: Self.defaultSidebarWidth, finished: true)
+        let oldWidth = pageArea.bounds.width
+        sidebarResizeHandle.onBegin?()
+        sidebarResizeHandle.onResize?(64, false)
+        content.layoutSubtreeIfNeeded()
+        try expect(pageArea.bounds.width < oldWidth && wallpaper.isResizing,
+                   "Sidebar drag did not resize the viewport or pause wallpaper rendering")
+        sidebarResizeHandle.onResize?(64, true)
+        try expect(page.webView === pageView && second.webView === secondView && splitTabIDs?.count == 2,
+                   "Sidebar resize replaced or closed a live split pane")
+        try expect(!wallpaper.isResizing && UserDefaults.standard.double(forKey: Self.sidebarWidthKey) == preferredSidebarWidth,
+                   "Width was not saved or wallpaper did not resume")
+        let resizedWidth = sidebarWidth.constant
+        toggleSidebar()
+        try expect(sidebarWidth.constant == 0 && sidebarResizeHandle.isHidden, "Hidden sidebar still reserves space")
+        toggleSidebar()
+        try expect(sidebarWidth.constant == resizedWidth && !sidebarResizeHandle.isHidden, "Sidebar width did not survive a toggle")
+
+        BrowserTabPlacement.current = .horizontal
+        configureHorizontalTabs()
+        try expect(sidebarWidth.constant == 0 && pageAreaTop.constant >= 44 + pageFrameInset,
+                   "Horizontal tabs overlapped the framed website")
+        // Edge-matched chrome must also cover the new inset gutter, without
+        // painting underneath the web view or replacing its glass backdrop.
+        BrowserWindowStyle().save(for: original)
+        BrowserGlass.matchWebsiteEdge = true
+        UserDefaults.standard.set(true, forKey: "webbyWallpaperFullWindow.\(original.uuidString)")
+        pageChromeColors[second.id] = .black
+        themeChanged()
+        content.layoutSubtreeIfNeeded()
+        guard let rim = websiteFrameRim, let shape = rim.layer as? CAShapeLayer,
+              let path = shape.path else {
+            throw PerformanceTestFailure(message: "Edge matching left the inset without paint")
+        }
+        try expect(!rim.isHidden && shape.fillColor?.alpha == 1 && wallpaper.superview === content,
+                   "Inset can still show full-window wallpaper")
+        try expect(path.contains(CGPoint(x: 4, y: rim.bounds.midY), using: .evenOdd)
+                   && path.contains(CGPoint(x: 9, y: 9), using: .evenOdd)
+                   && !path.contains(CGPoint(x: rim.bounds.midX, y: rim.bounds.midY), using: .evenOdd),
+                   "The rim failed to cover a gutter or rounded corner, or covered the page")
+        BrowserTabPlacement.current = .top
+        configureHorizontalTabs()
+        try expect(!rim.isHidden, "The vertical tab layout lost its inset paint")
+        BrowserGlass.matchWebsiteEdge = false
+        updateWebsiteEdgeBackdrop()
+        try expect(rim.isHidden, "Disabling edge matching did not restore wallpaper in the frame")
+        style.save(for: original)
+        switchToSpace(1)
+        try expect(windowStyle.background == .solid && windowStyle.start == "#25384B", "Profile paint did not switch")
+        BrowserWindowStyle().save(for: other.saved.id)
+        UserDefaults.standard.set(false, forKey: BrowserWindowStyle.insetKey)
+        reloadWindowStyle()
+        applyAddressChrome()
+        applyWallpaperPresentation()
+        try expect(windowPaintView.isHidden && !wallpaper.isSuppressed && pageArea.layer?.masksToBounds == false,
+                   "Wallpaper and classic geometry did not return")
+        try expect(BrowserWindowStyle.load(for: original) == style, "Editing another profile changed the original gradient")
+
+        try Data("{\"passed\":true,\"windowFrame\":true}".utf8).write(to: output)
+        print("PASS: inset viewport, full-window gradient, live split resize, sidebar persistence, horizontal tabs, independent profile colors, wallpaper and classic fallback")
+    }
+
     private func verifyMotionPrimitives() async throws {
         let host=NSWindow(contentRect:NSRect(x:50,y:50,width:520,height:320),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         host.isReleasedWhenClosed=false
@@ -764,7 +891,7 @@ extension BrowserApp {
         try expect(tabHoverRegion(horizontal:false).contains(NSPoint(x:2,y:content.bounds.midY)) && !tabHoverRegion(horizontal:false).contains(NSPoint(x:120,y:content.bounds.midY)),"Vertical reveal is not restricted to the outer edge")
         let vertical=pageArea.convert(pageArea.bounds,to:content)
         revealTabsFromEdge()
-        try expect(!sidebar.isHidden && sidebarWidth.constant==238,"Hidden vertical tabs failed to reveal")
+        try expect(!sidebar.isHidden && abs(sidebarWidth.constant-resolvedSidebarWidth(preferredSidebarWidth))<0.01 && abs(sidebar.frame.width-sidebarWidth.constant)<0.01 && sidebarWidth.constant>=206,"Hidden vertical tabs failed to reveal at the configured width")
         let plus=sidebarNewTab.convert(sidebarNewTab.bounds,to:content)
         let toggle=sidebarRevealToggle.convert(sidebarRevealToggle.bounds,to:content)
         try expect(!sidebarRevealToggle.isHidden && sidebarToggleButton.isHidden && !plus.intersects(toggle) && abs(plus.midY-toggle.midY)<0.01,"Revealed New Tab covers the sidebar toggle")
@@ -804,7 +931,7 @@ extension BrowserApp {
         configureHorizontalTabs();content.layoutSubtreeIfNeeded()
         try expect(tabHoverRegion(horizontal:true).contains(NSPoint(x:mainArea.frame.midX,y:content.bounds.maxY-2)) && !tabHoverRegion(horizontal:true).contains(NSPoint(x:mainArea.frame.midX,y:content.bounds.maxY-28)),"Horizontal reveal is not restricted to the top edge")
         let horizontal=pageArea.convert(pageArea.bounds,to:content)
-        try expect(horizontalChrome.allSatisfy(\.isHidden) && pageAreaTop.constant==42,"Horizontal tabs cannot be put away")
+        try expect(horizontalChrome.allSatisfy(\.isHidden) && pageAreaTop.constant==42 + pageFrameInset,"Horizontal tabs cannot be put away")
         revealTabsFromEdge()
         try expect(horizontalChrome.allSatisfy{!$0.isHidden},"Hidden horizontal tabs failed to reveal")
         try expect(pageArea.convert(pageArea.bounds,to:content)==horizontal,"Horizontal hover resized the website")
@@ -890,7 +1017,7 @@ extension BrowserApp {
                     try expect(sidebarSeparator.isHidden, "Old header separator remains visible")
                 }
                 if placement != .horizontal && mode == .tabBar {
-                    try expect(toolbar.superview === sidebarAddressHost && pageAreaTop.constant == 0, "Sidebar URL consumes webpage height")
+                    try expect(toolbar.superview === sidebarAddressHost && pageAreaTop.constant == pageFrameInset, "Sidebar URL consumes webpage height")
                     let field = topAddressSurface.convert(topAddressSurface.bounds,to:content)
                     let list = sidebarTabScroll.convert(sidebarTabScroll.bounds,to:content)
                     try expect(abs(field.minY-list.maxY-8) < 0.5, "Sidebar address is not directly above pins/tabs")
@@ -924,7 +1051,7 @@ extension BrowserApp {
                 addressField.abortEditing(); window.makeFirstResponder(activeWebView)
                 hideToolbar(animated: false); content.layoutSubtreeIfNeeded()
                 if mode == .tabBar && placement == .horizontal {
-                    try expect(horizontalTabsTrailing.constant == -300 && pageAreaTop.constant == 44, "Compact URL did not share tab row")
+                    try expect(horizontalTabsTrailing.constant == -300 && pageAreaTop.constant == 44 + pageFrameInset, "Compact URL did not share tab row")
                 }
                 if let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds), placement == .horizontal {
                     content.cacheDisplay(in:content.bounds,to:bitmap)
@@ -950,7 +1077,7 @@ extension BrowserApp {
         toggleSidebar()
         let target=activeTab!
         target.showsSearchView=true;applyAddressChrome();content.layoutSubtreeIfNeeded()
-        try expect(pageAreaTop.constant==0 && !toolbar.isHidden,"Homepage sidebar URL is missing or reserves webpage space")
+        try expect(pageAreaTop.constant==pageFrameInset && !toolbar.isHidden,"Homepage sidebar URL is missing or reserves webpage space")
         target.showsSearchView=false;applyAddressChrome()
         BrowserTabPlacement.current = .horizontal
         UserDefaults.standard.set(true, forKey: "horizontalTabsHidden")
@@ -1020,6 +1147,7 @@ extension BrowserApp {
         window.sendEvent(returnKey)
         try expect(header.nameField.currentEditor()==nil && tabGroups.first(where:{$0.id==groupID})?.name=="Research","Return did not save and unfocus group name")
         guard let container=groupContainers[groupID] else{throw PerformanceTestFailure(message:"Missing connected group")}
+        try expect(container.layer?.animation(forKey:"groupFold.position")==nil && container.clip.layer?.animation(forKey:"groupFold.bounds")==nil,"New group animated from intermediate stack position")
         try expect(header.superview === container && tabRows[first.id]?.superview === container.members && container.clip.layer?.masksToBounds==true,"Group members are not connected inside a clipped container")
         content.layoutSubtreeIfNeeded()
         try expect(container.clip.frame.minX>=20,"Group members are not indented")
@@ -1031,6 +1159,17 @@ extension BrowserApp {
         try expect(container.clip.frame.height>60,"Expanded group did not restore member space")
         if Motion.enabled && window.occlusionState.contains(.visible) {try expect(container.clip.layer?.animation(forKey:"groupFold.bounds") != nil,"Fold-out animation missing")}
         try expect(visibleSidebarTabs.contains{$0.id==first.id},"Expanded group did not restore members")
+        func groupPosition() -> Int? { tabStack.arrangedSubviews.firstIndex(of:container) }
+        content.layoutSubtreeIfNeeded()
+        let originalOrder=groupPosition()
+        let originalY=container.frame.minY
+        refreshTabs();content.layoutSubtreeIfNeeded()
+        try expect(groupPosition()==originalOrder && abs(container.frame.minY-originalY)<1,"Group moved on repeated render")
+        switchToSpace(1);switchToSpace(0);content.layoutSubtreeIfNeeded()
+        guard let restored=groupContainers[groupID] else {throw PerformanceTestFailure(message:"Group missing after profile roundtrip")}
+        try expect(restored.layer?.animation(forKey:"groupFold.position")==nil,"Profile recreated group animated from stale mount position")
+        try expect(tabStack.arrangedSubviews.firstIndex(of:restored)==originalOrder && abs(restored.frame.minY-originalY)<1,"Group position changed across profile switch")
+        try expect(tabStack.arrangedSubviews.last === tabSpacer,"Top tab layout left spacer above groups")
         let pin=BrowserTab();pin.ownerSpaceID=ownerA;pin.isPinned=true;tabs.append(pin);refreshTabs()
         commandGroupTab(pin.id)
         try expect(pin.groupID==nil && pin.isPinned,"Command-click unpinned a pin")
@@ -1310,5 +1449,85 @@ extension BrowserApp {
                 print("CORPUS \(variant) round \(round) \(address) \(row["nativeLoadWaitMs"]!)ms")
             }
         }
+    }
+}
+
+extension BrowserApp {
+    private func verifyReliability(base: String, output: URL) async throws {
+        window.makeKeyAndOrderFront(nil)
+        loadRules()
+        try await waitFor("Local rule compilation failed", timeout: 15) { fastRule != nil }
+        let page = try await loadFixture("/plain?recovery", base: base)
+        let view = page.webView!, owner = ownerSpace(for: page).saved.id
+        let terminate = NSSelectorFromString("_killWebContentProcess")
+        let actualTermination = view.responds(to: terminate)
+        if actualTermination {
+            view.perform(terminate)
+            try await waitFor("Renderer termination callback missing") { page.loadError != nil }
+        } else { webViewWebContentProcessDidTerminate(view) }
+        print("Renderer recovery trigger:", actualTermination ? "isolated WebKit process termination" : "delegate callback simulation")
+        try expect(page.loadError != nil && !page.navigationInProgress && page.currentNavigation == nil,
+                   "Terminated renderer did not offer recovery or restarted itself")
+        try expect(page.faviconTask == nil && !page.previewCaptureInFlight, "Stale work survived renderer loss")
+        reloadPage()
+        try await waitFor("Explicit reload did not recover") { page.navigationTiming.finished != nil }
+        try expect(page.loadError == nil && page.recoveryOverlay == nil && ownerSpace(for: page).saved.id == owner,
+                   "Reload left stale recovery UI or changed account")
+        let other = try await loadFixture("/plain?other", base: base)
+        webViewWebContentProcessDidTerminate(view)
+        try expect(activeTabID == other.id && homeView.isHidden, "Background failure stole the foreground")
+        selectTab(page); reloadPage()
+        try await waitFor("Background recovery failed") { page.navigationTiming.finished != nil }
+        try expect(splitTabs(sourceID: page.id, targetID: other.id), "Recovery split setup failed")
+        webViewWebContentProcessDidTerminate(view)
+        try expect(page.recoveryOverlay?.superview === view && view.alphaValue == 1 && homeView.isHidden,
+                   "Crashed split pane hid its sibling or has no retry control")
+        content.layoutSubtreeIfNeeded()
+        if let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming]),
+           let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
+            try data.write(to: output.deletingLastPathComponent().appendingPathComponent("split-recovery.png"))
+        }
+        let retry = page.recoveryOverlay!.subviews.compactMap { $0 as? NSButton }.first!
+        reloadStoppedPage(retry)
+        try await waitFor("Split recovery failed") { page.navigationTiming.finished != nil }
+        endSplit()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("WebbyDownloads-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data("existing".utf8).write(to: folder.appendingPathComponent("report.txt"))
+        UserDefaults.standard.removeObject(forKey: "browserRecentDownloads")
+        downloads = BrowserDownloads(directory: folder)
+        for _ in 0..<2 {
+            view.startDownload(using: URLRequest(url: URL(string: base + "/download")!)) { self.downloads.attach($0) }
+        }
+        try await waitFor("Concurrent downloads did not finish", timeout: 15) {
+            self.downloads.testEntries.count == 2 && !self.downloads.hasActiveDownloads
+        }
+        try expect(downloads.testEntries.allSatisfy { $0.status == "Finished" }, "Download failed")
+        try expect(Set(downloads.testEntries.compactMap { $0.url?.lastPathComponent }) == ["report 2.txt", "report 3.txt"],
+                   "Concurrent download overwrote an existing or in-flight file")
+        let existing = try String(contentsOf: folder.appendingPathComponent("report.txt"))
+        try expect(existing == "existing", "Existing download overwritten")
+        try expect(downloads.testRetainedCount == 0, "Completed download remained retained")
+        view.startDownload(using: URLRequest(url: URL(string: base + "/download-slow")!)) { self.downloads.attach($0) }
+        try await waitFor("Slow download never attached") { self.downloads.hasActiveDownloads }
+        downloads.testCancelActive()
+        try expect(!downloads.hasActiveDownloads && downloads.testRetainedCount == 0 && downloads.testEntries.last?.status == "Cancelled", "Cancel left a live download")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try expect(downloads.testEntries.last?.status == "Cancelled", "Late callback overwrote cancellation")
+        let unavailable = folder.appendingPathComponent("not-a-folder")
+        try Data("file".utf8).write(to: unavailable)
+        UserDefaults.standard.removeObject(forKey: "browserRecentDownloads")
+        downloads = BrowserDownloads(directory: unavailable)
+        view.startDownload(using: URLRequest(url: URL(string: base + "/download")!)) { self.downloads.attach($0) }
+        try await waitFor("Destination failure did not settle") {
+            self.downloads.testEntries.count == 1 && !self.downloads.hasActiveDownloads
+        }
+        try expect(downloads.testEntries[0].status.hasPrefix("Failed:") && downloads.testRetainedCount == 0,
+                   "Unwritable destination remained stuck")
+        try expect(BrowserDownloads.safeFilename("../report.txt") == "report.txt" && BrowserDownloads.safeFilename("..") == "Download",
+                   "Unsafe download filename")
+        try Data("{\"passed\":true,\"rules\":true,\"rendererRecovery\":true,\"splitRecovery\":true,\"concurrentDownloads\":true,\"cancelDownload\":true,\"destinationFailure\":true}".utf8).write(to: output)
+        print("PASS: runtime rules; foreground/background/split recovery; concurrent downloads; no overwrite; cancellation; failed destination")
     }
 }

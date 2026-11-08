@@ -467,7 +467,7 @@ private final class SuggestionRow: NSView {
     }
 
     private func makePanel(in container: NSView, anchor: NSView, window: NSWindow) {
-        let view = NSVisualEffectView()
+        let view = WebbyGlassBackdrop()
         view.material = .hudWindow
         view.blendingMode = .withinWindow
         view.state = .active

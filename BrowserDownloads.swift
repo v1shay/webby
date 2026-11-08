@@ -50,8 +50,37 @@ import WebKit
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }
 
+// Serial reservations prevent two simultaneous downloads choosing the same name.
+// Cloud/external Downloads folders never block AppKit's event thread.
+private final class DownloadDestinations {
+    private let queue = DispatchQueue(label: "local.webby.download-destinations", qos: .utility)
+    private var reserved = Set<String>()
+    let folder: URL
+    init(folder: URL) { self.folder = folder }
+    func reserve(_ name: String, completion: @escaping (Result<URL, Error>) -> Void) {
+        queue.async { [self] in
+            let result = Result<URL, Error> {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let stem = (name as NSString).deletingPathExtension
+                let ext = (name as NSString).pathExtension
+                var candidate = folder.appendingPathComponent(name)
+                var suffix = 2
+                while FileManager.default.fileExists(atPath: candidate.path) || reserved.contains(candidate.path) {
+                    let next = ext.isEmpty ? "\(stem) \(suffix)" : "\(stem) \(suffix).\(ext)"
+                    candidate = folder.appendingPathComponent(next); suffix += 1
+                }
+                reserved.insert(candidate.path)
+                return candidate
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+    func release(_ url: URL) { queue.async { self.reserved.remove(url.path) } }
+}
+
 @MainActor final class BrowserDownloads: NSObject, NSMenuDelegate, WKDownloadDelegate {
     struct Entry {
+        let id = UUID()
         var name: String
         var url: URL?
         var progress: Progress?
@@ -61,17 +90,19 @@ import WebKit
     let button = DownloadFolderButton(frame: .zero)
     private var entries: [Entry] = []
     private var active = [ObjectIdentifier: Int]()
-    private var reservedPaths = Set<String>()
+    private var retainedDownloads = [ObjectIdentifier: WKDownload]()
+    private let destinations: DownloadDestinations
     private let menu = NSMenu(title: "Downloads")
     var hasActiveDownloads: Bool { !active.isEmpty }
 
-    override init() {
+    init(directory: URL? = nil) {
+        destinations = DownloadDestinations(folder: directory ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads"))
         super.init()
         menu.delegate = self
         button.onClick = { [weak self] in self?.showMenu() }
-        let saved = UserDefaults.standard.stringArray(forKey: "browserRecentDownloads") ?? []
+        let saved = Array((UserDefaults.standard.stringArray(forKey: "browserRecentDownloads") ?? []).suffix(30))
         entries = saved.compactMap { path in
-            guard FileManager.default.fileExists(atPath: path) else { return nil }
             return Entry(name: URL(fileURLWithPath: path).lastPathComponent,
                          url: URL(fileURLWithPath: path), progress: nil, status: "Finished")
         }
@@ -82,13 +113,16 @@ import WebKit
     var widgetLines: [String] {
         entries.suffix(5).reversed().map { entry in
             let progress = entry.progress?.fractionCompleted ?? 0
-            return entry.status == "Downloading" && progress.isFinite
-                ? "↓ \(entry.name)  ·  \(Int(max(0, min(1, progress)) * 100))%"
-                : "✓ \(entry.name)"
+            if entry.status == "Downloading" && progress.isFinite {
+                return "↓ \(entry.name)  ·  \(Int(max(0, min(1, progress)) * 100))%"
+            }
+            return "\(entry.status == "Finished" ? "✓" : "!") \(entry.name) · \(entry.status)"
         }
     }
 
     func attach(_ download: WKDownload) {
+        guard active[ObjectIdentifier(download)] == nil else { return }
+        retainedDownloads[ObjectIdentifier(download)] = download
         download.delegate = self
         let index = entries.count
         entries.append(Entry(name: "Downloading…", url: nil, progress: download.progress, status: "Downloading"))
@@ -97,42 +131,66 @@ import WebKit
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
                   suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
-        let folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
-        do { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
-        catch { completionHandler(nil); return }
-        let safeName = URL(fileURLWithPath: suggestedFilename).lastPathComponent
-        let original = safeName.isEmpty ? "Download" : safeName
-        let stem = (original as NSString).deletingPathExtension
-        let ext = (original as NSString).pathExtension
-        var destination = folder.appendingPathComponent(original)
-        var suffix = 2
-        while FileManager.default.fileExists(atPath: destination.path) || reservedPaths.contains(destination.path) {
-            let name = ext.isEmpty ? "\(stem) \(suffix)" : "\(stem) \(suffix).\(ext)"
-            destination = folder.appendingPathComponent(name)
-            suffix += 1
+        let allocator = destinations
+        let name = Self.safeFilename(suggestedFilename)
+        if let index = active[ObjectIdentifier(download)] { entries[index].name = name }
+        allocator.reserve(name) { [weak self, weak download] result in
+            guard let self, let download, let index = self.active[ObjectIdentifier(download)] else {
+                if case .success(let url) = result { allocator.release(url) }
+                completionHandler(nil); return
+            }
+            switch result {
+            case .success(let destination):
+                self.entries[index].name = destination.lastPathComponent
+                self.entries[index].url = destination
+                completionHandler(destination)
+            case .failure(let error):
+                self.finish(download, status: "Failed: \(error.localizedDescription)")
+                completionHandler(nil)
+            }
         }
-        reservedPaths.insert(destination.path)
-        if let index = active[ObjectIdentifier(download)] {
-            entries[index].name = destination.lastPathComponent
-            entries[index].url = destination
-        }
-        completionHandler(destination)
     }
 
-    func downloadDidFinish(_ download: WKDownload) {
-        guard let index = active.removeValue(forKey: ObjectIdentifier(download)) else { return }
-        if let path = entries[index].url?.path { reservedPaths.remove(path) }
+    static func safeFilename(_ suggested: String) -> String {
+        let name = (suggested as NSString).lastPathComponent
+            .components(separatedBy: .controlCharacters).joined()
+            .replacingOccurrences(of: ":", with: "-")
+        guard !name.isEmpty && name != "." && name != ".." && name != "/" else { return "Download" }
+        var bounded = ""
+        for character in name {
+            guard bounded.utf8.count + String(character).utf8.count <= 180 else { break }
+            bounded.append(character)
+        }
+        return bounded.isEmpty ? "Download" : bounded
+    }
+
+    private func finish(_ download: WKDownload, status: String) {
+        let id = ObjectIdentifier(download)
+        guard let index = active.removeValue(forKey: id) else { return }
+        retainedDownloads.removeValue(forKey: id)
+        if let url = entries[index].url { destinations.release(url) }
         entries[index].progress = nil
-        entries[index].status = "Finished"
+        entries[index].status = status
+        // Indices remain stable while other downloads are in flight.
+        if active.isEmpty && entries.count > 30 { entries = Array(entries.suffix(30)) }
         persistRecent()
     }
 
+    func downloadDidFinish(_ download: WKDownload) { finish(download, status: "Finished") }
+
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        guard let index = active.removeValue(forKey: ObjectIdentifier(download)) else { return }
-        if let path = entries[index].url?.path { reservedPaths.remove(path) }
-        entries[index].progress = nil
-        entries[index].status = "Failed: \(error.localizedDescription)"
+        finish(download, status: "Failed: \(error.localizedDescription)")
+    }
+
+    @objc private func cancelDownload(_ item: NSMenuItem) {
+        guard let entryID = item.representedObject as? UUID,
+              let index = entries.firstIndex(where: { $0.id == entryID }),
+              let id = active.first(where: { $0.value == index })?.key,
+              let download = retainedDownloads[id] else { return }
+        // Mark terminal before cancellation, so a late failure callback is harmless.
+        download.delegate = nil
+        finish(download, status: "Cancelled")
+        download.cancel { _ in }
     }
 
     private func persistRecent() {
@@ -161,7 +219,8 @@ import WebKit
             empty.isEnabled = false
             menu.addItem(empty)
         }
-        for entry in entries.suffix(12).reversed() {
+        for index in entries.indices.suffix(12).reversed() {
+            let entry = entries[index]
             let percentage = entry.progress.flatMap { progress -> String? in
                 let value = progress.fractionCompleted
                 guard value.isFinite else { return nil }
@@ -174,6 +233,12 @@ import WebKit
             item.representedObject = entry.url
             item.toolTip = entry.status
             item.isEnabled = entry.status == "Finished"
+            if entry.status == "Downloading" {
+                let cancel = menu.addItem(withTitle: "Cancel \(entry.name)", action: #selector(cancelDownload(_:)), keyEquivalent: "")
+                cancel.target = self; cancel.representedObject = entry.id
+            } else if entry.status != "Finished" {
+                item.title += " — " + entry.status
+            }
         }
         menu.addItem(.separator())
         let folder = menu.addItem(withTitle: "Open Downloads Folder", action: #selector(openFolder), keyEquivalent: "")
@@ -182,7 +247,18 @@ import WebKit
 
     @objc private func openDownload(_ item: NSMenuItem) {
         guard let url = item.representedObject as? URL else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        DispatchQueue.global(qos: .userInitiated).async {
+            let exists = FileManager.default.fileExists(atPath: url.path)
+            DispatchQueue.main.async {
+                if exists { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                else {
+                    let alert = NSAlert()
+                    alert.messageText = "This download has moved"
+                    alert.informativeText = "We can’t find \(url.lastPathComponent) at its saved location. Let’s check Downloads in Finder."
+                    alert.addButton(withTitle: "OK"); alert.runModal()
+                }
+            }
+        }
     }
 
     @objc private func openFolder() {

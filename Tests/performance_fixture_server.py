@@ -9,6 +9,18 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         self.counts[path] = self.counts.get(path, 0) + 1
         if path.startswith('/full-'): self.counts[self.path]=self.counts.get(self.path,0)+1
+        if path in ('/download', '/download-slow'):
+            body = b'Webby download fixture\n' if path == '/download' else b'x' * 131072
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Content-Disposition', 'attachment; filename="report.txt"')
+            self.send_header('Content-Length', str(len(body))); self.end_headers()
+            try:
+                for offset in range(0, len(body), 1024):
+                    self.wfile.write(body[offset:offset+1024]); self.wfile.flush()
+                    if path == '/download-slow': time.sleep(0.03)
+            except (BrokenPipeError, ConnectionResetError): pass
+            return
         if path == '/video.mp4':
             body=(Path(__file__).parent/'Fixtures/video.mp4').read_bytes()
             start,end=0,len(body)-1

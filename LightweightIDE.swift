@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 
 // IDE projects are independent of browser profiles, website data and cookies.
 enum IDEJava {
@@ -23,6 +24,29 @@ enum IDEJava {
             if result.count > 2000 { throw NSError(domain: "WebbyIDE", code: 1, userInfo: [NSLocalizedDescriptionKey: "This project has more than 2,000 Java source files."]) }
         }
         return result.sorted { $0.path < $1.path }
+    }
+    static func prepare(in root: URL) throws -> (files: [URL], jdk: URL) {
+        let files = try sources(in: root)
+        guard !files.isEmpty else { throw NSError(domain: "WebbyIDE", code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "This project has no Java source files."]) }
+        let discovery = Process(), pipe = Pipe()
+        discovery.executableURL = URL(fileURLWithPath: "/usr/libexec/java_home")
+        discovery.standardOutput = pipe; discovery.standardError = FileHandle.nullDevice
+        try discovery.run()
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while discovery.isRunning && ProcessInfo.processInfo.systemUptime < deadline { usleep(20_000) }
+        if discovery.isRunning {
+            discovery.terminate()
+            usleep(100_000)
+            if discovery.isRunning { kill(discovery.processIdentifier, SIGKILL) }
+            throw NSError(domain: "WebbyIDE", code: 2, userInfo: [NSLocalizedDescriptionKey: "Finding Java took too long. Try again after checking your JDK installation."])
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard discovery.terminationStatus == 0,
+              let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
+            throw NSError(domain: "WebbyIDE", code: 1, userInfo: [NSLocalizedDescriptionKey: "Install a JDK to compile Java. Webby uses /usr/libexec/java_home to find it."])
+        }
+        return (files, URL(fileURLWithPath: path))
     }
     static func command(root: URL, jdk: URL, files: [URL], main: String?, marker: String) -> String {
         let output = root.appendingPathComponent(".webby-build/classes-" + UUID().uuidString)
@@ -162,7 +186,7 @@ private final class IDELineNumbers: NSRulerView {
     func mayClose() -> Bool { workbench?.mayClose() ?? resolveEdits() }
     func shutdown() { if let workbench { workbench.shutdown(); return }; highlightWork?.cancel(); terminal.stop() }
     private func buildView() {
-        let glass = NSVisualEffectView(frame: view.bounds)
+        let glass = WebbyGlassBackdrop(frame: view.bounds)
         glass.autoresizingMask = [.width, .height]; view.addSubview(glass)
         glass.material = .underWindowBackground; glass.blendingMode = .behindWindow; glass.state = .active
         let controls = NSStackView()
@@ -390,21 +414,27 @@ private final class IDELineNumbers: NSRulerView {
         guard let root else { openProject(); return }
         guard marker == nil else { showError(failure("A Java command is already running. Stop it first.")); return }
         guard saveFile() else { return }
-        do {
-            let files = try IDEJava.sources(in: root.url)
-            guard !files.isEmpty else { throw failure("This project has no Java source files.") }
-            let main = entry.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if run, main.range(of: #"^[\p{L}_$][\p{L}\p{N}_$]*(?:\.[\p{L}_$][\p{L}\p{N}_$]*)*$"#, options: .regularExpression) == nil { throw failure("Enter the main class, for example Main or example.Main.") }
-            let discovery = Process(); discovery.executableURL = URL(fileURLWithPath: "/usr/libexec/java_home")
-            let pipe = Pipe(); discovery.standardOutput = pipe; discovery.standardError = FileHandle.nullDevice
-            try discovery.run(); let data = pipe.fileHandleForReading.readDataToEndOfFile(); discovery.waitUntilExit()
-            guard discovery.terminationStatus == 0, let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { throw failure("Install a JDK to compile Java. Webby uses /usr/libexec/java_home to find it.") }
-            let token = "WEBBY_JAVA_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-            marker = token; outputTail = ""; terminal.open()
-            terminal.sendCommand(IDEJava.command(root: root.url, jdk: URL(fileURLWithPath: path), files: files, main: run ? main : nil, marker: token))
-            status.stringValue = run ? "Compiling and running \(main)…" : "Compiling \(files.count) Java files…"
-        } catch { showError(error) }
+        let main = entry.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if run, main.range(of: #"^[\p{L}_$][\p{L}\p{N}_$]*(?:\.[\p{L}_$][\p{L}\p{N}_$]*)*$"#, options: .regularExpression) == nil {
+            showError(failure("Enter the main class, for example Main or example.Main.")); return
+        }
+        let token = "WEBBY_JAVA_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        marker = token; status.stringValue = "Finding Java and project sources…"
+        let project = root.url
+        Task { [weak self] in
+            do {
+                let prepared = try await Task.detached(priority: .userInitiated) { try IDEJava.prepare(in: project) }.value
+                guard let self, self.marker == token, self.root?.url == project else { return }
+                self.outputTail = ""; self.terminal.open()
+                self.terminal.sendCommand(IDEJava.command(root: project, jdk: prepared.jdk, files: prepared.files, main: run ? main : nil, marker: token))
+                self.status.stringValue = run ? "Compiling and running \(main)…" : "Compiling \(prepared.files.count) Java files…"
+            } catch {
+                guard let self, self.marker == token else { return }
+                self.marker = nil; self.showError(error)
+            }
+        }
     }
+
     private func receiveOutput(_ data: Data) {
         guard let marker else { return }
         outputTail += String(decoding: data, as: UTF8.self)

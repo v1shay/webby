@@ -183,7 +183,7 @@ private final class WorkbenchStartupOutput: @unchecked Sendable {
 }
 
 @MainActor final class CodeWorkbench: NSObject, WKNavigationDelegate, WKUIDelegate {
-    let view = NSVisualEffectView()
+    let view = WebbyGlassBackdrop()
     private let web: WKWebView
     private let message = NSTextField(labelWithString: "Let’s open our workspace…")
     private let id = UUID()
@@ -205,7 +205,7 @@ private final class WorkbenchStartupOutput: @unchecked Sendable {
         super.init()
         view.material = .underWindowBackground; view.blendingMode = .withinWindow; view.state = .active
         web.navigationDelegate = self; web.uiDelegate = self
-        web.setValue(false, forKey: "drawsBackground")
+        GlassPageInjector.setDrawsBackground(false, on: web)
         let controls = NSStackView(); controls.spacing = 8
         for (symbol, title, action) in [("folder", "Open Project", #selector(chooseProject)), ("folder.badge.plus", "New Project", #selector(newProject))] {
             let button = GlassButton(symbol: symbol, label: title, target: self, action: action)
