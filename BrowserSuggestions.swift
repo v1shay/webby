@@ -115,7 +115,9 @@ actor BrowserSuggestionIndex {
                     guard bytes.range(of:needle) != nil else{return}
                 } else if !record.titleKey.contains(query) && !record.urlKey.contains(query) {return}
             }
-            let identity=record.urlKey+(fuse ? "|"+source.id.uuidString:"")
+            // URL paths, queries and fragments can be case-sensitive. The lowercase
+            // key is for matching only; distinct destinations must stay selectable.
+            let identity=record.url+(fuse ? "|"+source.id.uuidString:"")
             guard !seen.contains(identity) else{return}
             let titlePrefix:Bool
             if let bytes=record.asciiSearch,let needle=asciiQuery {titlePrefix=needle.count<=record.titleByteCount && bytes.starts(with:needle)}

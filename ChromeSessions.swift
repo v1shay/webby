@@ -46,7 +46,8 @@ enum ChromeSessions {
     }
 
     static func readCookies(from source: ChromeProfileSource, key: Data) throws -> [HTTPCookie] {
-        let file = source.url.appendingPathComponent("Cookies")
+        let modern = source.url.appendingPathComponent("Network/Cookies")
+        let file = FileManager.default.fileExists(atPath: modern.path) ? modern : source.url.appendingPathComponent("Cookies")
         let temporary = FileManager.default.temporaryDirectory
             .appendingPathComponent("ChromeCookies-\(UUID())", isDirectory: true)
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)

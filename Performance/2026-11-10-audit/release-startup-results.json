@@ -1,0 +1,44 @@
+[
+  {
+    "processWallMs": 283.6248749990773,
+    "residentPageViews": 0,
+    "restoredTabCount": 80,
+    "windowConfiguredMs": 162.4069999998028
+  },
+  {
+    "processWallMs": 294.1634160015383,
+    "residentPageViews": 0,
+    "restoredTabCount": 80,
+    "windowConfiguredMs": 175.05258333403617
+  },
+  {
+    "processWallMs": 304.9897079981747,
+    "residentPageViews": 0,
+    "restoredTabCount": 80,
+    "windowConfiguredMs": 179.42125000263331
+  },
+  {
+    "processWallMs": 304.9444169992057,
+    "residentPageViews": 0,
+    "restoredTabCount": 80,
+    "windowConfiguredMs": 177.42854166499455
+  },
+  {
+    "processWallMs": 361.8393750002724,
+    "residentPageViews": 0,
+    "restoredTabCount": 80,
+    "windowConfiguredMs": 191.32262499988428
+  },
+  {
+    "processWallMs": 507.32170899937046,
+    "residentPageViews": 0,
+    "restoredTabCount": 80,
+    "windowConfiguredMs": 184.3777083340683
+  },
+  {
+    "processWallMs": 310.84245899910457,
+    "residentPageViews": 0,
+    "restoredTabCount": 80,
+    "windowConfiguredMs": 171.52416666795034
+  }
+]

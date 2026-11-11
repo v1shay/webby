@@ -2,7 +2,16 @@
 set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 app=$1
-cef="$script_dir/Vendor/CEF"
+pinned_cef="$script_dir/Vendor/CEF"
+cef="${WEBBY_CEF_DIR:-$pinned_cef}"
+if [ "$cef" != "$pinned_cef" ]; then
+  pinned_version=$(sed -n 's/^#define CEF_VERSION "\(.*\)"$/\1/p' "$pinned_cef/include/cef_version.h")
+  custom_version=$(sed -n 's/^#define CEF_VERSION "\(.*\)"$/\1/p' "$cef/include/cef_version.h")
+  if [ -z "$pinned_version" ] || [ "$custom_version" != "$pinned_version" ]; then
+    echo "WEBBY_CEF_DIR must contain the pinned CEF release ($pinned_version)." >&2
+    exit 1
+  fi
+fi
 frameworks="$app/Contents/Frameworks"
 mkdir -p "$frameworks"
 if [ ! -f "$cef/Release/Chromium Embedded Framework.framework/Chromium Embedded Framework" ]; then

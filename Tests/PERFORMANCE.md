@@ -22,12 +22,23 @@ Run from the repository's `outputs` directory. The corpus is any JSON array of H
 - Navigation/Paint Timing entries where supported, final URL, page title, DOM/resource counts, viewport, timeout and evaluation errors.
 - Browser-host CPU during the load interval and cumulative host peak RSS. These exclude WebKit's separate renderer, networking and GPU processes. Do not sum or label these numbers as total browser resource use.
 - Sixty requestAnimationFrame opportunities after load, with a three-second collection bound. These are not compositor FPS, scrolling smoothness, interaction-to-next-paint or physical display latency.
-- Existing native regression tests measure synchronous tab-selection CPU, suggestion work, and behavior of groups, profiles, Fuse, splits, media, controls, typography and motion cancellation. Selection CPU excludes input delivery and the compositor. Nearest-rank p95 and raw selection samples are included in the corrected report.
+- Existing native regression tests measure synchronous tab-selection elapsed time, suggestion work, and behavior of groups, profiles, Fuse, splits, media, controls, typography and motion cancellation. The selection interval ends before final input focus and excludes input delivery and the compositor. The legacy `SelectionCPU` JSON fields contain elapsed time; the report also records raw samples and nearest-rank p95.
 - Optional controls: a Webby page with glass injection off and a WKWebView without Webby user scripts in the same browser shell. These are diagnostic controls, not measurements of Safari or Chrome. Check recorded viewport dimensions and page titles before comparing.
 
 Fresh visits use a new ephemeral WebKit store per run. Repeat visits reuse that store and respect ordinary server cache policies. OS DNS/TLS caches, network/server variance, thermal conditions and background user activity are uncontrolled. Do not label the first visit a fully cold load. Build manifests and run manifests record optimization, source hashes, hardware, OS, compiler, power and thermal reports.
 
 Failures, timeouts, challenge titles and missing measurements remain in results. A challenge page must not be counted as a successful fast website load. Small samples are reported as medians and ranges; they do not establish a world record or a population p95.
+
+## Startup fixture
+
+With an optimized test app built as above, run:
+
+```sh
+WEBBY_TEST_STARTUP=only /private/tmp/webby-bench/candidate/WebbyTests.app/Contents/MacOS/Webby \
+  http://127.0.0.1:1 /private/tmp/webby-bench/startup.json
+```
+
+The normal startup handler uses a disposable profile and 80 saved tabs. It reports elapsed time to the app's configured-window marker and verifies that no restored pages were loaded. It does not time the process loader or measure the first displayed frame. Use `WEBBY_TEST_WMO=1` alongside `WEBBY_TEST_OPTIMIZATION=-O` to match the release compiler's whole-module optimization.
 
 ## Focused checks
 

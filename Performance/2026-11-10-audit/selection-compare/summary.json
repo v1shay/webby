@@ -1,0 +1,54 @@
+[
+  {
+    "run": "0-current",
+    "vertical": {
+      "p95Ms": 16.307666668581078,
+      "homeTransitionMedianMs": 14.797583335166564,
+      "pageToPageMedianMs": 1.347125002212124
+    },
+    "horizontal": {
+      "p95Ms": 16.231041667197132,
+      "homeTransitionMedianMs": 15.177749999566004,
+      "pageToPageMedianMs": 1.5372916677733883
+    }
+  },
+  {
+    "run": "1-variant",
+    "vertical": {
+      "p95Ms": 15.586999998049578,
+      "homeTransitionMedianMs": 14.595874999940861,
+      "pageToPageMedianMs": 1.2289166697883047
+    },
+    "horizontal": {
+      "p95Ms": 15.401166663650656,
+      "homeTransitionMedianMs": 14.937750000171945,
+      "pageToPageMedianMs": 1.437875002011424
+    }
+  },
+  {
+    "run": "2-variant",
+    "vertical": {
+      "p95Ms": 16.080374996818136,
+      "homeTransitionMedianMs": 14.589208332836279,
+      "pageToPageMedianMs": 1.233000002685003
+    },
+    "horizontal": {
+      "p95Ms": 15.278249997209059,
+      "homeTransitionMedianMs": 14.832604168987018,
+      "pageToPageMedianMs": 1.4375416685652453
+    }
+  },
+  {
+    "run": "3-current",
+    "vertical": {
+      "p95Ms": 16.390875000070082,
+      "homeTransitionMedianMs": 15.043958333990304,
+      "pageToPageMedianMs": 1.3651249973918311
+    },
+    "horizontal": {
+      "p95Ms": 15.349583332863403,
+      "homeTransitionMedianMs": 15.010208331659669,
+      "pageToPageMedianMs": 1.5264166650013067
+    }
+  }
+]

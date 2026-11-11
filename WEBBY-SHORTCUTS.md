@@ -36,7 +36,7 @@ The IDE also provides its workbench command palette (⌘⇧P), quick file openin
 
 Only Mini Webby's shortcut is currently user-configurable. Other menu actions without an assigned shortcut do not have an undocumented key combination.
 
-Hover the address/search button briefly to reveal the address bar without focusing it. It retreats after you leave; clicking/typing keeps editing active.
+Hover the address/search button briefly to reveal the address bar without focusing it. The address bar stays available after it opens; clicking or typing focuses it for editing.
 
 Disable automatic link previews under **Tabs & Search → Link Glances on Hover**.
 

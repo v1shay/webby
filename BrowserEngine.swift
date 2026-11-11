@@ -61,3 +61,72 @@ enum BrowserEngine: String, CaseIterable, Codable {
     @objc private func confirmAction() { onConfirm?() }
     @objc private func cancelAction() { onCancel?() }
 }
+
+struct BrowserEngineRule: Identifiable, Codable, Equatable {
+    enum Scope: String, Codable, CaseIterable {
+        case site, link
+        var title: String { self == .site ? "Whole site" : "Exact link" }
+    }
+
+    let scope: Scope
+    let address: String
+    var engine: BrowserEngine
+    var id: String { scope.rawValue + ":" + address }
+
+    private static let key = "webbyEngineRules"
+    static var saved: [Self] {
+        get {
+            UserDefaults.standard.data(forKey: key)
+                .flatMap { try? JSONDecoder().decode([Self].self, from: $0) } ?? []
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: key)
+            }
+        }
+    }
+
+    init?(input: String, scope: Scope, engine: BrowserEngine) {
+        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let address = value.contains("://") ? value : "https://" + value
+        guard !value.isEmpty, let url = URL(string: address),
+              let parts = Self.webAddress(url), let host = parts.host,
+              scope != .link || value.contains("://") else { return nil }
+        self.scope = scope
+        self.address = scope == .site ? host : parts.string ?? address
+        self.engine = engine
+    }
+
+    static func match(_ url: URL, in rules: [Self]) -> Self? {
+        guard !rules.isEmpty, let parts = webAddress(url), let host = parts.host else { return nil }
+        if let link = rules.first(where: { $0.scope == .link && $0.address == parts.string }) {
+            return link
+        }
+        return rules.filter {
+            $0.scope == .site && (host == $0.address || host.hasSuffix("." + $0.address))
+        }.max { $0.address.count < $1.address.count }
+    }
+
+    static func engine(for url: URL) -> BrowserEngine? {
+        guard let rule = match(url, in: saved),
+              rule.engine != .chromium || WBChromiumAvailable() else { return nil }
+        return rule.engine
+    }
+
+    private static func webAddress(_ url: URL) -> URLComponents? {
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = parts.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let rawHost = parts.host?.lowercased(), !rawHost.isEmpty,
+              parts.user == nil, parts.password == nil,
+              !rawHost.contains(where: \.isWhitespace) else { return nil }
+        let host = rawHost.hasSuffix(".") ? String(rawHost.dropLast()) : rawHost
+        guard !host.isEmpty else { return nil }
+        parts.host = host
+        parts.scheme = scheme
+        if parts.path.isEmpty { parts.path = "/" }
+        if (scheme == "https" && parts.port == 443) || (scheme == "http" && parts.port == 80) {
+            parts.port = nil
+        }
+        return parts
+    }
+}

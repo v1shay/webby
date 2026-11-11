@@ -407,8 +407,76 @@ enum WidgetAlignment {
 
     func has(_ kind: WebbyWidget) -> Bool { cards[kind] != nil }
 
+    static func onboardingWidgets(for profile: UUID) -> [WebbyWidget]? {
+        guard let data = UserDefaults.standard.data(forKey: "webbyWidgetCanvas.\(profile.uuidString)"),
+              let placements = try? JSONDecoder().decode([WidgetPlacement].self, from: data) else { return nil }
+        return placements.map(\.kind).filter { $0 != .gmail && $0 != .drive }
+    }
+
+    static func onboardingFrames(for profile: UUID) -> [String: OnboardingWidgetFrame]? {
+        guard let data = UserDefaults.standard.data(forKey: "webbyWidgetCanvas.\(profile.uuidString)"),
+              let stored = try? JSONDecoder().decode([WidgetPlacement].self, from: data) else { return nil }
+        var frames: [String: OnboardingWidgetFrame] = [:]
+        for item in stored where item.kind != .gmail && item.kind != .drive {
+            let size = CGSize(width: item.referenceWidth ?? 1010, height: item.referenceHeight ?? 700)
+            frames[item.kind.rawValue] = OnboardingWidgetFrame(
+                CGRect(x: item.x, y: item.y, width: item.width, height: item.height), in: size)
+        }
+        return frames
+    }
+
+    static func onboardingLayout(kinds: [WebbyWidget], existing: [String: OnboardingWidgetFrame],
+                                 edits: [String: OnboardingWidgetFrame]) -> [String: OnboardingWidgetFrame] {
+        let reference = CGSize(width: 1000, height: 700)
+        let newKinds = kinds.filter { existing[$0.rawValue] == nil }
+        let regions = [CGRect(x: 36, y: 254, width: 928, height: 410)]
+        let arranged = HomepageLayout.header.frames(count: newKinds.count, in: regions)
+        var frames = existing
+        for (kind, frame) in zip(newKinds, arranged) {
+            frames[kind.rawValue] = OnboardingWidgetFrame(frame, in: reference)
+        }
+        for (kind, frame) in edits where frames[kind] != nil { frames[kind] = frame }
+        return frames
+    }
+
+    func applyOnboardingFrames(_ frames: [String: OnboardingWidgetFrame], to keys: Set<String>) {
+        guard !keys.isEmpty, bounds.width > 1, bounds.height > 1 else { return }
+        for index in placements.indices {
+            let key = placements[index].kind.rawValue
+            guard keys.contains(key), let frame = frames[key] else { continue }
+            let rect = WidgetAlignment.fit(frame.rect(in: bounds.size), in: WidgetAlignment.paddedBounds(bounds))
+            placements[index].x = rect.minX
+            placements[index].y = rect.minY
+            placements[index].width = rect.width
+            placements[index].height = rect.height
+            placements[index].referenceWidth = bounds.width
+            placements[index].referenceHeight = bounds.height
+        }
+        save()
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
+    @discardableResult func applyOnboardingWidgets(_ kinds: [WebbyWidget], replaceUncustomized: Bool) -> Bool {
+        let uncustomized = replaceUncustomized && UserDefaults.standard.data(forKey: storageKey) == nil
+        if uncustomized { placements = [] }
+        for kind in kinds where kind != .gmail && kind != .drive {
+            appendWidget(kind)
+        }
+        save()
+        rebuild()
+        return uncustomized
+    }
+
     func addWidget(_ kind: WebbyWidget) {
         guard !has(kind) else { return }
+        appendWidget(kind)
+        save()
+        rebuild()
+    }
+
+    private func appendWidget(_ kind: WebbyWidget) {
+        guard !placements.contains(where: { $0.kind == kind }) else { return }
         let width: CGFloat = kind == .ide || kind.githubKind != nil || kind == .codex || kind == .codexUsage ? 380 : 260
         let height: CGFloat = kind == .codex || kind == .codexUsage ? 280 : kind == .ide || kind.githubKind != nil ? 230 : 190
         let maxX = max(12, bounds.width - horizontalInset - width - 12)
@@ -428,8 +496,6 @@ enum WidgetAlignment {
             y += 24
         }
         placements.append(WidgetPlacement(kind: kind, x: chosen.x, y: chosen.y, width: width, height: height))
-        save()
-        rebuild()
     }
 
     func arrange(in regions:[NSRect],style:HomepageLayout = .header) {
@@ -570,8 +636,9 @@ enum WidgetAlignment {
 
     private func migrateAnchors() {
         guard bounds.width>80,bounds.height>80 else{return}
+        let hasSavedPlacements = UserDefaults.standard.data(forKey: storageKey) != nil
         let backup="webbyWidgetAnchorBackup.v1.\(profile.uuidString)"
-        if UserDefaults.standard.data(forKey:backup)==nil,let data=try? JSONEncoder().encode(placements) {UserDefaults.standard.set(data,forKey:backup)}
+        if hasSavedPlacements, UserDefaults.standard.data(forKey:backup)==nil,let data=try? JSONEncoder().encode(placements) {UserDefaults.standard.set(data,forKey:backup)}
         var changed=false
         let legacy=placements.filter{$0.referenceWidth==nil || $0.referenceHeight==nil}
         let legacyFrames=legacy.map{NSRect(x:$0.x+horizontalInset,y:$0.y,width:$0.width,height:$0.height)}
@@ -593,7 +660,8 @@ enum WidgetAlignment {
                 changed=true
             }
         }
-        if changed {save()}
+        // Starter cards are only a suggestion until the user arranges or saves them.
+        if changed && hasSavedPlacements { save() }
     }
     private func arrangedFrames()->[NSRect] {
         // Normalize older cards edited at different viewport sizes into one

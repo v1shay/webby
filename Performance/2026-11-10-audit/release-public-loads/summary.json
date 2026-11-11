@@ -1,0 +1,101 @@
+[
+  {
+    "url": "https://www.wikipedia.org/",
+    "baseline": {
+      "samples": 4,
+      "medianLoadWaitMs": 1334.8675208308123,
+      "rangeLoadWaitMs": [
+        334.6152083322522,
+        2424.3731666683743
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Wikipedia"
+      ],
+      "challengeSuspected": false
+    },
+    "candidate": {
+      "samples": 4,
+      "medianLoadWaitMs": 1327.690750000329,
+      "rangeLoadWaitMs": [
+        334.34187500097323,
+        2315.8570833329577
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Wikipedia"
+      ],
+      "challengeSuspected": false
+    }
+  },
+  {
+    "url": "https://example.com/",
+    "baseline": {
+      "samples": 4,
+      "medianLoadWaitMs": 103.23795833392069,
+      "rangeLoadWaitMs": [
+        102.5772083303309,
+        124.05362500066985
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Example Domain"
+      ],
+      "challengeSuspected": false
+    },
+    "candidate": {
+      "samples": 4,
+      "medianLoadWaitMs": 115.61875000188593,
+      "rangeLoadWaitMs": [
+        102.87029166647699,
+        173.1361249985639
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "Example Domain"
+      ],
+      "challengeSuspected": false
+    }
+  },
+  {
+    "url": "https://developer.mozilla.org/en-US/",
+    "baseline": {
+      "samples": 4,
+      "medianLoadWaitMs": 143.00193749841128,
+      "rangeLoadWaitMs": [
+        98.43941666622413,
+        186.65816666543833
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "MDN Web Docs"
+      ],
+      "challengeSuspected": false
+    },
+    "candidate": {
+      "samples": 4,
+      "medianLoadWaitMs": 122.93685416625522,
+      "rangeLoadWaitMs": [
+        101.41366666357499,
+        143.648833334737
+      ],
+      "timeouts": 0,
+      "navigationErrors": 0,
+      "measurementErrors": 0,
+      "titles": [
+        "MDN Web Docs"
+      ],
+      "challengeSuspected": false
+    }
+  }
+]

@@ -137,11 +137,12 @@ struct BrowserNavigationTiming {
 
 @MainActor enum BrowserChromeTone {
     static let world=WKContentWorld.world(name:"WebbyChromeTone")
+    private static let source = Bundle.main.url(forResource: "ChromeTone", withExtension: "js")
+        .flatMap { try? String(contentsOf: $0) }
     static func install(into configuration:WKWebViewConfiguration,handler:WKScriptMessageHandler) {
         let marker="/* Webby top-edge color v1 */"
         guard !configuration.userContentController.userScripts.contains(where:{$0.source.hasPrefix(marker)}),
-              let url=Bundle.main.url(forResource:"ChromeTone",withExtension:"js"),
-              let source=try? String(contentsOf:url) else {return}
+              let source else {return}
         configuration.userContentController.add(handler,contentWorld:world,name:"browserChromeTone")
         configuration.userContentController.addUserScript(WKUserScript(source:source,injectionTime:.atDocumentEnd,forMainFrameOnly:true,in:world))
     }

@@ -139,6 +139,12 @@ struct GradientStop: Decodable { let location: Double, color: String }
 
     func showThinking() { transitionToThinking() }
 
+    func showOnboardingStill() {
+        hide()
+        setPoses(IndicatorScenes.search.firstPoses)
+        layer.opacity = 1
+    }
+
     func showScene(_ id: String) {
         cancelCycle(); displayScene(id)
     }

@@ -1,0 +1,18 @@
+{
+  "viewports": {
+    "baseline-0": [
+      "{\"height\": 963, \"width\": 1392}"
+    ],
+    "candidate-0": [
+      "{\"height\": 963, \"width\": 1392}"
+    ],
+    "candidate-1": [
+      "{\"height\": 963, \"width\": 1392}"
+    ],
+    "baseline-1": [
+      "{\"height\": 963, \"width\": 1392}"
+    ]
+  },
+  "mismatchedViewportRuns": [],
+  "note": "Controls with mismatched viewports are diagnostic only; exclude from matched comparisons."
+}

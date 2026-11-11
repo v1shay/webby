@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess,tempfile
 root=Path(__file__).resolve().parents[1]
 source=(root/'BrowserWallpaper.swift').read_text()
-model=source[source.index('private struct WallpaperSettings'):source.index('private final class WallpaperSurface')]
+model=source[source.index('struct WallpaperSettings'):source.index('private final class WallpaperSurface')]
 checks=r'''
 let suite="local.webby.wallpaper-sets-tests."+UUID().uuidString
 let defaults=UserDefaults(suiteName:suite)!
@@ -49,7 +49,24 @@ let reopened=UserDefaults(suiteName:suite)!
 precondition(WallpaperSetStore.load(reopened).sets.first(where:{$0.id==newID})?.name=="Night pair")
 WallpaperSetStore.select(UUID(),defaults:defaults)
 precondition(WallpaperSetStore.load(defaults).active==newID)
-print("PASS: original pair retained, duplicate edits isolated, both profile wallpapers/effects restored, tab glass restored, referenced assets retained, rename/restart persistence, unknown selection ignored")
+let disposable = UUID()
+WallpaperSetStore.duplicate(name: "Disposable", defaults: defaults, id: disposable)
+WallpaperSetStore.select(newID, defaults: defaults)
+precondition(WallpaperSetStore.delete(disposable, defaults: defaults))
+precondition(WallpaperSetStore.load(defaults).active == newID)
+precondition(defaults.data(forKey: "webbyWallpaper."+a) == changedA)
+precondition(!WallpaperSetStore.delete(UUID(), defaults: defaults))
+defaults.set(changedA, forKey: "webbyWallpaper."+previouslyBlank)
+precondition(WallpaperSetStore.delete(newID, defaults: defaults))
+let afterDeletion = WallpaperSetStore.load(reopened)
+precondition(afterDeletion.sets.map(\.id) == [original.active] && afterDeletion.active == original.active)
+precondition(defaults.data(forKey: "webbyWallpaper."+a) == originalA)
+precondition(defaults.data(forKey: "webbyWallpaper."+previouslyBlank) == nil)
+precondition(defaults.bool(forKey: "webbyWallpaperFullWindow."+a))
+precondition(abs(defaults.double(forKey: "webbyWallpaperTabBlurStrength."+b)-0.35)<0.001)
+precondition(WallpaperSetStore.references("/fixture/original-a.png", defaults: defaults))
+precondition(!WallpaperSetStore.delete(original.active, defaults: defaults))
+print("PASS: original pair retained, duplicate edits isolated, both profile wallpapers/effects restored, tab glass restored, referenced assets retained, rename/restart persistence, unknown selection ignored; active and inactive deletion, fallback restoration, and last-pair protection")
 '''
 with tempfile.TemporaryDirectory(prefix='webby-wallpaper-sets-') as folder:
     path=Path(folder)/'main.swift';path.write_text('import Foundation\n'+model+'\n'+checks)

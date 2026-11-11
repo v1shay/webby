@@ -46,6 +46,8 @@ CEF_FUNCTION(cef_api_hash);
 CEF_FUNCTION(cef_browser_host_create_browser);
 CEF_FUNCTION(cef_request_context_create_context);
 CEF_FUNCTION(cef_string_userfree_utf16_free);
+CEF_FUNCTION(cef_string_list_size);
+CEF_FUNCTION(cef_string_list_value);
 
 template<class T> static void release(T *value) { if (value) { auto *base = reinterpret_cast<cef_base_ref_counted_t *>(value); base->release(base); } }
 template<class T> static T *retain(T *value) { if (value) { auto *base = reinterpret_cast<cef_base_ref_counted_t *>(value); base->add_ref(base); } return value; }
@@ -180,6 +182,20 @@ static void applySchoologyTheme(cef_frame_t *frame) {
     }
 }
 
+static void installVideoControls(cef_frame_t *frame) {
+    NSString *scheme = frameURL(frame).scheme.lowercaseString;
+    if (![@[@"http", @"https", @"file", @"about", @"blob"] containsObject:scheme ?: @""]) return;
+    static NSString *script;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSURL *resource = [NSBundle.mainBundle URLForResource:@"VideoControls" withExtension:@"js"];
+        if (resource) script = [NSString stringWithContentsOfURL:resource encoding:NSUTF8StringEncoding error:nil];
+    });
+    if (!script) return;
+    Text code(script), source(@"webby://video-controls");
+    frame->execute_java_script(frame, &code.value, &source.value, 1);
+}
+
 static NSString *frameworkPath(void) {
     return [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework"];
 }
@@ -255,6 +271,7 @@ BOOL WBChromiumInitialize(NSString *rootPath) {
     LOAD(cef_initialize); LOAD(cef_shutdown); LOAD(cef_do_message_loop_work);
     LOAD(cef_browser_host_create_browser); LOAD(cef_request_context_create_context);
     LOAD(cef_string_userfree_utf16_free);
+    LOAD(cef_string_list_size); LOAD(cef_string_list_value);
 #undef LOAD
     pumpHandler = [WebbyCEFEventPump new];
     auto *process = new Handler<cef_browser_process_handler_t>();
@@ -310,21 +327,58 @@ void WBChromiumShutdown(void) {
     // Do not dlclose Chromium: Objective-C classes remain registered until exit.
 }
 
+void WBChromiumForgetPrivateSession(NSString *identifier) {
+    if (![identifier hasPrefix:@"private:"]) return;
+    auto context = contexts.find(std::string(identifier.UTF8String));
+    if (context != contexts.end()) { release(context->second); contexts.erase(context); }
+}
+
 @interface WBChromiumView () {
     cef_browser_t *_browser;
     BOOL _closed, _creating, _loading, _canGoBack, _canGoForward, _protectsFromDiscard, _captureGranted, _fullscreen;
     NSMutableSet<NSNumber *> *_downloads;
-    NSString *_pageURL, *_pageTitle, *_pendingNavigation;
+    cef_registration_t *_automationObserver;
+    int _automationID;
+    NSMutableDictionary<NSString *, NSString *> *_requestedDownloads;
+    NSMutableDictionary<NSNumber *, NSString *> *_automationDownloads;
+    NSMutableSet<NSString *> *_canceledDownloadRequests;
+    std::map<int, cef_download_item_callback_t *> _downloadCallbacks;
+    std::set<int> _canceledDownloadItems;
+    NSMutableDictionary<NSNumber *, void (^)(NSDictionary *, NSString *)> *_automationReplies;
+    NSString *_pageURL, *_pageTitle, *_pendingNavigation, *_findQuery;
+    NSUInteger _navigationRequestGeneration;
+    BOOL _audioMuted;
+    NSMutableDictionary<NSNumber *, WBChromiumView *> *_pendingPopups;
+    __weak WBChromiumView *_popupOpener;
+    int _popupID;
+    NSUInteger _faviconGeneration;
+    BOOL _receivedFaviconCandidates;
 }
 - (void)emit:(NSString *)event value:(NSString *)value;
 - (void)updateLoading:(BOOL)loading back:(BOOL)back forward:(BOOL)forward;
 - (void)updateURL:(NSString *)url;
 - (void)updateTitle:(NSString *)title;
 - (void)updateActivity:(NSString *)state;
+- (void)updateFindCount:(int)count;
 - (void)setCapturing;
 - (void)setFullscreen:(BOOL)fullscreen;
+- (void)resetFavicon;
+- (void)receiveFaviconURLs:(cef_string_list_t)urls;
+- (void)loadDefaultFavicon;
 - (void)download:(int)identifier active:(BOOL)active;
 - (void)createdBrowser:(cef_browser_t *)browser;
+- (void)automationResult:(int)identifier result:(NSDictionary *)result error:(NSString *)error;
+- (NSString *)takeRequestedDownload:(cef_download_item_t *)item;
+- (void)registerAutomationDownload:(NSString *)identifier item:(int)itemID;
+- (void)finishAutomationDownload:(int)item status:(NSString *)status;
+- (BOOL)consumeCanceledDownload:(NSString *)identifier;
+- (BOOL)hasAutomationDownload:(int)item;
+- (void)downloadCallback:(cef_download_item_callback_t *)callback item:(int)item active:(BOOL)active;
+- (BOOL)preparePopup:(WBChromiumView *)page identifier:(int)identifier address:(NSString *)address;
+- (void)popupCreated:(int)identifier;
+- (void)popupAborted:(int)identifier;
+- (void)abortPendingPopups;
+
 @end
 
 static cef_client_t *makeClient(WBChromiumView *view) {
@@ -340,16 +394,34 @@ static cef_client_t *makeClient(WBChromiumView *view) {
         };
         // A tab must never send performClose: to Webby's containing NSWindow.
         // Removing its native child view completes destruction on macOS.
-        h->api.do_close = [](cef_life_span_handler_t *, cef_browser_t *b) -> int { Incoming incoming(b); return 1; };
-        h->api.on_before_close = [](cef_life_span_handler_t *, cef_browser_t *b) {
+        h->api.do_close = [](cef_life_span_handler_t *s, cef_browser_t *b) -> int {
             Incoming incoming(b);
+            WBChromiumView *page = owner(s);
+            [page emit:@"close" value:@""];
+            dispatch_async(dispatch_get_main_queue(), ^{ [page closePage]; });
+            return 1;
+        };
+        h->api.on_before_close = [](cef_life_span_handler_t *s, cef_browser_t *b) {
+            Incoming incoming(b);
+            [owner(s) abortPendingPopups];
             auto it = browsers.find(b->get_identifier(b)); if (it != browsers.end()) { release(it->second); browsers.erase(it); }
         };
-        h->api.on_before_popup = [](cef_life_span_handler_t *s, cef_browser_t *b, cef_frame_t *f, int,
-            const cef_string_t *url, const cef_string_t *, cef_window_open_disposition_t, int,
-            const cef_popup_features_t *, cef_window_info_t *, cef_client_t **, cef_browser_settings_t *, cef_dictionary_value_t **, int *) -> int {
+        h->api.on_before_popup = [](cef_life_span_handler_t *s, cef_browser_t *b, cef_frame_t *f, int popupID,
+            const cef_string_t *url, const cef_string_t *, cef_window_open_disposition_t disposition, int,
+            const cef_popup_features_t *, cef_window_info_t *window, cef_client_t **client, cef_browser_settings_t *, cef_dictionary_value_t **, int *) -> int {
             Incoming incomingBrowser(b); Incoming incomingFrame(f);
-            [owner(s) emit:@"popup" value:string(url)]; return 1;
+            WBChromiumView *opener = owner(s);
+            if (!opener.popupHandler) { [opener emit:@"popup" value:string(url)]; return 1; }
+            WBChromiumView *page = opener.popupHandler(string(url), disposition == CEF_WOD_NEW_BACKGROUND_TAB);
+            if (![opener preparePopup:page identifier:popupID address:string(url)]) return 1;
+            window->parent_view = (__bridge void *)page;
+            window->bounds = {0, 0, MAX(1, (int)page.bounds.size.width), MAX(1, (int)page.bounds.size.height)};
+            window->runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+            release(*client); *client = makeClient(page);
+            return 0;
+        };
+        h->api.on_before_popup_aborted = [](cef_life_span_handler_t *s, cef_browser_t *b, int popupID) {
+            Incoming incoming(b); [owner(s) popupAborted:popupID];
         };
         return &h->api;
     };
@@ -360,6 +432,10 @@ static cef_client_t *makeClient(WBChromiumView *view) {
             if (f->is_main(f)) [owner(s) updateURL:string(url)];
         };
         h->api.on_title_change = [](cef_display_handler_t *s, cef_browser_t *b, const cef_string_t *title) { Incoming incoming(b); [owner(s) updateTitle:string(title)]; };
+        h->api.on_favicon_urlchange = [](cef_display_handler_t *s, cef_browser_t *b, cef_string_list_t urls) {
+            Incoming incoming(b);
+            [owner(s) receiveFaviconURLs:urls];
+        };
         h->api.on_fullscreen_mode_change = [](cef_display_handler_t *s, cef_browser_t *b, int fullscreen) { Incoming incoming(b); [owner(s) setFullscreen:fullscreen]; };
         h->api.on_console_message = [](cef_display_handler_t *s, cef_browser_t *b, cef_log_severity_t,
             const cef_string_t *message, const cef_string_t *, int) -> int {
@@ -373,20 +449,33 @@ static cef_client_t *makeClient(WBChromiumView *view) {
         };
         return &h->api;
     };
+    client->api.get_find_handler = [](cef_client_t *s) {
+        auto *h = new Handler<cef_find_handler_t>(owner(s));
+        h->api.on_find_result = [](cef_find_handler_t *s, cef_browser_t *b, int, int count,
+                                  const cef_rect_t *, int, int finalUpdate) {
+            Incoming incoming(b);
+            WBChromiumView *page = owner(s);
+            if (finalUpdate) [page updateFindCount:count];
+        };
+        return &h->api;
+    };
     client->api.get_load_handler = [](cef_client_t *s) {
         auto *h = new Handler<cef_load_handler_t>(owner(s));
         h->api.on_loading_state_change = [](cef_load_handler_t *s, cef_browser_t *b, int loading, int back, int forward) {
             Incoming incoming(b);
             [owner(s) updateLoading:loading back:back forward:forward];
         };
-        h->api.on_load_start = [](cef_load_handler_t *, cef_browser_t *b, cef_frame_t *f, cef_transition_type_t) {
+        h->api.on_load_start = [](cef_load_handler_t *s, cef_browser_t *b, cef_frame_t *f, cef_transition_type_t) {
             Incoming incomingBrowser(b); Incoming incomingFrame(f);
+            if (f->is_main(f)) { [owner(s) resetFavicon]; [owner(s) stopFinding]; }
             applySchoologyTheme(f);
         };
-        h->api.on_load_end = [](cef_load_handler_t *, cef_browser_t *b, cef_frame_t *f, int) {
+        h->api.on_load_end = [](cef_load_handler_t *s, cef_browser_t *b, cef_frame_t *f, int) {
             Incoming incomingBrowser(b); Incoming incomingFrame(f);
             applySchoologyTheme(f);
+            installVideoControls(f);
             if (!f->is_main(f)) return;
+            [owner(s) loadDefaultFavicon];
             // Event-driven activity tracking; no repeating JavaScript timer.
             Text js(@"(()=>{if(window.__webbyActivityInstalled)return;window.__webbyActivityInstalled=true;let edited=false;const report=()=>console.debug('__webby_activity:'+JSON.stringify({edited,embedded:!!document.querySelector('iframe,object,embed'),media:[...document.querySelectorAll('video,audio')].some(m=>!m.paused&&!m.ended),x:scrollX,y:scrollY}));let queued=false;const schedule=()=>{if(queued)return;queued=true;setTimeout(()=>{queued=false;report()},150)};addEventListener('input',()=>{edited=true;report()},true);addEventListener('submit',()=>{edited=false;report()},true);['play','pause','ended','visibilitychange'].forEach(e=>addEventListener(e,report,true));addEventListener('scroll',schedule,{passive:true});new MutationObserver(records=>{if(records.some(r=>[...r.addedNodes,...r.removedNodes].some(n=>n.nodeType===1&&(n.matches('iframe,object,embed,video,audio')||n.querySelector('iframe,object,embed,video,audio')))))schedule()}).observe(document.documentElement,{childList:true,subtree:true});report()})()");
             Text source(@"webby://activity"); f->execute_java_script(f, &js.value, &source.value, 1);
@@ -403,6 +492,21 @@ static cef_client_t *makeClient(WBChromiumView *view) {
     };
     client->api.get_request_handler = [](cef_client_t *s) {
         auto *h = new Handler<cef_request_handler_t>(owner(s));
+        h->api.on_before_browse = [](cef_request_handler_t *s, cef_browser_t *b, cef_frame_t *frame,
+                                     cef_request_t *request, int gesture, int redirect) -> int {
+            Incoming incomingBrowser(b); Incoming incomingFrame(frame); Incoming incomingRequest(request);
+            WBChromiumView *page = owner(s);
+            if (!page.routeLink || !gesture || redirect || !frame->is_main(frame) ||
+                (request->get_transition_type(request) & TT_SOURCE_MASK) != TT_LINK) return 0;
+            cef_string_userfree_t method = request->get_method(request);
+            BOOL isGET = [string(method) isEqualToString:@"GET"];
+            if (method) p_cef_string_userfree_utf16_free(method);
+            if (!isGET) return 0;
+            cef_string_userfree_t address = request->get_url(request);
+            NSString *url = string(address);
+            if (address) p_cef_string_userfree_utf16_free(address);
+            return page.routeLink(url);
+        };
         h->api.on_render_process_terminated = [](cef_request_handler_t *s, cef_browser_t *b, cef_termination_status_t, int, const cef_string_t *) {
             Incoming incoming(b);
             [owner(s) emit:@"error" value:@"This Chromium page stopped responding. Reload to try again."];
@@ -416,16 +520,46 @@ static cef_client_t *makeClient(WBChromiumView *view) {
             WBChromiumView *page = owner(s);
             return page && (!page.allowsDownload || page.allowsDownload());
         };
-        h->api.on_before_download = [](cef_download_handler_t *s, cef_browser_t *b, cef_download_item_t *item, const cef_string_t *, cef_before_download_callback_t *callback) -> int {
+        h->api.on_before_download = [](cef_download_handler_t *s, cef_browser_t *b, cef_download_item_t *item, const cef_string_t *suggested, cef_before_download_callback_t *callback) -> int {
             Incoming incomingBrowser(b); Incoming incomingItem(item); Incoming incomingCallback(callback);
             WBChromiumView *page = owner(s);
             if (!page || (page.allowsDownload && !page.allowsDownload())) return 1;
-            [page download:item->get_id(item) active:YES];
+            int itemID = item->get_id(item);
+            [page download:itemID active:YES];
+            NSString *identifier = [page takeRequestedDownload:item];
+            if ([page consumeCanceledDownload:identifier]) {
+                [page download:itemID active:NO]; return 1;
+            }
+            if (identifier && page.automationDownloadDestination) {
+                [page registerAutomationDownload:identifier item:itemID];
+                retain(callback);
+                __weak WBChromiumView *weakPage = page;
+                page.automationDownloadDestination(identifier, string(suggested), ^(NSString *path) {
+                    WBChromiumView *current = weakPage;
+                    if (path && [current hasAutomationDownload:itemID]) {
+                        Text destination(path);
+                        callback->cont(callback, &destination.value, 0);
+                    } else {
+                        [current finishAutomationDownload:itemID status:@"Failed to prepare destination"];
+                        [current download:itemID active:NO];
+                    }
+                    release(callback);
+                });
+                return 1;
+            }
             Text path(@""); callback->cont(callback, &path.value, 1); return 1;
         };
         h->api.on_download_updated = [](cef_download_handler_t *s, cef_browser_t *b, cef_download_item_t *item, cef_download_item_callback_t *callback) {
             Incoming incomingBrowser(b); Incoming incomingItem(item); Incoming incomingCallback(callback);
-            [owner(s) download:item->get_id(item) active:item->is_in_progress(item)];
+            WBChromiumView *page = owner(s);
+            const auto identifier = item->get_id(item);
+            BOOL active = item->is_in_progress(item);
+            [page downloadCallback:callback item:identifier active:active];
+            [page download:identifier active:active];
+            if (item->is_complete(item)) [page finishAutomationDownload:identifier status:@"Finished"];
+            else if (item->is_canceled(item)) [page finishAutomationDownload:identifier status:@"Canceled"];
+            else if (item->is_interrupted(item)) [page finishAutomationDownload:identifier status:@"Failed"];
+
         };
         return &h->api;
     };
@@ -472,7 +606,86 @@ static cef_client_t *makeClient(WBChromiumView *view) {
 }
 - (void)emit:(NSString *)event value:(NSString *)value { if (!_closed && self.eventHandler) self.eventHandler(event, value); }
 - (void)updateURL:(NSString *)url { _pageURL = [url copy]; _protectsFromDiscard = YES; [self emit:@"url" value:url]; }
-- (void)updateTitle:(NSString *)title { _pageTitle = [title copy]; [self emit:@"title" value:title]; }
+- (void)updateTitle:(NSString *)title {
+    _pageTitle = [title copy];
+    if (getenv("WEBBY_ENGINE_DIAGNOSTICS")) fprintf(stderr, "CEF title: %s\n", title.UTF8String);
+    [self emit:@"title" value:title];
+}
+- (void)resetFavicon {
+    ++_faviconGeneration;
+    _receivedFaviconCandidates = NO;
+    [self emit:@"favicon" value:@""];
+}
+- (NSString *)defaultFaviconURL {
+    NSURLComponents *url = [NSURLComponents componentsWithString:_pageURL];
+    if (![@[@"https", @"http"] containsObject:url.scheme.lowercaseString ?: @""] || !url.host) return nil;
+    url.path = @"/favicon.ico";
+    url.query = nil;
+    url.fragment = nil;
+    url.user = nil;
+    url.password = nil;
+    return url.URL.absoluteString;
+}
+- (void)loadDefaultFavicon {
+    if (_receivedFaviconCandidates) return;
+    NSString *url = [self defaultFaviconURL];
+    if (url) [self loadFaviconURLs:@[url] index:0 generation:_faviconGeneration];
+}
+- (void)receiveFaviconURLs:(cef_string_list_t)urls {
+    NSMutableOrderedSet<NSString *> *candidates = [NSMutableOrderedSet new];
+    size_t count = urls ? MIN(p_cef_string_list_size(urls), 12) : 0;
+    for (size_t index = 0; index < count; ++index) {
+        cef_string_t value{};
+        if (p_cef_string_list_value(urls, index, &value)) {
+            NSString *address = string(&value);
+            NSString *scheme = [NSURL URLWithString:address].scheme.lowercaseString;
+            if ([@[@"https", @"http", @"data"] containsObject:scheme ?: @""] && address.length < 65536) {
+                [candidates addObject:address];
+            }
+        }
+        if (value.dtor) value.dtor(value.str);
+    }
+    NSString *fallback = [self defaultFaviconURL];
+    if (fallback) [candidates addObject:fallback];
+    if (!candidates.count) return;
+    _receivedFaviconCandidates = YES;
+    [self loadFaviconURLs:candidates.array index:0 generation:++_faviconGeneration];
+}
+- (void)loadFaviconURLs:(NSArray<NSString *> *)urls index:(NSUInteger)index generation:(NSUInteger)generation {
+    if (_closed || !_browser || generation != _faviconGeneration || index >= urls.count) return;
+    auto *callback = new Handler<cef_download_image_callback_t>();
+    __weak WBChromiumView *weakSelf = self;
+    void (^finish)(NSString *) = ^(NSString *png) {
+        WBChromiumView *view = weakSelf;
+        if (!view || view->_closed || generation != view->_faviconGeneration) return;
+        if (png) [view emit:@"favicon" value:png];
+        else [view loadFaviconURLs:urls index:index + 1 generation:generation];
+    };
+    using FaviconCompletion = void (^)(NSString *);
+    callback->state = std::make_shared<FaviconCompletion>([finish copy]);
+    callback->api.on_download_image_finished = [](cef_download_image_callback_t *s, const cef_string_t *, int status, cef_image_t *image) {
+        Incoming incoming(image);
+        auto finish = *std::static_pointer_cast<FaviconCompletion>(reinterpret_cast<Handler<cef_download_image_callback_t> *>(s)->state);
+        NSString *encoded = nil;
+        if (image && (status == 0 || (status >= 200 && status < 300))) {
+            int width = 0, height = 0;
+            auto *bytes = image->get_as_png(image, 1, 1, &width, &height);
+            if (bytes) {
+                size_t size = bytes->get_size(bytes);
+                if (size > 0 && size <= 65536) {
+                    NSMutableData *data = [NSMutableData dataWithLength:size];
+                    if (bytes->get_data(bytes, data.mutableBytes, size, 0) == size) encoded = [data base64EncodedStringWithOptions:0];
+                }
+                release(bytes);
+            }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{ finish(encoded); });
+    };
+    auto *host = _browser->get_host(_browser);
+    Text url(urls[index]);
+    host->download_image(host, &url.value, 1, 64, 0, &callback->api);
+    release(host);
+}
 - (void)updateLoading:(BOOL)loading back:(BOOL)back forward:(BOOL)forward {
     _loading = loading; _canGoBack = back; _canGoForward = forward;
     [self emit:@"loading" value:loading ? @"1" : @"0"];
@@ -487,14 +700,17 @@ static cef_client_t *makeClient(WBChromiumView *view) {
 - (BOOL)openURL:(NSString *)url profile:(NSString *)profile {
     if (_closed || !initialized) return NO;
     if (_browser || _creating) { [self navigate:url]; return YES; }
-    if (![NSFileManager.defaultManager createDirectoryAtPath:profile withIntermediateDirectories:YES attributes:nil error:nil]) return NO;
-    profile = canonicalPath(profile);
+    BOOL privateBrowsing = [profile hasPrefix:@"private:"];
+    if (!privateBrowsing) {
+        if (![NSFileManager.defaultManager createDirectoryAtPath:profile withIntermediateDirectories:YES attributes:nil error:nil]) return NO;
+        profile = canonicalPath(profile);
+    }
     auto key = std::string(profile.UTF8String);
     cef_request_context_t *context;
     auto found = contexts.find(key);
     if (found == contexts.end()) {
         cef_request_context_settings_t settings{}; settings.size = sizeof(settings);
-        Text path(profile); settings.cache_path = path.value; settings.persist_session_cookies = 1;
+        Text path(privateBrowsing ? @"" : profile); settings.cache_path = path.value; settings.persist_session_cookies = privateBrowsing ? 0 : 1;
         auto *handler = new Handler<cef_request_context_handler_t>();
         handler->api.on_request_context_initialized = [](cef_request_context_handler_t *, cef_request_context_t *context) {
             Incoming incoming(context);
@@ -529,6 +745,7 @@ static cef_client_t *makeClient(WBChromiumView *view) {
 - (void)createdBrowser:(cef_browser_t *)browser {
     if (getenv("WEBBY_ENGINE_DIAGNOSTICS")) fprintf(stderr, "CEF: browser created\n");
     _creating = NO; _browser = retain(browser);
+    [_popupOpener popupCreated:_popupID]; _popupOpener = nil;
     auto *host = _browser->get_host(_browser);
     NSView *view = (__bridge NSView *)host->get_window_handle(host);
     view.frame = self.bounds; view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -539,13 +756,64 @@ static cef_client_t *makeClient(WBChromiumView *view) {
     }
     if (_pendingNavigation) {
         NSString *url = _pendingNavigation; _pendingNavigation = nil;
+        const NSUInteger generation = _navigationRequestGeneration;
         __weak WBChromiumView *weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf navigate:url]; });
+        dispatch_async(dispatch_get_main_queue(), ^{
+            WBChromiumView *page = weakSelf;
+            // CEF may report the original URL while opening. Only a newer
+            // explicit navigation request can supersede this queued one.
+            if (page && page->_navigationRequestGeneration == generation) [page navigate:url];
+        });
     }
+    [self setAudioMuted:_audioMuted];
     [self emit:@"created" value:@""];
+}
+- (BOOL)preparePopup:(WBChromiumView *)page identifier:(int)identifier address:(NSString *)address {
+    if (_closed || !page || page->_closed || page->_creating || page->_browser) return NO;
+    if (!_pendingPopups) _pendingPopups = [NSMutableDictionary new];
+    page->_creating = YES; page->_pageURL = address.length ? [address copy] : @"about:blank";
+    page->_popupOpener = self; page->_popupID = identifier;
+    _pendingPopups[@(identifier)] = page;
+    if (!pendingViews) pendingViews = [NSMutableSet new];
+    [pendingViews addObject:page];
+    // The native tab can release its opener before CEF OnBeforeClose. Keep
+    // the weak handler owner alive until every pending popup is resolved.
+    [pendingViews addObject:self];
+    return YES;
+}
+- (void)popupCreated:(int)identifier {
+    [_pendingPopups removeObjectForKey:@(identifier)];
+    if (!_pendingPopups.count) [pendingViews removeObject:self];
+}
+- (void)popupAborted:(int)identifier {
+    WBChromiumView *page = _pendingPopups[@(identifier)];
+    if (!page) return;
+    page->_creating = NO; page->_popupOpener = nil;
+    [page emit:@"popupAborted" value:@""];
+    [page closePage]; [pendingViews removeObject:page];
+    [_pendingPopups removeObjectForKey:@(identifier)];
+    if (!_pendingPopups.count) [pendingViews removeObject:self];
+}
+- (void)abortPendingPopups {
+    for (NSNumber *identifier in _pendingPopups.allKeys) [self popupAborted:identifier.intValue];
+}
+- (void)setAudioMuted:(BOOL)muted {
+    _audioMuted = muted;
+    if (!_browser || _closed) return;
+    auto *host = _browser->get_host(_browser);
+    host->set_audio_muted(host, muted);
+    release(host);
+}
+- (BOOL)isAudioMuted {
+    if (!_browser || _closed) return _audioMuted;
+    auto *host = _browser->get_host(_browser);
+    BOOL muted = host->is_audio_muted(host);
+    release(host);
+    return muted;
 }
 - (void)navigate:(NSString *)url {
     if (_closed) return;
+    ++_navigationRequestGeneration;
     _pageURL = [url copy];
     if (!_browser) { _pendingNavigation = [url copy]; return; }
     auto *f = _browser->get_main_frame(_browser);
@@ -556,7 +824,20 @@ static cef_client_t *makeClient(WBChromiumView *view) {
 - (void)reload { if (_browser && !_closed) _browser->reload(_browser); }
 - (void)findText:(NSString *)text backwards:(BOOL)backwards {
     if (!_browser || _closed) return;
-    auto *h = _browser->get_host(_browser); Text value(text); h->find(h, &value.value, !backwards, 0, 1); release(h);
+    if (!text.length) { [self stopFinding]; return; }
+    BOOL next = [_findQuery isEqualToString:text];
+    _findQuery = [text copy];
+    auto *h = _browser->get_host(_browser); Text value(text);
+    h->find(h, &value.value, !backwards, 0, next); release(h);
+}
+- (void)stopFinding {
+    _findQuery = nil;
+    if (!_browser || _closed) return;
+    auto *h = _browser->get_host(_browser); h->stop_finding(h, 1); release(h);
+    [self emit:@"find" value:@""];
+}
+- (void)updateFindCount:(int)count {
+    if (_findQuery.length) [self emit:@"find" value:count > 0 ? @"Found" : @"No match"];
 }
 - (BOOL)runScript:(NSString *)script expectedOrigin:(NSString *)origin {
     if (!_browser || _closed || _loading) return NO;
@@ -581,13 +862,136 @@ static cef_client_t *makeClient(WBChromiumView *view) {
     release(frame);
     return allowed;
 }
+- (NSString *)takeRequestedDownload:(cef_download_item_t *)item {
+    auto *original = item->get_original_url(item);
+    NSString *address = string(original);
+    if (original) p_cef_string_userfree_utf16_free(original);
+    NSString *identifier = _requestedDownloads[address];
+    if (identifier) [_requestedDownloads removeObjectForKey:address];
+    return identifier;
+}
+- (BOOL)hasAutomationDownload:(int)item { return !_closed && _automationDownloads[@(item)] != nil; }
+- (BOOL)consumeCanceledDownload:(NSString *)identifier {
+    if (!identifier || ![_canceledDownloadRequests containsObject:identifier]) return NO;
+    [_canceledDownloadRequests removeObject:identifier]; return YES;
+}
+- (void)downloadCallback:(cef_download_item_callback_t *)callback item:(int)item active:(BOOL)active {
+    auto found = _downloadCallbacks.find(item);
+    if (found != _downloadCallbacks.end()) { release(found->second); _downloadCallbacks.erase(found); }
+    if (_canceledDownloadItems.erase(item)) {
+        if (active && callback) callback->cancel(callback);
+        return;
+    }
+    if (active && callback) _downloadCallbacks[item] = retain(callback);
+}
+- (void)cancelAutomationDownload:(NSString *)identifier {
+    if (_closed) return;
+    for (NSString *address in _requestedDownloads.allKeys) {
+        if ([_requestedDownloads[address] isEqualToString:identifier]) {
+            if (!_canceledDownloadRequests) _canceledDownloadRequests = [NSMutableSet new];
+            [_canceledDownloadRequests addObject:identifier];
+            if (self.automationDownloadFinished) self.automationDownloadFinished(identifier, @"Canceled");
+            return;
+        }
+    }
+    for (NSNumber *item in _automationDownloads.allKeys) {
+        if (![_automationDownloads[item] isEqualToString:identifier]) continue;
+        auto found = _downloadCallbacks.find(item.intValue);
+        if (found != _downloadCallbacks.end()) found->second->cancel(found->second);
+        else _canceledDownloadItems.insert(item.intValue);
+        [self finishAutomationDownload:item.intValue status:@"Canceled"];
+        [self download:item.intValue active:NO];
+        return;
+    }
+}
+- (void)registerAutomationDownload:(NSString *)identifier item:(int)itemID {
+    if (!_automationDownloads) _automationDownloads = [NSMutableDictionary new];
+    _automationDownloads[@(itemID)] = identifier;
+}
+- (void)finishAutomationDownload:(int)item status:(NSString *)status {
+    NSString *identifier = _automationDownloads[@(item)];
+    if (!identifier) return;
+    [_automationDownloads removeObjectForKey:@(item)];
+    if (self.automationDownloadFinished) self.automationDownloadFinished(identifier, status);
+}
+- (BOOL)startAutomationDownload:(NSString *)address identifier:(NSString *)identifier {
+    if (!_browser || _closed || _requestedDownloads[address] ||
+        (self.allowsDownload && !self.allowsDownload())) return NO;
+    if (!_requestedDownloads) _requestedDownloads = [NSMutableDictionary new];
+    _requestedDownloads[address] = identifier;
+    auto *host = _browser->get_host(_browser);
+    Text url(address);
+    host->start_download(host, &url.value);
+    release(host);
+    __weak WBChromiumView *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 25 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        WBChromiumView *page = weakSelf;
+        if (!page || ![page->_requestedDownloads[address] isEqualToString:identifier]) return;
+        [page->_requestedDownloads removeObjectForKey:address];
+        if (![page consumeCanceledDownload:identifier] && page.automationDownloadFinished)
+            page.automationDownloadFinished(identifier, @"Download did not start");
+    });
+    return YES;
+}
+- (void)automationMethod:(NSString *)method parameters:(NSDictionary *)parameters
+              completion:(void (^)(NSDictionary *, NSString *))completion {
+    if (!_browser || _closed) { completion(nil, @"Chromium page is still opening."); return; }
+    auto *host = _browser->get_host(_browser);
+    if (!_automationObserver) {
+        auto *observer = new Handler<cef_dev_tools_message_observer_t>(self);
+        observer->api.on_dev_tools_method_result = [](cef_dev_tools_message_observer_t *s, cef_browser_t *b,
+            int identifier, int success, const void *bytes, size_t length) {
+            Incoming incoming(b);
+            @autoreleasepool {
+                WBChromiumView *view = owner(s);
+                if (!view) return;
+                id result = bytes && length <= 8 * 1024 * 1024
+                    ? [NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:bytes length:length] options:0 error:nil] : nil;
+                NSDictionary *dictionary = [result isKindOfClass:NSDictionary.class] ? result : nil;
+                [view automationResult:identifier result:dictionary
+                                 error:success && dictionary ? nil : dictionary[@"message"] ?: @"Chromium command failed."];
+            }
+        };
+        _automationObserver = host->add_dev_tools_message_observer(host, &observer->api);
+        _automationReplies = [NSMutableDictionary new];
+    }
+    int identifier = ++_automationID;
+    NSData *message = [NSJSONSerialization dataWithJSONObject:@{@"id": @(identifier), @"method": method, @"params": parameters} options:0 error:nil];
+    _automationReplies[@(identifier)] = [completion copy];
+    BOOL sent = _automationObserver && message && host->send_dev_tools_message(host, message.bytes, message.length);
+    release(host);
+    if (!sent) { [self automationResult:identifier result:nil error:@"Could not submit Chromium command."]; return; }
+    __weak WBChromiumView *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 12 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        [weakSelf automationResult:identifier result:nil error:@"Chromium command timed out."];
+    });
+}
+- (void)automationResult:(int)identifier result:(NSDictionary *)result error:(NSString *)error {
+    void (^completion)(NSDictionary *, NSString *) = _automationReplies[@(identifier)];
+    [_automationReplies removeObjectForKey:@(identifier)];
+    if (completion) completion(result, error);
+}
 - (void)focusPage {
     if (!_browser || _closed) return;
     auto *h = _browser->get_host(_browser); h->set_focus(h, 1); release(h);
 }
 - (void)closePage {
     if (_closed) return;
-    _closed = YES; self.eventHandler = nil;
+    _closed = YES; self.eventHandler = nil; self.popupHandler = nil;
+
+    if (self.automationDownloadFinished)
+        for (NSString *identifier in _requestedDownloads.allValues)
+            if (![_canceledDownloadRequests containsObject:identifier])
+                self.automationDownloadFinished(identifier, @"Page closed");
+    [_requestedDownloads removeAllObjects];
+    [_canceledDownloadRequests removeAllObjects];
+    for (auto &entry : _downloadCallbacks) release(entry.second);
+    _downloadCallbacks.clear();
+    for (NSNumber *identifier in _automationDownloads.allKeys)
+        [self finishAutomationDownload:identifier.intValue status:@"Page closed"];
+    release(_automationObserver); _automationObserver = nullptr;
+    for (NSNumber *identifier in _automationReplies.allKeys)
+        [self automationResult:identifier.intValue result:nil error:@"Chromium page closed."];
     if (_browser) {
         auto *h = _browser->get_host(_browser);
         NSView *native = (__bridge NSView *)h->get_window_handle(h);

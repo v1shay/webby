@@ -159,6 +159,16 @@ import CryptoKit
     }
 }
 
+final class BrowserPrivateSession {
+    let id = UUID()
+    let store = WKWebsiteDataStore.nonPersistent()
+
+    deinit {
+        let context = "private:" + id.uuidString
+        DispatchQueue.main.async { WBChromiumForgetPrivateSession(context) }
+    }
+}
+
 final class BrowserTab {
     let id = UUID()
     // The tab may be displayed in another profile; its WebKit data and credentials
@@ -187,6 +197,15 @@ final class BrowserTab {
     var recoveryOverlay: NSView?
     var isTerminal = false
     var isPinned = false
+    var privateSession: BrowserPrivateSession?
+    var privateSessionID: UUID? { privateSession?.id }
+    var privateDataStore: WKWebsiteDataStore? { privateSession?.store }
+    var isPrivate: Bool { privateSession != nil }
+    var isMuted = false
+
+    func inheritBrowsingMode(from source: BrowserTab) {
+        privateSession = source.privateSession
+    }
     var groupID: UUID?
     var pinnedInstanceClosed = false
     var suspendedURL: URL?
@@ -198,17 +217,20 @@ final class BrowserTab {
     var isFloating = false
     var ide: LightweightIDE?
     var ideConstraints: [NSLayoutConstraint] = []
-    var splitSurface: NSView? { ide?.view ?? (isTerminal ? nil : pageView) }
+    var settingsPage: BrowserSettingsPage?
+    var agentPane: WebbyAgentPane?
+    var isInternalPage: Bool { settingsPage != nil || agentPane != nil }
+    var splitSurface: NSView? { ide?.view ?? (isTerminal || isInternalPage ? nil : pageView) }
     var splitSurfaceConstraints: [NSLayoutConstraint] { ide != nil ? ideConstraints : pageConstraints }
     var canSplit: Bool {
-        !isFloating && (ide != nil || (!isTerminal && pageView != nil &&
+        !isInternalPage && !isFloating && (ide != nil || (!isTerminal && pageView != nil &&
             (pageURL != nil || currentNavigation != nil || URL(string: searchDraft)?.host != nil)))
     }
     var terminalView: NativeTerminalPane?
     var webView: WKWebView?
     var engine = BrowserEngine.defaultEngine
     var chromiumView: WBChromiumView?
-    var pageView: NSView? { (webView as NSView?) ?? chromiumView }
+    var pageView: NSView? { (webView as NSView?) ?? (chromiumView as NSView?) ?? settingsPage?.view ?? agentPane }
     var pageURL: URL? {
         if let url = webView?.url { return url }
         guard let address = chromiumView?.pageURL, !address.isEmpty else { return nil }
@@ -699,7 +721,7 @@ private final class TabRow: NSView {
     private var renderingEngine: BrowserEngine?
     func setRenderingEngine(_ engine: BrowserEngine?) {
         guard renderingEngine != engine else { return }
-        renderingEngine = engine; needsDisplay = true
+        renderingEngine = engine
         setAccessibilityHelp(engine.map { "\($0.name) rendering engine" })
     }
     let tabID: UUID
@@ -740,19 +762,16 @@ private final class TabRow: NSView {
     private var iconCenterX: NSLayoutConstraint!
     private var iconWidth: NSLayoutConstraint!
     private var iconHeight: NSLayoutConstraint!
-    private let profileRim = CAGradientLayer()
-    private let profileRimMask = CAShapeLayer()
-    private let faviconRim = CAGradientLayer()
-    private let faviconRimMask = CAShapeLayer()
-    private var rimFavicon: NSImage?
     private var hoverArea: NSTrackingArea?
     private var hoverPreviewWork: DispatchWorkItem?
     private var hoverGeneration = 0
     private weak var owner: BrowserApp?
     private var pinned = false
+    private var pinOpen = false
+    fileprivate var showsPinnedOpenIndicator: Bool { pinned && pinOpen }
     private struct Presentation: Equatable {
         let title: String; let selected: Bool; let favicon: ObjectIdentifier?
-        let split: [ObjectIdentifier?]; let terminal: Bool; let pinned: Bool; let tile: Bool; let horizontal: Bool
+        let split: [ObjectIdentifier?]; let terminal: Bool; let pinned: Bool; let pinOpen: Bool; let tile: Bool; let horizontal: Bool
     }
     private var lastHorizontalTitle = ""
     private var lastHorizontalSelected: Bool?
@@ -776,8 +795,6 @@ private final class TabRow: NSView {
         super.init(frame: .zero)
         registerForDraggedTypes([.string])
         wantsLayer = false
-        profileRim.mask = profileRimMask
-        faviconRim.mask = faviconRimMask
         translatesAutoresizingMaskIntoConstraints = false
         selectButton.toolTip = "Hover to preview • Click to select • Double-click for Floating or profile options"
         selectButton.focusRingType = .none
@@ -936,7 +953,7 @@ private final class TabRow: NSView {
             CATransaction.begin(); CATransaction.setDisableActions(true)
             pageColorFill.frame = bounds
             pageColorFill.path = horizontalTabPath()
-            pageColorFill.isHidden = !selected || tileMode || grouped
+            pageColorFill.isHidden = !selected || pinned || tileMode || grouped
             CATransaction.commit()
             Motion.color(pageColorFill, key: "fillColor", to: pageColor.cgColor,
                          animate: !pageColorFill.isHidden && window?.occlusionState.contains(.visible) == true)
@@ -958,13 +975,14 @@ private final class TabRow: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        defer {
-            if let engine = renderingEngine {
-                let rect = horizontal ? bounds.insetBy(dx: 15, dy: 5) : (tileMode ? bounds.insetBy(dx: 8, dy: 5) : verticalGlassRect().insetBy(dx: 7, dy: 2))
-                let line = NSRect(x: rect.minX, y: rect.minY, width: max(0, rect.width), height: selected ? 2.2 : 1.6)
-                NSGradient(colors: engine.colors.map { $0.withAlphaComponent(selected ? 0.95 : 0.7) })?
-                    .draw(in: NSBezierPath(roundedRect: line, xRadius: 1.1, yRadius: 1.1), angle: 0)
+        if pinned || tileMode {
+            if showsPinnedOpenIndicator {
+                let color = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor.white : .black
+                color.withAlphaComponent(selected || hovered ? 0.9 : 0.56).setFill()
+                let indicator = NSRect(x: iconContainer.frame.midX - 4, y: max(3, iconContainer.frame.minY - 5), width: 8, height: 2)
+                NSBezierPath(roundedRect: indicator, xRadius: 1, yRadius: 1).fill()
             }
+            return
         }
         if grouped && !tileMode {
             if selected || hovered {
@@ -973,18 +991,10 @@ private final class TabRow: NSView {
             }
             return
         }
-        guard horizontal else { return }
-        if tileMode {
-            let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 3, dy: 4), xRadius: 9, yRadius: 9)
-            NSColor.white.withAlphaComponent(selected ? 0.16 : 0.07).setFill(); box.fill()
-                        if let colors = profileRim.colors as? [CGColor], colors.count > 1 {
-                let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 3, dy: 4), xRadius: 9, yRadius: 9)
-                ring.append(NSBezierPath(roundedRect: bounds.insetBy(dx: selected ? 5 : 4, dy: selected ? 6 : 5), xRadius: 8, yRadius: 8))
-                ring.windingRule = .evenOdd
-                NSGraphicsContext.saveGraphicsState(); ring.addClip()
-                NSGradient(colors: colors.compactMap { NSColor(cgColor: $0) })?.draw(in: bounds, angle: 25)
-                NSGraphicsContext.restoreGraphicsState()
-            }
+        if !horizontal {
+            guard selected || hovered else { return }
+            NSColor.white.withAlphaComponent(selected ? 0.12 : 0.07).setFill()
+            NSBezierPath(roundedRect: verticalGlassRect(), xRadius: 9, yRadius: 9).fill()
         } else if selected && pageColorFill.superlayer == nil {
             if let context=NSGraphicsContext.current?.cgContext {
                 context.saveGState();context.addPath(horizontalTabPath());context.setFillColor(pageColor.cgColor);context.fillPath();context.restoreGState()
@@ -1051,35 +1061,6 @@ private final class TabRow: NSView {
         }
         if !tileMode { iconWidth.constant = splitIconWidth }
         needsLayout = true
-    }
-
-    private func applyFaviconRim(_ favicon: NSImage?) {
-        if rimFavicon === favicon { return }
-        rimFavicon = favicon
-        guard let favicon, let data = favicon.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: data) else {
-            faviconRim.colors = nil
-            return
-        }
-        var samples: [(color: NSColor, saturation: CGFloat)] = []
-        for y in stride(from: 0, to: bitmap.pixelsHigh, by: max(1, bitmap.pixelsHigh / 5)) {
-            for x in stride(from: 0, to: bitmap.pixelsWide, by: max(1, bitmap.pixelsWide / 5)) {
-                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
-                      color.alphaComponent > 0.55 else { continue }
-                var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
-                color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
-                if saturation > 0.20 && brightness > 0.18 && brightness < 0.98 {
-                    samples.append((color, saturation))
-                }
-            }
-        }
-        let strongest = samples.sorted { $0.saturation > $1.saturation }
-        guard let first = strongest.first?.color else { faviconRim.colors = nil; return }
-        let second = strongest.dropFirst().first(where: { abs($0.color.hueComponent - first.hueComponent) > 0.12 })?.color
-            ?? first.blended(withFraction: 0.5, of: .white) ?? first
-        faviconRim.colors = [first.cgColor, second.cgColor, first.cgColor]
-        faviconRim.startPoint = CGPoint(x: 0, y: 0)
-        faviconRim.endPoint = CGPoint(x: 1, y: 1)
     }
 
     override func updateTrackingAreas() {
@@ -1149,6 +1130,7 @@ private final class TabRow: NSView {
             arrangement.submenu = choices
             menu.addItem(arrangement)
         }
+        owner?.appendMuteItem(for: tabID, to: menu)
         owner?.appendFloatingItem(for: tabID, to: menu)
         owner?.appendSplitItem(for: tabID, to: menu)
         owner?.appendGroupItem(for: tabID, to: menu)
@@ -1173,8 +1155,6 @@ private final class TabRow: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
         selectionGradient.opacity = 0
-        profileRim.opacity = 0
-        faviconRim.opacity = 0
         needsDisplay = true
     }
 
@@ -1204,19 +1184,6 @@ private final class TabRow: NSView {
         let radius: CGFloat = tileMode ? 16 : 7
         let path = CGPath(roundedRect: bounds.insetBy(dx: 1.25, dy: 1.25),
                           cornerWidth: radius, cornerHeight: radius, transform: nil)
-        profileRim.frame = bounds
-        faviconRim.frame = bounds
-        profileRimMask.frame = bounds
-        faviconRimMask.frame = bounds
-        profileRimMask.path = path
-        profileRimMask.fillColor = NSColor.clear.cgColor
-        profileRimMask.strokeColor = NSColor.white.cgColor
-        profileRimMask.lineWidth = tileMode ? 2.4 : 0
-        faviconRimMask.path = CGPath(roundedRect: bounds.insetBy(dx: 3.2, dy: 3.2),
-                                     cornerWidth: max(1, radius - 2), cornerHeight: max(1, radius - 2), transform: nil)
-        faviconRimMask.fillColor = NSColor.clear.cgColor
-        faviconRimMask.strokeColor = NSColor.white.cgColor
-        faviconRimMask.lineWidth = tileMode ? 2.3 : 0
         loadingTrack.frame = bounds
         loadingTrack.path = path
         loadingBeam.frame = bounds
@@ -1228,7 +1195,6 @@ private final class TabRow: NSView {
     func applyTheme(_ profile: PetGradientProfile) {
         BrowserTheme.apply(profile.gradients.ambient, to: selectionGradient, alpha: 0.28)
         BrowserTheme.apply(profile.gradients.working, to: loadingGradient)
-        BrowserTheme.apply(profile.gradients.working, to: profileRim, alpha: 0.92)
         let accent = BrowserTheme.color(profile.palette.accent)
         loadingTrack.strokeColor = accent.withAlphaComponent(0.25).cgColor
         loadingTrack.shadowColor = accent.cgColor
@@ -1318,12 +1284,12 @@ private final class TabRow: NSView {
     }
 
     func update(title: String, selected: Bool, favicon: NSImage?, splitFavicons: [NSImage?]?,
-                isTerminal: Bool, isPinned: Bool,
+                isTerminal: Bool, isPinned: Bool, pinOpen: Bool,
                 loadingProgress: Double?) {
         setLoadingProgress(loadingProgress)
         let presentation = Presentation(title: title, selected: selected, favicon: favicon.map(ObjectIdentifier.init),
             split: (splitFavicons ?? []).map { $0.map(ObjectIdentifier.init) }, terminal: isTerminal,
-            pinned: isPinned, tile: tileMode, horizontal: horizontal)
+            pinned: isPinned, pinOpen: pinOpen, tile: tileMode, horizontal: horizontal)
         guard lastPresentation != presentation else { return }
         let previous = lastPresentation
         if previous?.favicon != presentation.favicon || previous?.split != presentation.split {Motion.change(iconContainer,character:.tabs)}
@@ -1355,9 +1321,12 @@ private final class TabRow: NSView {
             terminalIcon = icon
         }
         terminalIcon?.setVisible(isTerminal)
-        pinned = isPinned
+        if pinned != isPinned || self.pinOpen != pinOpen {
+            pinned = isPinned
+            self.pinOpen = pinOpen
+            updateBackground()
+        }
         pinIcon.isHidden = !isPinned || tileMode
-        if tileMode { applyFaviconRim(favicon); updateBackground() }
         setLoadingProgress(loadingProgress)
         needsLayout=true
     }
@@ -1582,6 +1551,10 @@ private final class WebsiteFrameRim: NSView {
     private var horizontalWidths: [UUID: NSLayoutConstraint] = [:]
     private var pageAreaTop: NSLayoutConstraint!
     private var pageChromeColors: [UUID: NSColor] = [:]
+    private var agentPageTones: [UUID: (url: URL?, color: NSColor, glass: Bool)] = [:]
+    private var chromiumAgentSample: (id: UUID, url: URL?, time: TimeInterval)?
+    private lazy var agentEdgeScript: String? = Bundle.main.url(forResource: "ChromeTone", withExtension: "js")
+        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
     private var pageAddressColors: [UUID: NSColor] = [:]
     private var addressEdgeBackdrop: NSView?
     private static let sidebarWidthKey = "webbyVerticalSidebarWidth"
@@ -1838,6 +1811,8 @@ private final class WebsiteFrameRim: NSView {
     private var fastModeItem: NSMenuItem?
     private weak var fuseMenuItem: NSMenuItem?
     private var menuBar: BrowserMenuBar?
+    private var onboarding: WebbyOnboarding?
+    private var firstRunSetupPending = false
     private let suggestions = BrowserSuggestionPopup()
     private let tabPreview = TabPreviewPopover()
     private var linkPreview: NSPopover?
@@ -1856,6 +1831,26 @@ private final class WebsiteFrameRim: NSView {
     private let typographyWindows=NSHashTable<NSWindow>.weakObjects()
     private weak var editingSearchField: NSTextField?
     private var downloads: BrowserDownloads!
+    private var agentListener: WebbyAgentListener?
+    private var agentPanes: [UUID: WebbyAgentPane] = [:]
+    private var agentDockTabs = Set<UUID>()
+    private var agentFloatWindows: [UUID: WebbyFloatingAgentPanel] = [:]
+    private var agentTabProfiles: [UUID: UUID] = [:]
+    private var agentContexts: [UUID: UUID] = [:]
+    private var dockedAgentTabID: UUID?
+    private var agentDockGeneration = 0
+    private var agentOwners: [UUID: UUID] = [:]
+    private var agentWorkingProfiles: [UUID: UUID] = [:]
+    private var agentPets: [UUID: NSImage] = [:]
+    private var dockedAgent: WebbyAgentPane?
+    private weak var agentSummonItem: NSMenuItem?
+    private var agentDockConstraints: [NSLayoutConstraint] = []
+    private var agentDockWidth: NSLayoutConstraint?
+    private var agentDockTrailing: NSLayoutConstraint?
+    private var agentDockTop: NSLayoutConstraint?
+    private var agentDockInset: CGFloat = 0
+    private var agentDockClosing = false
+    private var agentOutline: WebbyAgentOutline?
     private let launchedAt = ProcessInfo.processInfo.systemUptime
     private var windowShownAt: TimeInterval?
     private var webViewReadyAt: TimeInterval?
@@ -1905,6 +1900,10 @@ private final class WebsiteFrameRim: NSView {
             fusedTabOrder.removeAll()
             fusedActiveTabID = nil
             BrowserTheme.activate(activeSpace.saved.id)
+            widgetCanvas?.show(profile: activeSpace.saved.id)
+            asciiCanvas?.show(profile: activeSpace.saved.id)
+            wallpaper?.show(profile: activeSpace.saved.id)
+            restoreHomeSearchPosition()
         }
         for tab in spaces.flatMap(\.tabs) {
             if !tab.isFloating {
@@ -1915,7 +1914,7 @@ private final class WebsiteFrameRim: NSView {
             }
         }
         if let selectedID, let selected = tab(id: selectedID), !selected.isFloating { selectTab(selected) }
-        else if let first = tabs.first(where: { !$0.isFloating }) { selectTab(first) }
+        else if let first = tabs.first(where: { !$0.isFloating && !$0.pinnedInstanceClosed }) { selectTab(first) }
         else { addTab(select: true) }
         refreshTabs()
         motionSurface?.superview?.layoutSubtreeIfNeeded()
@@ -1948,10 +1947,16 @@ private final class WebsiteFrameRim: NSView {
             }
             exit(1) // No browser services or session writers have started yet.
         }
+        let setupState = WebbyOnboardingDraft.load()
+        firstRunSetupPending = WebbyOnboardingDraft.shouldPresent(existingProfiles: !saved.isEmpty, saved: setupState)
         if saved.isEmpty {
-            let personal = SavedBrowserSpace(id: UUID(), name: "Personal", chromeDirectory: nil,
-                                             bookmarks: [], history: [])
+            let draft = firstRunSetupPending ? setupState : nil
+            let id = draft?.spaces.first(where: { !$0.isNew })?.id ?? UUID()
+            let personal = SavedBrowserSpace(id: id, name: "Personal", chromeDirectory: nil,
+                                             bookmarks: [], history: [], isolatesWebsiteData: true)
             spaces = [BrowserSpace(personal)]
+            // Write the setup marker first so a quit between the two writes can resume.
+            if firstRunSetupPending && draft == nil { initialOnboardingDraft().save() }
             try? BrowserSpaceStore.save([personal])
         } else { spaces = saved.map(BrowserSpace.init) }
         if let data = UserDefaults.standard.data(forKey: "webbyTabGroups"),
@@ -1964,6 +1969,10 @@ private final class WebsiteFrameRim: NSView {
         installMenus()
         makeWindow()
         downloads = BrowserDownloads()
+        if UserDefaults.standard.bool(forKey: "webbyLocalCLI") {
+            do { try setLocalCLI(true) }
+            catch { NSLog("Webby Local CLI: %@", error.localizedDescription) }
+        }
         makeSidebar()
         makeMainArea()
         makeHome()
@@ -2021,9 +2030,9 @@ private final class WebsiteFrameRim: NSView {
         app.activate(ignoringOtherApps: true)
         NotificationCenter.default.addObserver(self,selector:#selector(linkGlancesChanged),name:NSNotification.Name("WebbyLinkGlancesChanged"),object:nil)
         installChromeMonitor()
-        if saved.isEmpty {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                self?.showChromeImport()
+        if firstRunSetupPending {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.presentOnboarding(firstRun: true)
             }
         }
     }
@@ -2037,6 +2046,11 @@ private final class WebsiteFrameRim: NSView {
             self.openMiniWebby(url:url,profile:entry.profile)
         }
         miniSettings=mini;mini.start()
+        makeMenuBar()
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.2) {DesktopWidgetBridge.syncIfEnabled()}
+    }
+
+    private func makeMenuBar() {
         menuBar = BrowserMenuBar(showBrowser: { [weak self] in self?.showBrowserWindow() },
                                  addWidget: { [weak self] in self?.showAddWidget() },
                                  resetWidgets: { [weak self] in self?.widgetCanvas?.resetPositions(); self?.asciiCanvas?.resetPositions() },
@@ -2051,7 +2065,11 @@ private final class WebsiteFrameRim: NSView {
                                  importSignIns: { [weak self] in self?.importChromeSignIns() },
                                  fillPassword: { [weak self] in self?.fillSavedPasswordForCurrentSite() },
                                  profiles: { [weak self] in self?.spaces.map { ($0.saved.id, $0.saved.name) } ?? [] },
-                                 openTerminal: { [weak self] in self?.toggleTerminal() },
+                                 openTerminal: { [weak self] in
+                                     guard let self else { return }
+                                     if self.activeTab?.settingsPage != nil { self.addTab(select: true) }
+                                     self.toggleTerminal()
+                                 },
                                  experimentChanged: { [weak self] in self?.experimentalModeChanged() },
                                  tabPlacementChanged: { [weak self] in self?.applyTabPlacement() },
                                  chooseGoogleClient: { [weak self] in self?.chooseGoogleClient() },
@@ -2063,8 +2081,9 @@ private final class WebsiteFrameRim: NSView {
                                          : GoogleWorkspace.shared.isConnected(service, profile: self.activeSpace.saved.id)
                                  }, asciiCanvas: { [weak self] in self?.asciiCanvas }, openWallpaper: { [weak self] in self?.wallpaper?.openSettings() },
                                  editWindowAppearance: { [weak self] in self?.editWindowAppearance() },
-                                 miniMenu: { [weak self] in self?.miniSettings?.menu() ?? NSMenu(title:"Mini Webby") })
-        DispatchQueue.main.asyncAfter(deadline:.now()+0.2) {DesktopWidgetBridge.syncIfEnabled()}
+                                 miniMenu: { [weak self] in self?.miniSettings?.menu() ?? NSMenu(title:"Mini Webby") },
+                                 privacyItems: { [weak self] in self?.privacySettingsItems() ?? [] },
+                                 openSettings: { [weak self] section in self?.openSettingsTab(section: section) })
     }
 
     private func makeWindow() {
@@ -2119,6 +2138,7 @@ private final class WebsiteFrameRim: NSView {
     func windowDidResize(_ notification: Notification) {
         guard notification.object as? NSWindow === window else{return}
         updateSidebarWidth()
+        resizeAgentDock()
         sizeWidgetCanvas()
         if homeView?.isHidden == false { restoreHomeSearchPosition() }
         scheduleChromeResizeUpdate()
@@ -2151,8 +2171,9 @@ private final class WebsiteFrameRim: NSView {
             return .terminateNow
         }
         if spaces.flatMap(\.tabs).contains(where: { $0.ide?.mayClose() == false }) { return .terminateCancel }
+        let browserTabs = spaces.flatMap(\.tabs) + Array(miniTabs.values)
         if downloads?.hasActiveDownloads == true ||
-            spaces.flatMap(\.tabs).contains(where: { $0.chromiumView?.hasActiveDownloads == true }) {
+            browserTabs.contains(where: { $0.chromiumView?.hasActiveDownloads == true }) {
             let alert = NSAlert()
             alert.messageText = "Downloads are still running"
             alert.informativeText = "Quitting stops these downloads. Let’s finish them first, or quit now."
@@ -2162,13 +2183,15 @@ private final class WebsiteFrameRim: NSView {
         }
         guard WBChromiumHasBrowsers() else { WBChromiumShutdown(); return .terminateNow }
         chromiumQuitPending = true
+        agentListener = nil
         saveSessionTabs(wait: true)
         // Quit can arrive from inside CefDoMessageLoopWork. AppKit's
         // terminateLater wait would trap that pump on its own call stack.
         // Cancel this attempt, unwind the event, then close and quit afresh.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            for tab in self.spaces.flatMap(\.tabs) { tab.chromiumView?.closePage() }
+            let browserTabs = self.spaces.flatMap(\.tabs) + Array(self.miniTabs.values)
+            for tab in browserTabs { tab.chromiumView?.closePage() }
             self.finishChromiumQuit()
         }
         return .terminateCancel
@@ -2182,14 +2205,11 @@ private final class WebsiteFrameRim: NSView {
         }
     }
     func applicationWillTerminate(_ notification: Notification) {
-        if BrowserEngineChecks.active {
-            print("PASS: actual menu quit from a Chromium callback, asynchronous close, and application termination")
-            fflush(stdout)
-            return
-        }
+        agentListener = nil
+        wallpaper?.prepareForTermination()
         WebbyIcon.stop()
         hoverDwell?.cancel();tabsRetreatTimer?.invalidate();toolbarHideTimer?.invalidate();discardLinkPreview()
-        DesktopWidgetBridge.syncIfEnabled()
+        if !BrowserEngineChecks.active { DesktopWidgetBridge.syncIfEnabled() }
         CodeWorkbenchRuntime.shared.stop()
         miniSettings?.hotKey.stop()
         for id in Array(miniTabs.keys) {closeMiniWebby(id,restoreFocus:false)}
@@ -2211,9 +2231,13 @@ private final class WebsiteFrameRim: NSView {
         if let widgetDragMonitor { NSEvent.removeMonitor(widgetDragMonitor) }
         for space in spaces { for tab in space.tabs { tab.terminalView?.stop(); tab.ide?.shutdown() } }
         pendingSpaceSave?.cancel()
-        let snapshot = spaces.map(\.saved)
-        spaceSaveQueue.sync { try? BrowserSpaceStore.save(snapshot) }
-        for tab in spaces.flatMap(\.tabs) { tab.chromiumView?.closePage() }
+        if !BrowserEngineChecks.active {
+            let snapshot = spaces.map(\.saved)
+            spaceSaveQueue.sync { try? BrowserSpaceStore.save(snapshot) }
+        } else {
+            print("PASS: real Quit command drained Chromium and completed application cleanup")
+            fflush(stdout)
+        }
     }
 
     func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool {
@@ -2230,6 +2254,10 @@ private final class WebsiteFrameRim: NSView {
     @objc private func themeChanged() {
         reloadWindowStyle()
         let profile = BrowserTheme.profile
+        agentPets.removeAll()
+        for (id, pane) in agentPanes { if let profile = agentTabProfiles[id] { pane.updateAppearance(profileID: profile) } }
+        for tab in tabs where agentOwners[tab.id] != nil { refreshTabContent(tab) }
+        updateAgentOutline()
         if spaceLabel != nil { updateSpaceLabel() }
         WebbyIcon.updateDockIcon()
         globe.engine.setProfile(profile, wave: true)
@@ -2252,7 +2280,9 @@ private final class WebsiteFrameRim: NSView {
             row.themeSpaceID = ownerID
         }
         for tab in tabs {
-            tab.terminalView?.applyTheme(BrowserTheme.profile(for: ownerSpace(for: tab).saved.id))
+            let profile = BrowserTheme.profile(for: ownerSpace(for: tab).saved.id)
+            tab.terminalView?.applyTheme(profile)
+            tab.agentPane?.updateTheme(profile)
         }
         func refreshButtons(in view: NSView) {
             if let button = view as? GlassButton { button.applyTheme(profile) }
@@ -2669,8 +2699,13 @@ private final class WebsiteFrameRim: NSView {
         }
         let inset = pageFrameInset
         for (edge, constraint) in pageFrameEdges.enumerated() {
-            constraint.constant = edge == 0 ? inset : -inset
+            switch edge {
+            case 0: constraint.constant = inset
+            case 1: constraint.constant = agentDockInset > 0 ? -agentDockInset : -inset
+            default: constraint.constant = -inset
+            }
         }
+        agentDockTop?.constant = -inset
         pageArea?.layer?.cornerRadius = inset > 0 ? WebsiteFrameShadow.radius : 0
         pageArea?.layer?.masksToBounds = inset > 0
         pageArea?.layer?.borderWidth = inset > 0 ? 0.5 : 0
@@ -2814,7 +2849,7 @@ private final class WebsiteFrameRim: NSView {
         }
         widgetCanvas.show(profile: activeSpace.saved.id); asciiCanvas?.show(profile: activeSpace.saved.id); wallpaper?.show(profile: activeSpace.saved.id)
         widgetDragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
-            guard let self, event.window === self.window, !self.homeView.isHidden else { return event }
+            guard let self, self.onboarding?.isPresented != true, event.window === self.window, !self.homeView.isHidden else { return event }
             if self.asciiCanvas.isDragging { return self.asciiCanvas.handleDragEvent(event) ? nil : event }
             if self.widgetCanvas.handleDragEvent(event) {
                 if event.type == .leftMouseDown { self.asciiCanvas.deselect() }
@@ -2922,7 +2957,7 @@ private final class WebsiteFrameRim: NSView {
 
     private func installHomeSearchDragMonitor() {
         homeSearchDragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
-            guard let self, event.window === self.window, self.homeSearchSurface != nil else { return event }
+            guard let self, self.onboarding?.isPresented != true, event.window === self.window, self.homeSearchSurface != nil else { return event }
             switch event.type {
             case .leftMouseDown:
                 let point = self.homeSearchSurface.convert(event.locationInWindow, from: nil)
@@ -3051,7 +3086,7 @@ private final class WebsiteFrameRim: NSView {
 
     private var startupWidgetRefresh:DispatchWorkItem?
     private func refreshGoogleWidgets(force: Bool = false) {
-        guard widgetCanvas != nil else { return }
+        guard widgetCanvas != nil, !firstRunSetupPending else { return }
         if buildingFirstWindow {
             startupWidgetRefresh?.cancel()
             let work=DispatchWorkItem { [weak self] in self?.refreshGoogleWidgets(force:force) }
@@ -3163,7 +3198,7 @@ private final class WebsiteFrameRim: NSView {
     // remains active independently of homepage visibility.
     private func updateWidgetActivity() {
         asciiCanvas?.refreshActivity()
-        let visible = widgetCanvas != nil && homeView?.isHidden == false && window?.isVisible == true && window?.occlusionState.contains(.visible) == true
+        let visible = !firstRunSetupPending && widgetCanvas != nil && homeView?.isHidden == false && window?.isVisible == true && window?.occlusionState.contains(.visible) == true
         widgetCanvas?.setFeedsVisible(visible)
         let needed = visible || !miniTabs.isEmpty
         if !needed { widgetTimer?.invalidate(); widgetTimer = nil; return }
@@ -3185,9 +3220,10 @@ private final class WebsiteFrameRim: NSView {
         updateWidgetActivity()
         let hours=MiniWebbySettings.archiveHours
         if hours>0 {for (id,host) in floatingWindows {if let mini=host as? MiniWebbyWindow,!mini.isKeyWindow,Date().timeIntervalSince(mini.lastUsed)>Double(hours)*3600 {expireMiniWebby(id,hours:hours)}}}
-        let visible = widgetCanvas != nil && !homeView.isHidden && window.isVisible && window.occlusionState.contains(.visible)
+        let visible = !firstRunSetupPending && widgetCanvas != nil && !homeView.isHidden && window.isVisible
+            && window.occlusionState.contains(.visible)
         widgetCanvas?.setFeedsVisible(visible)
-        guard widgetCanvas != nil, !homeView.isHidden, window.isVisible, window.occlusionState.contains(.visible) else { return }
+        guard visible else { return }
         refreshNetworkWidgets(profile:activeSpace.saved.id)
         if widgetCanvas.has(.calendar), Date().timeIntervalSince(lastCalendarRefresh) >= 300 { refreshCalendar() }
         if widgetCanvas.has(.music), !spotifyPollInFlight {
@@ -3424,7 +3460,7 @@ private final class WebsiteFrameRim: NSView {
         suggestions.knownFavicon = { [weak self] url in
             guard let self, let host = url.host?.lowercased() else { return nil }
             return self.spaces.lazy.flatMap(\.tabs).first {
-                $0.webView?.url?.host?.lowercased() == host && $0.favicon != nil
+                $0.pageURL?.host?.lowercased() == host && $0.favicon != nil
             }?.favicon
         }
         suggestions.onChoose = { [weak self] item in
@@ -3700,8 +3736,9 @@ private final class WebsiteFrameRim: NSView {
         guard restoreTabsOnLaunch else { return }
         let pages = spaces.flatMap { space in
             space.tabs.compactMap { tab -> BrowserSessionRecord.Page? in
-                guard !tab.isPinned, !tab.isTerminal,
-                      let url = tab.pageURL ?? tab.suspendedURL
+                guard !tab.isPrivate, !tab.isPinned, !tab.isTerminal, !tab.isInternalPage,
+                      let url = tab.pendingSearchInput.flatMap({ destination(for: $0, profile: ownerSpace(for: tab).saved.id) })
+                        ?? tab.pageURL ?? tab.suspendedURL
                         ?? (!tab.searchDraft.isEmpty
                             ? destination(for: tab.searchDraft, profile: ownerSpace(for: tab).saved.id) : nil),
                       ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") else { return nil }
@@ -3853,7 +3890,7 @@ private final class WebsiteFrameRim: NSView {
     private func pinnedKey(for space: BrowserSpace) -> String { "webbyPinnedTabs.\(space.saved.id.uuidString)" }
 
     private func savePinnedTabs(for space: BrowserSpace) {
-        let records = space.tabs.filter { $0.isPinned && !$0.isTerminal }.compactMap { tab -> PinnedTabRecord? in
+        let records = space.tabs.filter { $0.isPinned && !$0.isTerminal && !$0.isPrivate }.compactMap { tab -> PinnedTabRecord? in
             guard let url = tab.pageURL?.absoluteString ?? destination(for: tab.searchDraft)?.absoluteString,
                   let parsed = URL(string: url), ["http", "https"].contains(parsed.scheme?.lowercased() ?? "") else { return nil }
             return PinnedTabRecord(title: tab.title, url: url, ownerSpaceID: tab.ownerSpaceID,
@@ -3892,7 +3929,7 @@ private final class WebsiteFrameRim: NSView {
             tab.title = record.title
             tab.searchDraft = record.url
             tab.suspendedURL = url
-            tab.pinnedInstanceClosed = record.instanceClosed == true
+            tab.pinnedInstanceClosed = true
             restoreFavicon(for: tab, url: url)
             if BrowserExperiment.cyclesNewTabProfiles {
                 activeSpace.tabs.insert(tab, at: activeSpace.tabs.prefix { $0.isPinned }.count)
@@ -4061,7 +4098,7 @@ private final class WebsiteFrameRim: NSView {
         let store = target.dataStore
         if spaces.count == 1 {
             let blank = SavedBrowserSpace(id: UUID(), name: "New Profile", chromeDirectory: nil,
-                                          bookmarks: [], history: [])
+                                          bookmarks: [], history: [], isolatesWebsiteData: true)
             spaces.append(BrowserSpace(blank))
         }
         if index == activeSpaceIndex {
@@ -4071,7 +4108,12 @@ private final class WebsiteFrameRim: NSView {
         let ownedTabs = spaces.flatMap(\.tabs).filter { tab in
             tab.ownerSpaceID == target.saved.id || target.tabs.contains { $0.id == tab.id }
         }
+        for id in agentTabProfiles.filter({ $0.value == target.saved.id }).keys { discardAgent(for: id) }
+        releaseAgentTabs(for: target.saved.id)
+        agentWorkingProfiles = agentWorkingProfiles.filter { $0.key != target.saved.id && $0.value != target.saved.id }
         for tab in ownedTabs {
+            discardAgent(for: tab.id)
+            closeAgentPane(in: tab)
             discardFloatingWindow(for: tab.id)
             tab.chromiumView?.closePage()
             tab.chromiumView?.removeFromSuperview()
@@ -4107,7 +4149,7 @@ private final class WebsiteFrameRim: NSView {
         UserDefaults.standard.set(activeSpaceIndex, forKey: "browserActiveSpace")
         updateSpaceLabel()
         if activeTabID == nil {
-            if let survivor = tabs.first { selectTab(survivor) }
+            if let survivor = tabs.first(where: { !$0.isFloating && !$0.pinnedInstanceClosed }) { selectTab(survivor) }
             else { addTab(select: true) }
         }
         refreshTabs()
@@ -4175,10 +4217,10 @@ private final class WebsiteFrameRim: NSView {
         lastWidgetRefresh.removeValue(forKey: activeSpace.saved.id)
         if tabs.isEmpty { _ = restorePinnedTabs() }
         for tab in tabs { tab.terminalView?.applyTheme(BrowserTheme.profile) }
-        UserDefaults.standard.set(index, forKey: "browserActiveSpace")
+        if !BrowserEngineChecks.active { UserDefaults.standard.set(index, forKey: "browserActiveSpace") }
         updateSpaceLabel(animated:true)
-        let selected = activeSpace.activeTabID.flatMap { id in tabs.first { $0.id == id && !$0.isFloating } }
-            ?? tabs.first(where: { !$0.isFloating })
+        let selected = activeSpace.activeTabID.flatMap { id in tabs.first { $0.id == id && !$0.isFloating && !$0.pinnedInstanceClosed } }
+            ?? tabs.first(where: { !$0.isFloating && !$0.pinnedInstanceClosed })
         activeTabID = nil
         if let selected { selectTab(selected) }
         else { addTab(select: true) }
@@ -4488,11 +4530,15 @@ private final class WebsiteFrameRim: NSView {
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.name == "browserChromeTone" {
-            guard message.frameInfo.isMainFrame, (BrowserTabPlacement.current == .horizontal || BrowserGlass.matchWebsiteEdge),
+            guard message.frameInfo.isMainFrame, (BrowserTabPlacement.current == .horizontal || BrowserGlass.matchWebsiteEdge || dockedAgent != nil),
                   let view=message.webView,let tab=tab(for:view),tab.id == activeTabID,
                   let rgb=(message.body as? [String:Any])?["edge"] as? [Double] ?? message.body as? [Double],rgb.count==3,
                   rgb.allSatisfy({$0.isFinite && (0...255).contains($0)}) else {return}
             let color=NSColor(srgbRed:rgb[0]/255,green:rgb[1]/255,blue:rgb[2]/255,alpha:1)
+            if let sample = (message.body as? [String: Any])?["agent"] as? [String: Any] {
+                storeAgentPageTone(sample, for: tab)
+                updateAgentDockAppearance()
+            }
             if let top=(message.body as? [String:Any])?["top"] as? [Double], top.count==3,
                top.allSatisfy({$0.isFinite && (0...255).contains($0)}) {
                 pageAddressColors[tab.id]=NSColor(srgbRed:top[0]/255,green:top[1]/255,blue:top[2]/255,alpha:1)
@@ -4518,7 +4564,7 @@ private final class WebsiteFrameRim: NSView {
               let webView = message.webView, let url = webView.url,
               url.scheme?.lowercased() == "https", url.host?.lowercased() == host.lowercased(),
               message.frameInfo.securityOrigin.host.lowercased() == host.lowercased(),
-              let tab = tab(for: webView),
+              let tab = tab(for: webView), !tab.isPrivate,
               let space = spaces.first(where: { $0.saved.id == tab.ownerSpaceID })
                   ?? spaces.first(where: { $0.tabs.contains { $0.id == tab.id } }) else { return }
         let matches = BrowserPasswords.credentials(in: space.saved.id, host: host.lowercased())
@@ -4543,7 +4589,7 @@ private final class WebsiteFrameRim: NSView {
     }
     private func showLinkPreview(_ message: WKScriptMessage) {
         guard BrowserHoverPreferences.glancesEnabled,message.frameInfo.isMainFrame,
-              let source = message.webView, let tab = tab(for: source), tab.id == activeTabID,
+              let source = message.webView, let tab = tab(for: source), !tab.isPrivate, tab.id == activeTabID,
               let body = message.body as? [String: Any],
               let raw = body["url"] as? String, raw.count < 4096,
               let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
@@ -4606,6 +4652,7 @@ private final class WebsiteFrameRim: NSView {
     @objc private func openPreviewTab() {
         guard let url = linkPreviewURL, let source = activeTab else { return }
         let tab = BrowserTab()
+        tab.inheritBrowsingMode(from: source)
         tab.ownerSpaceID = ownerSpace(for: source).saved.id
         tab.title = url.host ?? "New Tab"
         tab.navigationInProgress = true
@@ -4616,7 +4663,7 @@ private final class WebsiteFrameRim: NSView {
     }
 
     @objc private func fillSavedPasswordForCurrentSite() {
-        guard let tab = activeTab, let url = tab.pageURL,
+        guard let tab = settingsWebsiteTab, let url = tab.pageURL,
               url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else {
             let alert = NSAlert()
             alert.messageText = "Open a secure website first"
@@ -4632,6 +4679,7 @@ private final class WebsiteFrameRim: NSView {
             alert.runModal()
             return
         }
+        if activeTabID != tab.id { selectTab(tab) }
         if matches.count == 1 { fill(matches[0], in: tab); return }
         let alert = NSAlert()
         alert.messageText = "Choose an account for \(host)"
@@ -4659,7 +4707,7 @@ private final class WebsiteFrameRim: NSView {
     }
 
     private func autofillChromiumPassword(_ tab: BrowserTab, page: WBChromiumView) {
-        guard self.tab(id: tab.id) === tab, tab.id == activeTabID, tab.chromiumView === page,
+        guard !tab.isPrivate, self.tab(id: tab.id) === tab, tab.id == activeTabID, tab.chromiumView === page,
               !page.loading, let url = tab.pageURL, BrowserPasswordFill.origin(for: url) != nil,
               let host = url.host?.lowercased() else { return }
         let now = ProcessInfo.processInfo.systemUptime
@@ -4742,7 +4790,9 @@ private final class WebsiteFrameRim: NSView {
         recentTabOrder.removeAll { $0 == tab.id }
         recentTabOrder.insert(tab.id, at: 0)
         tabPreview.hide()
+        if previousSelection != tab.id { activeTab?.chromiumView?.stopFinding() }
         findBar?.isHidden = true
+        findStatus?.stringValue = ""
         if !tab.isTerminal && (tab.suspendedURL != nil || tab.pinnedInstanceClosed) {
             resumeTab(tab, show: true)
         }
@@ -4766,7 +4816,9 @@ private final class WebsiteFrameRim: NSView {
             previousTabID = previous.id
             previous.lastActiveAt = Date()
             captureTabPreview(previous)
-            if !restoringVideoInline {
+            let remainsVisible = splitView?.isHidden == false
+                && splitTabIDs?.contains(previous.id) == true && splitTabIDs?.contains(tab.id) == true
+            if !restoringVideoInline && !remainsVisible {
                 previous.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
                     in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
             }
@@ -4785,6 +4837,7 @@ private final class WebsiteFrameRim: NSView {
         terminalTransitionToken += 1
         toolbar.resetProgress()
         activeTabID = tab.id
+        syncAgentDock(for: tab.id)
         tab.lastActiveAt = Date()
         if BrowserExperiment.cyclesNewTabProfiles {
             displaySpace(for: tab).activeTabID = tab.id
@@ -4792,8 +4845,9 @@ private final class WebsiteFrameRim: NSView {
                 let changedProfile = activeSpaceIndex != index
                 activeSpaceIndex = index
                 BrowserTheme.activate(activeSpace.saved.id)
+                wallpaper?.show(profile: activeSpace.saved.id)
                 if changedProfile {
-                    widgetCanvas?.show(profile: activeSpace.saved.id); asciiCanvas?.show(profile: activeSpace.saved.id); wallpaper?.show(profile: activeSpace.saved.id)
+                    widgetCanvas?.show(profile: activeSpace.saved.id); asciiCanvas?.show(profile: activeSpace.saved.id)
                     restoreHomeSearchPosition()
                     lastWidgetRefresh.removeValue(forKey: activeSpace.saved.id)
                 }
@@ -4804,7 +4858,7 @@ private final class WebsiteFrameRim: NSView {
         if let view = tab.webView { updateGlassTone(for: view) }
         terminalMode = tab.isTerminal
         positionSidebarToggle(forTerminal: terminalMode)
-        hideToolbar(animated: false)
+        toolbarHideTimer?.invalidate(); toolbarHideTimer = nil
         let showsSplit = splitTabIDs?.contains(tab.id) ?? false
         splitView?.isHidden = !showsSplit
         for item in tabs {
@@ -4830,7 +4884,6 @@ private final class WebsiteFrameRim: NSView {
         else { globe.engine.hide() }
         applyAddressChrome()
         if let view = tab.webView, view.isLoading { toolbar.setProgress(min(view.estimatedProgress, 0.96)) }
-        addressField.stringValue = tab.pageURL.map(displayAddress) ?? ""
         homeSearchField.stringValue = tab.searchDraft
         if tab.showsSearchView, let view = tab.webView, view.isLoading {
             homeSearchSurface.startLoading()
@@ -4844,7 +4897,12 @@ private final class WebsiteFrameRim: NSView {
         refreshTabSelection(previousID: previousSelection)
         tabSwitchTimes.append((ProcessInfo.processInfo.systemUptime-selectionStarted)*1000)
         if tabSwitchTimes.count > 200 { tabSwitchTimes.removeFirst() }
-        if let view = tab.webView { window.makeFirstResponder(view) }
+        if let pane = tab.agentPane {
+            pane.focusComposer()
+        } else if let settings = tab.settingsPage {
+            settings.model.refresh()
+            window.makeFirstResponder(settings.view)
+        } else if let view = tab.webView { window.makeFirstResponder(view) }
         else if let chromium = tab.chromiumView { chromium.focusPage() }
         else if let ide = tab.ide { ide.show() }
         else if tab.isTerminal {
@@ -4859,7 +4917,8 @@ private final class WebsiteFrameRim: NSView {
     fileprivate func showTabPreview(for id: UUID, from row: NSView) {
         guard let tab = tab(id: id), row.window === window else { return }
         let address = tab.isTerminal ? (tab.ide == nil ? "Terminal" : "IDE") :
-            (tab.pageURL.map(displayAddress) ?? (tab.searchDraft.isEmpty ? "New Tab" : tab.searchDraft))
+            (tab.settingsPage != nil ? BrowserSettingsPage.address :
+                (tab.pageURL.map(displayAddress) ?? (tab.searchDraft.isEmpty ? "New Tab" : tab.searchDraft)))
         tabPreview.show(tabID: id, title: tab.title, address: address,
                         image: tab.previewImage, from: row, preferredEdge: (row as? TabRow)?.horizontal == true ? .minY : .maxX)
         if tab.id == activeTabID { captureTabPreview(tab) }
@@ -4983,6 +5042,7 @@ private final class WebsiteFrameRim: NSView {
         return host.hasPrefix("www.") ? String(host.dropFirst(4)):host
     }
     private func commonSiteName(_ members:[BrowserTab])->String? {
+        let members = members.filter { !$0.isPrivate }
         guard let first=members.first,let host=siteHost(first),members.allSatisfy({siteHost($0)==host}) else{return nil}
         if let name=members.compactMap(\.siteName).first,!name.isEmpty {return name}
         let known=["chatgpt.com":"ChatGPT","youtube.com":"YouTube","github.com":"GitHub","google.com":"Google","mail.google.com":"Gmail","calendar.google.com":"Google Calendar","docs.google.com":"Google Docs"]
@@ -5012,7 +5072,12 @@ private final class WebsiteFrameRim: NSView {
     }
 
     private func saveTabGroups() {
-        UserDefaults.standard.set(try? JSONEncoder().encode(tabGroups), forKey: "webbyTabGroups")
+        let pages = spaces.flatMap(\.tabs)
+        let privateGroups = Set(pages.filter(\.isPrivate).compactMap(\.groupID))
+        let publicGroups = Set(pages.filter { !$0.isPrivate }.compactMap(\.groupID))
+        let privateOnly = privateGroups.subtracting(publicGroups)
+        let saved = tabGroups.filter { !privateOnly.contains($0.id) }
+        UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: "webbyTabGroups")
         scheduleSessionSave()
     }
 
@@ -5181,7 +5246,7 @@ private final class WebsiteFrameRim: NSView {
             color = wallpaper.chromeColor(at:point) ?? NSColor(white:0.13,alpha:1)
         }
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        Motion.color(sidebarEdgeBackdrop?.layer, to: color.cgColor, animate: sidebarEdgeBackdrop?.isHidden == false && window.occlusionState.contains(.visible))
+        Motion.color(sidebarEdgeBackdrop?.layer, to: color.withAlphaComponent(1).cgColor, animate: sidebarEdgeBackdrop?.isHidden == false && window.occlusionState.contains(.visible))
         sidebarEdgeBackdrop?.isHidden = false
         CATransaction.commit()
         let rgb = color.usingColorSpace(.deviceRGB) ?? .black
@@ -5212,13 +5277,16 @@ private final class WebsiteFrameRim: NSView {
             ?? (tab.prefersDarkGlass ? NSColor(white:0.13,alpha:1):.white)
         Motion.color(addressEdgeBackdrop?.layer,to:color.cgColor,
                      animate:addressEdgeBackdrop?.isHidden == false && window.occlusionState.contains(.visible))
-        addressEdgeBackdrop?.isHidden=false
+        addressEdgeBackdrop?.alphaValue = wallpaper?.addressBackdropOpacity ?? 1
+        addressEdgeBackdrop?.isHidden = false
         let rgb=color.usingColorSpace(.deviceRGB) ?? .black
         let light=rgb.redComponent*0.2126+rgb.greenComponent*0.7152+rgb.blueComponent*0.0722>0.55
         toolbar.appearance=NSAppearance(named:light ? .aqua:.darkAqua)
     }
 
     private func updateWebsiteEdgeBackdrop() {
+        updateAgentDockAppearance()
+        updateAgentOutline()
         updateAddressEdgeBackdrop()
         guard mainArea != nil, horizontalScroll != nil else { return }
         updateSidebarEdgeBackdrop()
@@ -5249,7 +5317,7 @@ private final class WebsiteFrameRim: NSView {
         let color = horizontalRows[rowID].map { horizontalTabColor(tab, row: $0) }
             ?? pageChromeColors[tab.id] ?? NSColor(white: 0.13, alpha: 1)
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        Motion.color(websiteEdgeBackdrop?.layer, to: color.cgColor, animate: websiteEdgeBackdrop?.isHidden == false && window.occlusionState.contains(.visible))
+        Motion.color(websiteEdgeBackdrop?.layer, to: color.withAlphaComponent(1).cgColor, animate: websiteEdgeBackdrop?.isHidden == false && window.occlusionState.contains(.visible))
         websiteEdgeBackdrop?.isHidden = false
         CATransaction.commit()
         let rgb = color.usingColorSpace(.deviceRGB) ?? .black
@@ -5367,7 +5435,7 @@ private final class WebsiteFrameRim: NSView {
     }
 
     private func updateTabPresentation(_ tab: BrowserTab, row: TabRow) {
-        row.setRenderingEngine(tab.isTerminal || tab.ide != nil ? nil : tab.engine)
+        row.setRenderingEngine(tab.isTerminal || tab.ide != nil || tab.isInternalPage ? nil : tab.engine)
         let ownerName = ownerSpace(for: tab).saved.name
         var displayTitle = tab.ownerSpaceID == activeSpace.saved.id
             ? tab.title : "\(tab.title)  ·  \(ownerName)"
@@ -5376,17 +5444,19 @@ private final class WebsiteFrameRim: NSView {
                 if let other = self.tab(id: otherID) { displayTitle += "  │  \(other.title)" }
             }
         }
+        if tab.isPrivate { displayTitle = "Private · " + displayTitle }
+        if tab.isMuted { displayTitle = "Muted · " + displayTitle }
         if tab.isFloating { displayTitle += "  ↗" }
         let isSelected = tab.id == activeTabID ||
             (splitRepresentativeID == tab.id && (splitTabIDs?.contains(activeTabID ?? UUID()) ?? false))
         let splitFavicons: [NSImage?]? = splitRepresentativeID == tab.id
-            ? splitTabIDs?.map { self.tab(id: $0)?.favicon }
+            ? splitTabIDs?.map { id in self.agentOwners[id].map { self.agentPet(for: $0) } ?? self.tab(id: id)?.favicon }
             : (tab.savedSplit != nil ? tab.savedSplitTabIDs.map { self.tab(id: $0)?.favicon } : nil)
         row.setGroupAccent(!tab.isPinned && tab.groupID != nil ? BrowserTheme.profile(for:ownerSpace(for:tab).saved.id):nil)
         row.update(title: displayTitle, selected: isSelected,
-                   favicon: tab.favicon, splitFavicons: splitFavicons,
+                   favicon: agentOwners[tab.id].map { agentPet(for: $0) } ?? tab.favicon, splitFavicons: splitFavicons,
                    isTerminal: tab.isTerminal && tab.ide == nil, isPinned: tab.isPinned,
-                   loadingProgress: tab.navigationInProgress ? (tab.webView?.estimatedProgress ?? 0) : nil)
+                   pinOpen: tab.isPinned && !tab.pinnedInstanceClosed, loadingProgress: tab.navigationInProgress ? (tab.webView?.estimatedProgress ?? 0) : nil)
         let ownerID = ownerSpace(for: tab).saved.id
         if row.themeSpaceID != ownerID {
             row.applyTheme(BrowserTheme.profile(for: ownerID))
@@ -5584,6 +5654,7 @@ private final class WebsiteFrameRim: NSView {
             DispatchQueue.main.async { [weak self] in
                 guard let self, let row = self.tabRows[id], row.window != nil else { return }
                 let menu = NSMenu(title: "Tab Actions")
+                self.appendMuteItem(for: id, to: menu)
                 self.appendFloatingItem(for: id, to: menu)
                 self.appendMoveItems(for: id, to: menu)
                 guard !menu.items.isEmpty else { return }
@@ -5618,11 +5689,63 @@ private final class WebsiteFrameRim: NSView {
         closeTab(id: id)
     }
 
-    fileprivate func supportsPin(for id: UUID) -> Bool { tab(id: id)?.ide == nil }
+    fileprivate func supportsPin(for id: UUID) -> Bool {
+        guard let tab = tab(id: id) else { return false }
+        return !tab.isPrivate && tab.ide == nil && !tab.isInternalPage
+    }
+
+    fileprivate func appendMuteItem(for id: UUID, to menu: NSMenu) {
+        guard let tab = tab(id: id), !tab.isTerminal, !tab.isInternalPage else { return }
+        let item = menu.addItem(withTitle: tab.isMuted ? "Unmute Tab" : "Mute Tab",
+                                action: #selector(toggleTabMute(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = id
+        item.image = NSImage(systemSymbolName: tab.isMuted ? "speaker.wave.2" : "speaker.slash", accessibilityDescription: nil)
+    }
+
+    @objc private func toggleTabMute(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID, let tab = tab(id: id) else { return }
+        tab.isMuted.toggle()
+        applyTabMute(tab)
+        refreshTabContent(tab)
+    }
+
+    private func applyTabMute(_ tab: BrowserTab) {
+        tab.chromiumView?.setAudioMuted(tab.isMuted)
+        guard let view = tab.webView else { return }
+        let selector = NSSelectorFromString("_setPageMuted:")
+        guard view.responds(to: selector), let implementation = view.method(for: selector) else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, UInt) -> Void
+        let getter = NSSelectorFromString("_mediaMutedState")
+        var mutedState: UInt = 0
+        if view.responds(to: getter), let read = view.method(for: getter) {
+            typealias Getter = @convention(c) (AnyObject, Selector) -> UInt
+            mutedState = unsafeBitCast(read, to: Getter.self)(view, getter)
+        }
+        let audioState = (mutedState & ~1) | (tab.isMuted ? 1 : 0)
+        unsafeBitCast(implementation, to: Setter.self)(view, selector, audioState)
+    }
+
+    @objc private func muteCurrentTab() {
+        guard let tab = activeTab, !tab.isTerminal, !tab.isInternalPage else { return }
+        let sender = NSMenuItem()
+        sender.representedObject = tab.id
+        toggleTabMute(sender)
+    }
+
+    @objc private func newPrivateTab() {
+        let tab = BrowserTab()
+        tab.ownerSpaceID = activeSpace.saved.id
+        tab.privateSession = BrowserPrivateSession()
+        tab.title = "Private Tab"
+        tabs.append(tab)
+        selectTab(tab)
+        scheduleSessionSave()
+    }
 
     @objc fileprivate func togglePinTabAction(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? UUID,
-              let index = tabs.firstIndex(where: { $0.id == id }), tabs[index].ide == nil else { return }
+              let index = tabs.firstIndex(where: { $0.id == id }), supportsPin(for: id) else { return }
         rememberLayout()
         var ordered = tabs
         let tab = ordered.remove(at: index)
@@ -5654,7 +5777,7 @@ private final class WebsiteFrameRim: NSView {
     }
 
     fileprivate func appendMoveItems(for tabID: UUID, to menu: NSMenu) {
-        guard !BrowserExperiment.cyclesNewTabProfiles, spaces.count > 1 else { return }
+        guard !BrowserExperiment.cyclesNewTabProfiles, spaces.count > 1, tab(id: tabID)?.isInternalPage == false else { return }
         let root = NSMenuItem(title: "Show in Profile", action: nil, keyEquivalent: "")
         let destinations = NSMenu(title: "Show in Profile")
         for space in spaces where space.saved.id != activeSpace.saved.id {
@@ -5678,7 +5801,7 @@ private final class WebsiteFrameRim: NSView {
     }
 
     fileprivate func appendFloatingItem(for tabID: UUID, to menu: NSMenu) {
-        guard let tab = tab(id: tabID), tab.ide == nil else { return }
+        guard let tab = tab(id: tabID), tab.ide == nil, !tab.isInternalPage else { return }
         if let key = keepLoadedKey(for: tab) {
             let keep = menu.addItem(withTitle: "Keep This Site Loaded", action: #selector(toggleKeepLoaded(_:)), keyEquivalent: "")
             keep.target = self; keep.representedObject = tabID
@@ -5699,7 +5822,7 @@ private final class WebsiteFrameRim: NSView {
 
     private func floatTab(_ tab: BrowserTab) {
         defer {if let floating=floatingWindows[tab.id] {Motion.reveal(floating.contentView ?? NSView(),character:.panel)}}
-        guard tab.ide == nil else { return }
+        guard tab.ide == nil, !tab.isInternalPage else { return }
         guard !tab.isFloating else { floatingWindows[tab.id]?.makeKeyAndOrderFront(nil); return }
         if splitTabIDs?.contains(tab.id) == true { endSplit() }
         let floating = FloatingTabWindow(tabID: tab.id, title: tab.title,
@@ -6006,7 +6129,8 @@ private final class WebsiteFrameRim: NSView {
               let source = spaces.first(where: { $0.tabs.contains { $0.id == ids[0] } }),
               let destinationIndex = spaces.firstIndex(where: { $0.saved.id == ids[1] }),
               source !== spaces[destinationIndex],
-              let index = source.tabs.firstIndex(where: { $0.id == ids[0] }) else { return }
+              let index = source.tabs.firstIndex(where: { $0.id == ids[0] }),
+              !source.tabs[index].isInternalPage else { return }
         rememberLayout()
         if splitTabIDs?.contains(ids[0]) == true { endSplit() }
         let tab = source.tabs.remove(at: index)
@@ -6021,20 +6145,20 @@ private final class WebsiteFrameRim: NSView {
         refreshTabs()
     }
 
-    private func closeTab(id: UUID) {
+    private func closeTab(id: UUID, remember: Bool = true) {
         if let row=tabRows[id],tab(id:id)?.isPinned != true {Motion.depart(row)}
         if let row=horizontalRows[id],tab(id:id)?.isPinned != true {Motion.depart(row)}
         chatGPTDrafts.removeValue(forKey:id)
         if miniTabs[id] != nil {closeMiniWebby(id);return}
-        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
-        guard tabs[index].ide?.mayClose() != false else { return }
-        if pointerLockedWebView === tabs[index].webView { releasePointerLock() }
+        guard let closingTab = tab(id: id), closingTab.ide?.mayClose() != false else { return }
+        let containingSpace = displaySpace(for: closingTab)
+        guard let index = containingSpace.tabs.firstIndex(where: { $0.id == id }) else { return }
+        let visibleIndex = tabs.firstIndex(where: { $0.id == id })
+        if pointerLockedWebView === closingTab.webView { releasePointerLock() }
         tabPreview.hide(for: id)
-        linkPreview?.close()
+        if visibleIndex != nil { linkPreview?.close() }
         if splitTabIDs?.contains(id) == true { endSplit() }
         let wasActive = activeTabID == id
-        let containingSpace = displaySpace(for: tabs[index])
-        let closingTab = tabs[index]
         if closingTab.isPinned {
             if closingTab.pinnedInstanceClosed { return }
             if let address = closingTab.pageURL?.absoluteString {
@@ -6060,18 +6184,30 @@ private final class WebsiteFrameRim: NSView {
             } else { refreshTabs() }
             return
         }
-        recentlyClosedTabs.append(ClosedTabRecord(
-            title: closingTab.title,
-            address: closingTab.pageURL?.absoluteString ?? destination(for: closingTab.searchDraft)?.absoluteString,
-            searchDraft: closingTab.searchDraft,
-            ownerSpaceID: ownerSpace(for: closingTab).saved.id,
-            displaySpaceID: containingSpace.saved.id,
-            wasPinned: closingTab.isPinned, wasTerminal: closingTab.isTerminal,
-            wasIDE: closingTab.ide != nil, ideProject: closingTab.ide?.projectURL,
-            pinWidthFraction: closingTab.pinWidthFraction, pinHeight: closingTab.pinHeight, engine: closingTab.engine))
-        if recentlyClosedTabs.count > 20 { recentlyClosedTabs.removeFirst() }
+        if remember && !closingTab.isPrivate && !closingTab.isInternalPage {
+            recentlyClosedTabs.append(ClosedTabRecord(
+                title: closingTab.title,
+                address: closingTab.pageURL?.absoluteString ?? destination(for: closingTab.searchDraft)?.absoluteString,
+                searchDraft: closingTab.searchDraft,
+                ownerSpaceID: ownerSpace(for: closingTab).saved.id,
+                displaySpaceID: containingSpace.saved.id,
+                wasPinned: closingTab.isPinned, wasTerminal: closingTab.isTerminal,
+                wasIDE: closingTab.ide != nil, ideProject: closingTab.ide?.projectURL,
+                pinWidthFraction: closingTab.pinWidthFraction, pinHeight: closingTab.pinHeight, engine: closingTab.engine))
+            if recentlyClosedTabs.count > 20 { recentlyClosedTabs.removeFirst() }
+        }
         discardFloatingWindow(for: id)
-        let closing = tabs.remove(at: index)
+        discardAgent(for: id)
+        let closing = containingSpace.tabs.remove(at: index)
+        fusedTabOrder.removeAll { $0 == id }
+        agentOwners.removeValue(forKey: id)
+        agentContexts.removeValue(forKey: id)
+        agentPageTones.removeValue(forKey: id)
+        if containingSpace !== activeSpace, containingSpace.activeTabID == id {
+            containingSpace.activeTabID = containingSpace.tabs.first(where: { !$0.isFloating && !$0.isPinned })?.id
+        }
+        closeSettingsPage(in: closing)
+        closeAgentPane(in: closing)
         if closing.isPinned { savePinnedTabs(for: containingSpace) }
         closing.progressObservation?.invalidate()
         closing.progressObservation = nil
@@ -6091,14 +6227,18 @@ private final class WebsiteFrameRim: NSView {
         closing.terminalView?.stop()
         closing.terminalView?.removeFromSuperview()
         closing.terminalView = nil
-        if tabs.isEmpty {
+        if wasActive || tabs.isEmpty {
             activeTabID = nil
-            addTab(select: true)
-        } else if wasActive {
-            activeTabID = nil
-            selectTab(tabs[min(index, tabs.count - 1)])
-        }
-        else { refreshTabs() }
+            let remaining = tabs
+            let nextIndex = min(visibleIndex ?? index, remaining.count)
+            let eligible: (BrowserTab) -> Bool = { !$0.isPinned && !$0.isFloating }
+            if let next = remaining.dropFirst(nextIndex).first(where: eligible)
+                ?? remaining.prefix(nextIndex).last(where: eligible) {
+                selectTab(next)
+            } else {
+                addTab(select: true)
+            }
+        } else { refreshTabs() }
         scheduleSessionSave()
     }
 
@@ -6407,11 +6547,23 @@ private final class WebsiteFrameRim: NSView {
         wallpaper?.refreshActivity()
     }
 
+    private func activateSplitPane(containing view: NSView) {
+        guard splitView?.isHidden == false, let ids = splitTabIDs else { return }
+        guard let selected = ids.compactMap({ tab(id: $0) }).first(where: {
+            guard let surface = $0.splitSurface else { return false }
+            return view === surface || view.isDescendant(of: surface)
+        }), selected.id != activeTabID else { return }
+        // Update browser commands before AppKit delivers the click to the pane.
+        // The event itself still reaches the page for selection and editing.
+        selectTab(selected)
+    }
+
     private func installChromeMonitor() {
         controlMotionMonitor=NSEvent.addLocalMonitorForEvents(matching:[.leftMouseDown,.leftMouseUp]){[weak self] event in
             guard let self,let host=event.window,host === self.window || self.floatingWindows.values.contains(where:{$0 === host}) else{return event}
             if event.type == .leftMouseUp {if let button=self.pressedMotionButton {Motion.basic(button.layer,key:"transform.scale",from:0.99,to:1,duration:0.12)};self.pressedMotionButton=nil;return event}
             var hit=host.contentView?.hitTest(host.contentView?.convert(event.locationInWindow,from:nil) ?? .zero)
+            if host === self.window, let hit { self.activateSplitPane(containing: hit) }
             self.commandLinkIntent=nil
             if event.modifierFlags.contains(.command),!event.modifierFlags.contains(.option) {
                 var node=hit
@@ -6438,7 +6590,7 @@ private final class WebsiteFrameRim: NSView {
 
         installTabShortcuts()
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .mouseMoved]) { [weak self] event in
-            guard let self, event.window === self.window else { return event }
+            guard let self, self.onboarding?.isPresented != true, event.window === self.window else { return event }
             if event.type == .scrollWheel {
                 let sidebarPoint = self.sidebar.convert(event.locationInWindow, from: nil)
                 let horizontalLayout = BrowserTabPlacement.current == .horizontal
@@ -6546,7 +6698,7 @@ private final class WebsiteFrameRim: NSView {
         }
         configureVideoPresentation(configuration)
         if popupConfiguration == nil {
-            configuration.websiteDataStore = ownerSpace(for: tab).dataStore
+            configuration.websiteDataStore = tab.privateDataStore ?? ownerSpace(for: tab).dataStore
             if fastModeEnabled, let fastRule { configuration.userContentController.add(fastRule) }
             configuration.userContentController.add(self, name: "browserPasswordField")
             configuration.userContentController.add(self, name: "browserLinkPreview")
@@ -6598,6 +6750,7 @@ private final class WebsiteFrameRim: NSView {
         tab.pageConstraints = pageConstraints
         NSLayoutConstraint.activate(pageConstraints)
         tab.webView = view
+        applyTabMute(tab)
         let tabID = tab.id
         tab.progressObservation = view.observe(\.estimatedProgress, options: [.new]) { [weak self] view, _ in
             DispatchQueue.main.async { [weak self, weak view] in
@@ -6632,7 +6785,9 @@ private final class WebsiteFrameRim: NSView {
         }
         guard let data = try? JSONSerialization.data(withJSONObject: blocked),
               let json = String(data: data, encoding: .utf8) else { return }
+        let marker = "/* Webby site permissions */"
         let source = """
+        \(marker)
         (() => {
           const blocked = (\(json)[location.hostname.toLowerCase()] || []);
           if (blocked.includes('location') && navigator.geolocation) {
@@ -6651,25 +6806,32 @@ private final class WebsiteFrameRim: NSView {
           }
         })();
         """
-        configuration.userContentController.addUserScript(
+        let controller = configuration.userContentController
+        let retained = controller.userScripts.filter { !$0.source.hasPrefix(marker) }
+        controller.removeAllUserScripts()
+        retained.forEach(controller.addUserScript)
+        controller.addUserScript(
             WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false))
     }
 
     private func applyGlassTone(for tab: BrowserTab) {
-        mainArea.appearance = NSAppearance(named: BrowserGlass.pageInjectionEnabled || tab.prefersDarkGlass ? .darkAqua : .aqua)
-        if BrowserGlass.matchPageGlassSidebar { sidebarBackdrop.appearance = mainArea.appearance }
+        let tone: NSAppearance.Name = BrowserGlass.pageInjectionEnabled || tab.prefersDarkGlass ? .darkAqua : .aqua
+        if mainArea.appearance?.name != tone { mainArea.appearance = NSAppearance(named: tone) }
+        if BrowserGlass.matchPageGlassSidebar && sidebarBackdrop.appearance?.name != tone {
+            sidebarBackdrop.appearance = mainArea.appearance
+        }
     }
 
     private func updateGlassTone(for webView: WKWebView) {
         guard let tab=tab(for:webView) else {return}
-        let enabled=(BrowserTabPlacement.current == .horizontal || BrowserGlass.matchWebsiteEdge) && tab.id == activeTabID
+        let enabled=(BrowserTabPlacement.current == .horizontal || BrowserGlass.matchWebsiteEdge || dockedAgent != nil) && tab.id == activeTabID
         var sampleX:CGFloat=0.5
         let rowID=splitTabIDs?.contains(tab.id) == true ? splitRepresentativeID ?? tab.id : tab.id
         if let row=horizontalRows[rowID],webView.bounds.width>0 {
             let point=webView.convert(row.convert(NSPoint(x:row.bounds.midX,y:0),to:nil),from:nil)
             sampleX=min(0.98,max(0.02,point.x/webView.bounds.width))
         }
-        webView.evaluateJavaScript("window.__webbyChromeTone?.({enabled:\(enabled),x:\(sampleX),left:\(BrowserGlass.matchWebsiteEdge && BrowserTabPlacement.current != .horizontal),glass:\(BrowserGlass.pageInjectionEnabled)})",
+        webView.evaluateJavaScript("window.__webbyChromeTone?.({enabled:\(enabled),x:\(sampleX),left:\(BrowserGlass.matchWebsiteEdge && BrowserTabPlacement.current != .horizontal),right:\(dockedAgent != nil),glass:\(BrowserGlass.pageInjectionEnabled)})",
             in:nil,in:BrowserChromeTone.world,completionHandler:nil)
         if BrowserGlass.pageInjectionEnabled {
             tab.prefersDarkGlass=true
@@ -6704,7 +6866,10 @@ private final class WebsiteFrameRim: NSView {
                 guard let self, let webView, let tab = self.tab(for: webView),
                       let dark = result as? Bool else { return }
                 tab.prefersDarkGlass = dark
-                if self.activeTabID == tab.id { self.applyGlassTone(for: tab) }
+                if self.activeTabID == tab.id {
+                    self.applyGlassTone(for: tab)
+                    self.updateAgentDockAppearance()
+                }
             }
         }
     }
@@ -6718,11 +6883,15 @@ private final class WebsiteFrameRim: NSView {
     }
 
     private func navigate(_ input: String, in tab: BrowserTab? = nil, profileID: UUID? = nil) {
-        closeSuggestions()
+        if tab == nil || tab?.id == activeTabID { closeSuggestions() }
         let query = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.lowercased() == BrowserSettingsPage.address && (tab ?? activeTab)?.isFloating != true {
+            openSettingsTab()
+            return
+        }
         guard !query.isEmpty, let target = tab ?? activeTab,
               let url = destination(for: query, profile: ownerSpace(for: target).saved.id) else { return }
-        if BrowserExperiment.cyclesNewTabProfiles && target.fuseSearch && target.id == activeTabID && !target.isTerminal {
+        if !target.isPrivate && BrowserExperiment.cyclesNewTabProfiles && target.fuseSearch && target.id == activeTabID && !target.isTerminal {
             let isWebsite = query.contains("://") || (!query.contains(where: \.isWhitespace) && (query.contains(".") || query.lowercased().hasPrefix("localhost")))
             let routingRevision=spaces.map{HistoryRevision(space:ObjectIdentifier($0),revision:$0.historyRevision)}
             let cachedProfile=fuseRouteRevision==routingRevision ? fuseRoutes[url.host?.lowercased() ?? ""]:nil
@@ -6744,9 +6913,44 @@ private final class WebsiteFrameRim: NSView {
             navigate(input)
             return
         }
-        if target.engine == .chromium && !target.isTerminal {
+        closeSettingsPage(in: target)
+        closeAgentPane(in: target)
+        let rule = BrowserEngineRule.engine(for: url)
+        if rule == .chromium && miniTabs[target.id] != nil {
+            openExternalLink(url, profileID: ownerSpace(for: target).saved.id)
+            return
+        }
+        let engine = rule ?? target.engine
+        let switchesEngine = !target.isTerminal && target.engine != engine && target.pageView != nil
+        if switchesEngine && (target.hasUnsavedEdits || target.captureMayBeActive || target.chromiumView?.hasActiveDownloads == true) {
+            let fresh = BrowserTab()
+            fresh.inheritBrowsingMode(from: target)
+            fresh.ownerSpaceID = ownerSpace(for: target).saved.id
+            agentOwners[fresh.id] = agentOwners[target.id]
+            agentContexts[fresh.id] = agentContexts[target.id]
+            displaySpace(for: target).tabs.append(fresh)
+            if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(fresh.id) }
+            if target.id == activeTabID || target.isFloating { selectTab(fresh) }
+            navigate(url.absoluteString, in: fresh, profileID: fresh.ownerSpaceID)
+            return
+        }
+        let split = switchesEngine && splitTabIDs?.contains(target.id) == true ? splitTabIDs : nil
+        if split != nil { endSplit() }
+        defer {
+            if let split, split.allSatisfy({ self.tab(id: $0)?.splitSurface != nil }) { renderSplit(split) }
+            if switchesEngine {
+                scheduleSessionSave()
+                if target.isPinned { savePinnedTabs(for: displaySpace(for: target)) }
+            }
+        }
+        if engine == .chromium && !target.isTerminal {
             _ = openChromium(url, in: target, show: target.id == activeTabID)
             return
+        }
+        if target.chromiumView != nil {
+            releaseWebView(for: target)
+            target.hasUnsavedEdits = false
+            target.captureMayBeActive = false
         }
         target.navigationTiming = BrowserNavigationTiming()
         target.currentNavigation = nil
@@ -6774,11 +6978,11 @@ private final class WebsiteFrameRim: NSView {
             refreshTabs()
             return
         }
-        closeSuggestions()
-        loadErrorLabel.isHidden = true
+        let selected = target.id == activeTabID
+        if selected { loadErrorLabel.isHidden = true }
         target.loadError = nil
         let startsFromSearch = target.pageView == nil || target.showsSearchView
-        terminalTransitionToken += 1
+        if selected { terminalTransitionToken += 1 }
         // A tab that becomes a website can no longer reach its old shell.
         // Release that pane; terminal tabs themselves keep their sessions alive.
         target.terminalView?.stop()
@@ -6789,15 +6993,19 @@ private final class WebsiteFrameRim: NSView {
         target.navigationInProgress = true
         target.searchDraft = query
         target.pendingSearchInput = query
-        terminalMode = false
-        target.terminalView?.isHidden = true
-        if startsFromSearch {
-            homeSearchSurface.isHidden = false
-            globe.engine.showScene(usesFuseSearch ? BrowserExperiment.fuseScene : "search")
+        if selected {
+            terminalMode = false
+            if startsFromSearch {
+                homeSearchSurface.isHidden = false
+                globe.engine.showScene(usesFuseSearch ? BrowserExperiment.fuseScene : "search")
+            }
+            hideToolbar(animated: false)
+            applyAddressChrome()
         }
-        hideToolbar(animated: false)
-        applyAddressChrome()
         let view = makeWebView(for: target)
+        if !selected && !(splitTabIDs?.contains(target.id) == true && splitTabIDs?.contains(activeTabID ?? UUID()) == true) {
+            view.isHidden = true
+        }
         target.title = query.contains("://") || query.contains(".") ? (url.host ?? query) : query
         if target.id == activeTabID {
             view.isHidden = false
@@ -6887,6 +7095,10 @@ private final class WebsiteFrameRim: NSView {
     @objc private func goForward() { if !(NSApp.keyWindow is MiniWebbyWindow), let page = activeTab?.chromiumView { page.goForward() } else { performNavigation { $0.goForward() } } }
     @objc private func reloadPage() { if !(NSApp.keyWindow is MiniWebbyWindow), let page = activeTab?.chromiumView { activeTab?.loadError = nil; loadErrorLabel.isHidden = true; page.reload() } else { performNavigation { $0.reload() } } }
     @objc private func closeCurrentTab() {
+        if let onboarding, onboarding.isPresented, NSApp.keyWindow === window {
+            onboarding.skip()
+            return
+        }
         if let mini=NSApp.keyWindow as? MiniWebbyWindow {closeMiniWebby(mini.tabID);return}
         guard let activeTabID else { return }
         if let ids = splitTabIDs, let anchor = splitRepresentativeID.flatMap({ tab(id: $0) }),
@@ -6977,12 +7189,19 @@ private final class WebsiteFrameRim: NSView {
         findField?.currentEditor()?.selectAll(nil)
     }
 
-    @objc private func hideFindBar() { if let findBar {Motion.depart(findBar,character:.panel)};findBar?.isHidden = true; window.makeFirstResponder(activeTab?.pageView) }
+    @objc private func hideFindBar() {
+        activeTab?.chromiumView?.stopFinding()
+        findStatus?.stringValue = ""
+        if let findBar { Motion.depart(findBar, character: .panel) }
+        findBar?.isHidden = true
+        if let page = activeTab?.chromiumView { page.focusPage() }
+        else { window.makeFirstResponder(activeTab?.pageView) }
+    }
     @objc private func findNext() { if let ide = activeTab?.ide { ide.find(backwards: false); return }; findInPage(backwards: false) }
     @objc private func findPrevious() { if let ide = activeTab?.ide { ide.find(backwards: true); return }; findInPage(backwards: true) }
 
     @objc private func showSitePermissions() {
-        guard let tab = activeTab, let host = tab.pageURL?.host ?? tab.suspendedURL?.host else { return }
+        guard let tab = settingsWebsiteTab, let host = tab.pageURL?.host ?? tab.suspendedURL?.host else { return }
         let profile = ownerSpace(for: tab).saved.id
         permissionEditingHost = host
         permissionEditingProfile = profile
@@ -7035,24 +7254,44 @@ private final class WebsiteFrameRim: NSView {
     @objc private func sitePermissionChanged(_ sender: NSPopUpButton) {
         guard let host = permissionEditingHost, let profile = permissionEditingProfile,
               SitePermission.allCases.indices.contains(sender.tag) else { return }
-        SitePermission.set(sender.indexOfSelectedItem, for: SitePermission.allCases[sender.tag],
-                           host: host, profile: profile)
+        let kind = SitePermission.allCases[sender.tag]
+        SitePermission.set(sender.indexOfSelectedItem, for: kind, host: host, profile: profile)
+        // Native permissions are read when requested. Only the document-start
+        // location/notification/clipboard shims need a new document to take effect.
+        let scripted = [SitePermission.location, .notifications, .clipboard].contains(kind)
+        let pages = (spaces.flatMap(\.tabs) + Array(miniTabs.values)).filter {
+            ownerSpace(for: $0).saved.id == profile && $0.webView != nil
+        }
+        var updatedControllers = Set<ObjectIdentifier>()
+        for tab in pages {
+            guard let configuration = tab.webView?.configuration else { continue }
+            if updatedControllers.insert(ObjectIdentifier(configuration.userContentController)).inserted {
+                installSitePolicy(into: configuration, profile: profile)
+            }
+        }
+        guard scripted else { return }
+        let affected = pages.filter { $0.pageURL?.host?.lowercased() == host.lowercased() }
         let splitIDs = splitTabIDs
-        if splitIDs != nil { endSplit() }
-        for tab in spaces.flatMap(\.tabs) where tab.ownerSpaceID == profile
-            && tab.webView != nil && !tab.isFloating {
+        let rebuildSplit = affected.contains { splitIDs?.contains($0.id) == true }
+        if rebuildSplit { endSplit() }
+        for tab in affected {
             guard let url = tab.pageURL else { continue }
-            let selected = tab.id == activeTabID
+            let selected = tab.id == activeTabID || tab.isFloating
             tab.suspendedURL = url
             releaseWebView(for: tab)
             resumeTab(tab, show: selected)
+            if tab.isFloating { attachFloatingContent(for: tab) }
         }
-        if let splitIDs, splitIDs.allSatisfy({ tab(id: $0)?.splitSurface != nil }) { renderSplit(splitIDs) }
+        if rebuildSplit, let splitIDs, splitIDs.allSatisfy({ tab(id: $0)?.splitSurface != nil }) { renderSplit(splitIDs) }
     }
 
     private func findInPage(backwards: Bool) {
-        if let page = activeTab?.chromiumView, let query = findField?.stringValue, !query.isEmpty {
-            page.findText(query, backwards: backwards); findStatus?.stringValue = ""; return
+        if let page = activeTab?.chromiumView {
+            let query = findField?.stringValue ?? ""
+            findStatus?.stringValue = ""
+            if query.isEmpty { page.stopFinding() }
+            else { page.findText(query, backwards: backwards) }
+            return
         }
         guard let view = activeWebView, let query = findField?.stringValue, !query.isEmpty else {
             findStatus?.stringValue = ""
@@ -7061,8 +7300,10 @@ private final class WebsiteFrameRim: NSView {
         let options = WKFindConfiguration()
         options.backwards = backwards
         options.wraps = true
-        view.find(query, configuration: options) { [weak self] result in
-            self?.findStatus?.stringValue = result.matchFound ? "Found" : "No match"
+        view.find(query, configuration: options) { [weak self, weak view] result in
+            guard let self, let view, self.activeWebView === view,
+                  self.findBar?.isHidden == false, self.findField?.stringValue == query else { return }
+            self.findStatus?.stringValue = result.matchFound ? "Found" : "No match"
         }
     }
 
@@ -7075,8 +7316,11 @@ private final class WebsiteFrameRim: NSView {
     private func updateNavigation() {
         backButton.isEnabled = activeTab?.chromiumView?.canGoBack ?? (activeWebView?.canGoBack == true)
         forwardButton.isEnabled = activeTab?.chromiumView?.canGoForward ?? (activeWebView?.canGoForward == true)
-        if !terminalMode && addressField.currentEditor() == nil { addressField.stringValue = activeTab?.pageURL.map(displayAddress) ?? "" }
-        addressField.toolTip = activeTab?.pageURL?.absoluteString
+        let settingsAddress = activeTab?.settingsPage == nil ? nil : BrowserSettingsPage.address
+        if !terminalMode && addressField.currentEditor() == nil {
+            addressField.stringValue = settingsAddress ?? activeTab?.pageURL.map(displayAddress) ?? ""
+        }
+        addressField.toolTip = settingsAddress ?? activeTab?.pageURL?.absoluteString
         applyAddressChrome()
     }
 
@@ -7204,7 +7448,7 @@ private final class WebsiteFrameRim: NSView {
         tab.loadError = nil
         tab.navigationInProgress = false
         tab.pendingSearchInput = nil
-        if let url = webView.url,
+        if !tab.isPrivate, let url = webView.url,
            let space = spaces.first(where: { $0.saved.id == tab.ownerSpaceID })
                        ?? spaces.first(where: { $0.tabs.contains { $0.id == tab.id } }) {
             space.recordVisit(url: url, title: tab.title)
@@ -7255,7 +7499,7 @@ private final class WebsiteFrameRim: NSView {
     }
 
     private func restoreFavicon(for tab: BrowserTab, url: URL) {
-        guard tab.favicon == nil else { return }
+        guard !tab.isPrivate, tab.favicon == nil else { return }
         let profile = ownerSpace(for: tab).saved.id
         persistentFavicons.load(for: url, profile: profile) { [weak self, weak tab] image in
             guard let self, let tab, self.tab(id: tab.id) === tab, tab.favicon == nil,
@@ -7269,6 +7513,7 @@ private final class WebsiteFrameRim: NSView {
     }
 
     private func rememberFavicon(_ image: NSImage, for tab: BrowserTab, pageURL: URL) {
+        guard !tab.isPrivate else { return }
         persistentFavicons.remember(image, for: pageURL, profile: ownerSpace(for: tab).saved.id)
         suggestions.rememberFavicon(image, for: pageURL)
     }
@@ -7327,7 +7572,7 @@ private final class WebsiteFrameRim: NSView {
                 let declared = (value?["urls"] as? [String] ?? []).compactMap(URL.init(string:))
                 let candidates = (declared + [fallback].compactMap { $0 })
                     .filter { ["http", "https"].contains($0.scheme?.lowercased() ?? "") }
-                self.fetchFavicon(candidates, index: 0, tabID: tab.id, generation: generation)
+                if !tab.isPrivate { self.fetchFavicon(candidates, index: 0, tabID: tab.id, generation: generation) }
             }
         })
     }
@@ -7336,7 +7581,7 @@ private final class WebsiteFrameRim: NSView {
         guard let tab = tab(id: tabID),
               tab.faviconGeneration == generation, candidates.indices.contains(index) else { return }
         let url = candidates[index]
-        if let cached = faviconCache[url] {
+        if !tab.isPrivate, let cached = faviconCache[url] {
             tab.favicon = cached
             if let pageURL = tab.pageURL { rememberFavicon(cached, for: tab, pageURL: pageURL) }
             refreshTabContent(tab)
@@ -7353,7 +7598,7 @@ private final class WebsiteFrameRim: NSView {
                    (200..<300).contains(response.statusCode), let data,
                    data.count <= 1_000_000, let image = NSImage(data: data) {
                     if self.faviconCache.count >= 256 { self.faviconCache.removeAll(keepingCapacity: true) }
-                    self.faviconCache[url] = image
+                    if !current.isPrivate { self.faviconCache[url] = image }
                     current.favicon = image
                     if let pageURL = current.pageURL {
                         self.rememberFavicon(image, for: current, pageURL: pageURL)
@@ -7485,35 +7730,67 @@ private final class WebsiteFrameRim: NSView {
            (navigationAction.request.httpMethod ?? "GET").uppercased() == "GET",
            navigationAction.request.httpBody == nil, navigationAction.request.httpBodyStream == nil {
             decisionHandler(.cancel)
-            downloads.startGET(navigationAction.request,from:webView.configuration.websiteDataStore.httpCookieStore,sourceURL:webView.url ?? tab(for: webView)?.lastMainFrameSourceURL,suggestedFilename:nil)
+            downloads.startGET(navigationAction.request,from:webView.configuration.websiteDataStore.httpCookieStore,sourceURL:webView.url ?? tab(for: webView)?.lastMainFrameSourceURL,suggestedFilename:nil,isPrivate:tab(for:webView)?.isPrivate == true)
             return
         }
-        if navigationAction.navigationType == .linkActivated,
-           navigationAction.modifierFlags.intersection([.command,.option]) == [.command,.option],
-           let source=tab(for:webView),let url=navigationAction.request.url,["http","https"].contains(url.scheme?.lowercased() ?? "") {
-            decisionHandler(.cancel);openMiniWebby(url:url,profile:ownerSpace(for:source).saved.id);return
+        let linkURL = navigationAction.navigationType == .linkActivated && !navigationAction.shouldPerformDownload
+            ? Self.routableLink(navigationAction.request) : nil
+        if navigationAction.modifierFlags.intersection([.command, .option]) == [.command, .option],
+           let source = tab(for: webView), !source.isPrivate, let url = linkURL {
+            decisionHandler(.cancel)
+            let profile = ownerSpace(for: source).saved.id
+            if BrowserEngineRule.engine(for: url) == .chromium { openExternalLink(url, profileID: profile) }
+            else { openMiniWebby(url: url, profile: profile) }
+            return
         }
-        if navigationAction.navigationType == .linkActivated,
-           let source = tab(for: webView),isCommandLink(navigationAction,source:source),
-           let url = navigationAction.request.url,
-           ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+        if let source = tab(for: webView), isCommandLink(navigationAction, source: source),
+           let url = linkURL {
             let tab = BrowserTab()
+            tab.inheritBrowsingMode(from: source)
             tab.ownerSpaceID = ownerSpace(for: source).saved.id
             tab.title = url.host ?? "New Tab"
-            tab.searchDraft=url.absoluteString
-            tab.showsSearchView=false
+            tab.searchDraft = url.absoluteString
+            tab.showsSearchView = false
             tab.navigationInProgress = true
             displaySpace(for: source).tabs.append(tab)
             if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(tab.id) }
-            let background = makeWebView(for: tab)
-            background.isHidden = true
-            background.load(navigationAction.request)
-            groupBackgroundLink(tab,from:source,url:url)
+            if BrowserEngineRule.engine(for: url) == .chromium {
+                _ = openChromium(url, in: tab, show: false)
+            } else {
+                let background = makeWebView(for: tab)
+                background.isHidden = true
+                background.load(navigationAction.request)
+            }
+            groupBackgroundLink(tab, from: source, url: url)
             refreshTabs()
             decisionHandler(.cancel)
             return
         }
+        if navigationAction.targetFrame?.isMainFrame == true,
+           let tab = tab(for: webView), let url = linkURL,
+           routeClickedLink(url, in: tab, from: webView) {
+            decisionHandler(.cancel)
+            return
+        }
         decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
+    }
+
+    private static func routableLink(_ request: URLRequest) -> URL? {
+        guard let url = request.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              (request.httpMethod ?? "GET").uppercased() == "GET",
+              request.httpBody == nil, request.httpBodyStream == nil else { return nil }
+        return url
+    }
+
+    private func routeClickedLink(_ url: URL, in tab: BrowserTab, from page: NSView) -> Bool {
+        guard let engine = BrowserEngineRule.engine(for: url), engine != tab.engine else { return false }
+        // Both renderers are allowed to finish their navigation-policy callback
+        // before the destination replaces the old view.
+        DispatchQueue.main.async { [weak self, weak tab, weak page] in
+            guard let self, let tab, let page, self.tab(id: tab.id) === tab, tab.pageView === page else { return }
+            self.navigate(url.absoluteString, in: tab, profileID: self.ownerSpace(for: tab).saved.id)
+        }
+        return true
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
@@ -7530,7 +7807,7 @@ private final class WebsiteFrameRim: NSView {
                   (request.httpMethod ?? "GET").uppercased() == "GET", request.httpBody == nil, request.httpBodyStream == nil {
             decisionHandler(.cancel)
             tab.navigationInProgress = false
-            downloads.startGET(request,from:webView.configuration.websiteDataStore.httpCookieStore,sourceURL:tab.lastMainFrameSourceURL,suggestedFilename:navigationResponse.response.suggestedFilename,expectedMIMEType:navigationResponse.response.mimeType)
+            downloads.startGET(request,from:webView.configuration.websiteDataStore.httpCookieStore,sourceURL:tab.lastMainFrameSourceURL,suggestedFilename:navigationResponse.response.suggestedFilename,expectedMIMEType:navigationResponse.response.mimeType,isPrivate:tab.isPrivate)
             if tab.id == activeTabID { toolbar.hideProgress();homeSearchSurface.stopLoading() }
         } else { decisionHandler(isDownload ? .download : .allow) }
     }
@@ -7542,7 +7819,7 @@ private final class WebsiteFrameRim: NSView {
                  didBecome download: WKDownload) { beginDownload(download, from: webView) }
 
     private func beginDownload(_ download: WKDownload, from webView: WKWebView) {
-        downloads.attach(download)
+        downloads.attach(download, isPrivate: tab(for: webView)?.isPrivate == true)
         if let tab = tab(for: webView) {
             tab.navigationInProgress = false
             refreshTabs()
@@ -7558,6 +7835,27 @@ private final class WebsiteFrameRim: NSView {
         if let source = tab(for: webView), let host = webView.url?.host,
            SitePermission.choice(.popups, host: host, profile: ownerSpace(for: source).saved.id) == 2 { return nil }
         guard let source = self.tab(for: webView) else { return nil }
+        if navigationAction.navigationType == .linkActivated, !navigationAction.shouldPerformDownload,
+           let url = Self.routableLink(navigationAction.request),
+           BrowserEngineRule.engine(for: url) == .chromium {
+            if miniTabs[source.id] != nil {
+                openExternalLink(url, profileID: ownerSpace(for: source).saved.id)
+            } else {
+                let fresh = BrowserTab()
+                fresh.inheritBrowsingMode(from: source)
+                fresh.ownerSpaceID = ownerSpace(for: source).saved.id
+                displaySpace(for: source).tabs.append(fresh)
+                if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(fresh.id) }
+                agentOwners[fresh.id] = agentOwners[source.id]
+                agentContexts[fresh.id] = agentContexts[source.id]
+                let background = agentOwners[source.id] != nil || isCommandLink(navigationAction, source: source) || !tabs.contains { $0.id == source.id }
+                if !background { selectTab(fresh) }
+                _ = openChromium(url, in: fresh, show: !background)
+                if background { groupBackgroundLink(fresh, from: source, url: url) }
+                refreshTabs()
+            }
+            return nil
+        }
         if miniTabs[source.id] != nil {
             let mini=openMiniWebby(profile:ownerSpace(for:source).saved.id,popupConfiguration:configuration)
             mini.lastMainFrameRequest = navigationAction.request
@@ -7565,6 +7863,7 @@ private final class WebsiteFrameRim: NSView {
             return mini.webView
         }
         let tab = BrowserTab()
+        tab.inheritBrowsingMode(from: source)
         tab.ownerSpaceID = ownerSpace(for: source).saved.id
         tab.lastMainFrameRequest = navigationAction.request
         tab.lastMainFrameSourceURL = webView.url
@@ -7573,7 +7872,9 @@ private final class WebsiteFrameRim: NSView {
         displaySpace(for: source).tabs.append(tab)
         if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(tab.id) }
         let commandLink=isCommandLink(navigationAction,source:source)
-        let background = commandLink
+        agentOwners[tab.id] = agentOwners[source.id]
+        agentContexts[tab.id] = agentContexts[source.id]
+        let background = agentOwners[source.id] != nil || commandLink
             || !tabs.contains(where: { $0.id == source.id })
         // Construct with WebKit's exact configuration before selection can create a default view.
         let popup = makeWebView(for: tab, popupConfiguration: configuration)
@@ -7613,6 +7914,7 @@ private final class WebsiteFrameRim: NSView {
         let choices = kinds.map { SitePermission.choice($0, host: host, profile: profile) }
         if choices.contains(2) { decisionHandler(.deny); return }
         if choices.allSatisfy({ $0 == 1 }) { tab.captureMayBeActive = true; decisionHandler(.grant); return }
+        if backgroundAgentOwns(webView) { decisionHandler(.deny); return }
         let alert = NSAlert()
         alert.messageText = "Allow \(host) to use \(kinds.map(\.title).joined(separator: " and "))?"
         alert.informativeText = "This permission applies to the \(ownerSpace(for: tab).saved.name) profile."
@@ -7630,6 +7932,7 @@ private final class WebsiteFrameRim: NSView {
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        if backgroundAgentOwns(webView) { completionHandler(); return }
         let alert = NSAlert()
         alert.messageText = webView.url?.host ?? "Website"
         alert.informativeText = message
@@ -7639,6 +7942,7 @@ private final class WebsiteFrameRim: NSView {
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        if backgroundAgentOwns(webView) { completionHandler(false); return }
         let alert = NSAlert()
         alert.messageText = webView.url?.host ?? "Website"
         alert.informativeText = message
@@ -7652,6 +7956,7 @@ private final class WebsiteFrameRim: NSView {
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
                  defaultText: String?, initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping (String?) -> Void) {
+        if backgroundAgentOwns(webView) { completionHandler(nil); return }
         let alert = NSAlert()
         alert.messageText = webView.url?.host ?? "Website"
         alert.informativeText = prompt
@@ -7668,6 +7973,7 @@ private final class WebsiteFrameRim: NSView {
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping ([URL]?) -> Void) {
+        if backgroundAgentOwns(webView) { completionHandler(nil); return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = parameters.allowsDirectories
@@ -7771,7 +8077,8 @@ private final class WebsiteFrameRim: NSView {
     }
 
     private func savedSplitRecord(for anchor: BrowserTab) -> SavedSplitRecord? {
-        guard let saved = anchor.savedSplit else { return nil }
+        guard !anchor.isPrivate, let saved = anchor.savedSplit,
+              anchor.savedSplitTabIDs.allSatisfy({ tab(id: $0)?.isPrivate != true }) else { return nil }
         let ids = anchor.savedSplitTabIDs
         let pages = ids.compactMap { id -> SavedSplitRecord.Page? in
             guard let page = tab(id: id),
@@ -7788,7 +8095,7 @@ private final class WebsiteFrameRim: NSView {
     @objc private func pinEntireSplit() {
         guard let ids = splitTabIDs, let first = splitRepresentativeID, let anchor = tab(id: first) else { return }
         let pages = ids.compactMap { id -> SavedSplitRecord.Page? in
-            guard let page = tab(id: id), let url = page.pageURL,
+            guard let page = tab(id: id), !page.isPrivate, let url = page.pageURL,
                   ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
             return .init(title: page.title, url: url.absoluteString, owner: ownerSpace(for: page).saved.id, engine: page.engine)
         }
@@ -7940,12 +8247,14 @@ private final class WebsiteFrameRim: NSView {
         guard existing.count < 4 else { return false }
         rememberLayout()
         let new = BrowserTab()
+        new.inheritBrowsingMode(from: target)
         new.ownerSpaceID = ownerSpace(for: target).saved.id
         new.searchDraft = url.absoluteString
         new.title = url.host ?? "New Tab"
         displaySpace(for: target).tabs.append(new)
-        if new.engine == .chromium { _ = openChromium(url, in: new, show: false) }
-        else { new.currentNavigation = makeWebView(for: new).load(URLRequest(url: url)) }
+        if (BrowserEngineRule.engine(for: url) ?? new.engine) == .chromium {
+            _ = openChromium(url, in: new, show: false)
+        } else { new.currentNavigation = makeWebView(for: new).load(URLRequest(url: url)) }
         var ids = existing
         let index = ids.firstIndex(of: target.id) ?? 0
         ids.insert(new.id, at: index + ((zone == 2 || zone == 4) ? 1 : 0))
@@ -7957,7 +8266,8 @@ private final class WebsiteFrameRim: NSView {
 
     private func installTabShortcuts() {
         tabShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
-            guard let self, event.window === self.window || self.switcherPanel != nil else { return event }
+            guard let self, self.onboarding?.isPresented != true,
+                  event.window === self.window || self.switcherPanel != nil else { return event }
             if event.type == .flagsChanged {
                 if self.switcherPanel != nil && !event.modifierFlags.contains(.control) { self.commitTabSwitcher() }
                 return event
@@ -8062,19 +8372,33 @@ private final class WebsiteFrameRim: NSView {
     private func installMenus() {
         let main = NSMenu()
         let app = NSMenuItem()
-        let appMenu = NSMenu()
+        let appMenu = NSMenu(title: "Webby")
+        appMenu.addItem(withTitle: "Settings…", action: #selector(showBrowserPreferences), keyEquivalent: ",").target = self
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Webby", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         app.submenu = appMenu; main.addItem(app)
         let file = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
+        let defaults = UserDefaults.standard
+        let key = defaults.string(forKey: "webbyAgent.summonKey") ?? "j"
+        let storedMask = defaults.integer(forKey: "webbyAgent.summonModifiers")
+        let agent = fileMenu.addItem(withTitle: "Open Webby Agent", action: #selector(openAgentTab), keyEquivalent: key)
+        agent.target = self
+        agent.keyEquivalentModifierMask = storedMask == 0 ? [.command, .shift] : .init(rawValue: UInt(storedMask))
+        agentSummonItem = agent
         let ideItem = fileMenu.addItem(withTitle: "New IDE Tab", action: #selector(openIDE), keyEquivalent: "i")
         ideItem.target = self
         ideItem.keyEquivalentModifierMask = [.command, .shift]
         let mini=fileMenu.addItem(withTitle:"New Mini Webby",action:#selector(openMiniAction),keyEquivalent:"")
         mini.target=self
         let promote=fileMenu.addItem(withTitle:"Keep Mini Page in Webby",action:#selector(keepMiniAction),keyEquivalent:"o");promote.target=self
+        let privateTab = fileMenu.addItem(withTitle: "New Private Tab", action: #selector(newPrivateTab), keyEquivalent: "n")
+        privateTab.target = self
+        privateTab.keyEquivalentModifierMask = [.command, .shift]
         let tab = fileMenu.addItem(withTitle: "New Tab", action: #selector(newTabAction), keyEquivalent: "t")
         tab.target = self
+        let mute = fileMenu.addItem(withTitle: "Mute / Unmute Tab", action: #selector(muteCurrentTab), keyEquivalent: "")
+        mute.target = self
         let close = fileMenu.addItem(withTitle: "Close Tab", action: #selector(closeCurrentTab), keyEquivalent: "w")
         close.target = self
         let splitPrevious = fileMenu.addItem(withTitle: "Split With Previous Tab", action: #selector(splitWithPreviousTab), keyEquivalent: "s")
@@ -8133,6 +8457,8 @@ private final class WebsiteFrameRim: NSView {
         reload.target = self
         let switchEngine = viewMenu.addItem(withTitle: "Switch Rendering Engine…", action: #selector(switchRenderingEngine), keyEquivalent: "e")
         switchEngine.target = self; switchEngine.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(withTitle: "Set Engine Rule for This Site…",
+                         action: #selector(showEngineRuleForCurrentSite), keyEquivalent: "").target = self
         let otherEngineTab = viewMenu.addItem(withTitle: "New Tab in Other Engine", action: #selector(newTabWithOtherEngine), keyEquivalent: "e")
         otherEngineTab.target = self; otherEngineTab.keyEquivalentModifierMask = [.command, .option, .shift]
         let sidebarItem = viewMenu.addItem(withTitle: "Show / Hide Tabs", action: #selector(toggleSidebar), keyEquivalent: "\\")
@@ -8164,7 +8490,82 @@ private final class WebsiteFrameRim: NSView {
         let report = viewMenu.addItem(withTitle: "Copy Performance Report", action: #selector(copyPerformanceReport), keyEquivalent: "")
         report.target = self
         view.submenu = viewMenu; main.addItem(view)
+        let help = NSMenuItem()
+        let helpMenu = NSMenu(title: "Help")
+        helpMenu.addItem(withTitle: "Explore Webby…", action: #selector(exploreWebby), keyEquivalent: "").target = self
+        helpMenu.addItem(withTitle: "Replay Introduction…", action: #selector(replayOnboarding), keyEquivalent: "").target = self
+        help.submenu = helpMenu
+        main.addItem(help)
         NSApplication.shared.mainMenu = main
+        NSApplication.shared.helpMenu = helpMenu
+    }
+
+    @objc private func showBrowserPreferences() { openSettingsTab() }
+
+    private func openSettingsTab(section: BrowserSettingsSection? = nil, ruleAddress: URL? = nil) {
+        guard let menuBar else { return }
+        let tab: BrowserTab
+        if let existing = activeSpace.tabs.first(where: { $0.settingsPage != nil }) {
+            tab = existing
+        } else {
+            tab = BrowserTab()
+            tab.ownerSpaceID = activeSpace.saved.id
+            tab.title = "Settings"
+            tab.favicon = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
+            let settings = menuBar.makeSettingsPage()
+            tab.settingsPage = settings
+            let view = settings.view
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.isHidden = true
+            pageArea.addSubview(view, positioned: .below, relativeTo: homeView)
+            tab.pageConstraints = [
+                view.leadingAnchor.constraint(equalTo: pageArea.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: pageArea.trailingAnchor),
+                view.topAnchor.constraint(equalTo: pageArea.topAnchor),
+                view.bottomAnchor.constraint(equalTo: pageArea.bottomAnchor)
+            ]
+            NSLayoutConstraint.activate(tab.pageConstraints)
+            activeSpace.tabs.append(tab)
+            if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(tab.id) }
+        }
+        selectTab(tab)
+        showBrowserWindow()
+        tab.settingsPage?.model.open(section: section, ruleAddress: ruleAddress)
+    }
+
+    private func closeSettingsPage(in tab: BrowserTab) {
+        guard let settings = tab.settingsPage else { return }
+        NSLayoutConstraint.deactivate(tab.pageConstraints)
+        tab.pageConstraints = []
+        settings.view.removeFromSuperview()
+        tab.settingsPage = nil
+        tab.favicon = nil
+    }
+
+    private var settingsWebsiteTab: BrowserTab? {
+        guard activeTab?.settingsPage != nil else { return activeTab }
+        return recentTabOrder.lazy.compactMap { self.tab(id: $0) }.first {
+            !$0.isFloating && self.ownerSpace(for: $0) === self.activeSpace
+                && ($0.pageURL ?? $0.suspendedURL)?.host != nil
+        }
+    }
+
+    @objc private func showEngineRuleForCurrentSite() {
+        let url = settingsWebsiteTab?.pageURL ?? settingsWebsiteTab?.suspendedURL
+        openSettingsTab(section: .engines, ruleAddress: url)
+    }
+
+    private func privacySettingsItems() -> [NSMenuItem] {
+        let permissions = NSMenuItem(title: "Permissions for This Site…", action: #selector(showSitePermissions), keyEquivalent: "")
+        permissions.target = self
+        permissions.isEnabled = (settingsWebsiteTab?.pageURL ?? settingsWebsiteTab?.suspendedURL)?.host != nil
+        let block = NSMenuItem(title: "Block Common Ads and Trackers", action: #selector(toggleFastMode(_:)), keyEquivalent: "")
+        block.target = self
+        block.state = fastModeEnabled ? .on : .off
+        block.isEnabled = fastRule != nil
+        let performance = NSMenuItem(title: "Copy Performance Report", action: #selector(copyPerformanceReport), keyEquivalent: "")
+        performance.target = self
+        return [permissions, block, .separator(), performance]
     }
 
     @objc private func toggleFuseMode() {
@@ -8176,6 +8577,7 @@ private final class WebsiteFrameRim: NSView {
         guard let fastRule else { return }
         fastModeEnabled.toggle()
         sender.state = fastModeEnabled ? .on : .off
+        fastModeItem?.state = sender.state
         // Update every account, including shared popup controllers, once.
         // Do not reload forms, editors or background tabs to change the policy.
         applyFastRule(fastRule)
@@ -8219,16 +8621,41 @@ extension BrowserApp {
 
     private func updateEngineAppearance() {
         guard let tab = activeTab else { return }
-        topAddressSurface?.setRenderingEngine(tab.engine)
+        topAddressSurface?.setRenderingEngine(tab.isInternalPage ? nil : tab.engine)
         homeSearchSurface?.setRenderingEngine(tab.engine)
-        topAddressSurface?.onSwitchEngine = { [weak self] in self?.switchRenderingEngine() }
+        topAddressSurface?.onSwitchEngine = !tab.isInternalPage ? { [weak self] in self?.switchRenderingEngine() } : nil
         homeSearchSurface?.onSwitchEngine = { [weak self] in self?.switchRenderingEngine() }
     }
 
-    @discardableResult private func openChromium(_ url: URL, in tab: BrowserTab, show: Bool) -> Bool {
-        guard ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") else { return false }
+    private func prepareChromiumPopup(address: String, background: Bool, from source: BrowserTab) -> WBChromiumView? {
+        guard tab(id: source.id) === source,
+              source.chromiumView != nil else { return nil }
+        if let host = source.pageURL?.host,
+           SitePermission.choice(.popups, host: host, profile: ownerSpace(for: source).saved.id) == 2 { return nil }
+        let fresh = BrowserTab()
+        fresh.engine = .chromium
+        fresh.ownerSpaceID = ownerSpace(for: source).saved.id
+        fresh.inheritBrowsingMode(from: source)
+        displaySpace(for: source).tabs.append(fresh)
+        if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(fresh.id) }
+        agentOwners[fresh.id] = agentOwners[source.id]
+        agentContexts[fresh.id] = agentContexts[source.id]
+        let show = !background && agentOwners[source.id] == nil
+            && tabs.contains(where: { $0.id == source.id })
+        let destination = URL(string: address.isEmpty ? "about:blank" : address) ?? URL(string: "about:blank")!
+        guard openChromium(destination, in: fresh, show: false, adoptingPopup: true), let page = fresh.chromiumView else {
+            closeTab(id: fresh.id, remember: false)
+            return nil
+        }
+        if show { selectTab(fresh) }
+        return page
+    }
+
+    @discardableResult private func openChromium(_ url: URL, in tab: BrowserTab, show: Bool, adoptingPopup: Bool = false) -> Bool {
+        guard adoptingPopup || ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") else { return false }
         if let page = tab.chromiumView {
             tab.loadError = nil; tab.navigationInProgress = true
+            tab.pendingSearchInput = url.absoluteString
             page.navigate(url.absoluteString)
             return true
         }
@@ -8241,14 +8668,44 @@ extension BrowserApp {
         page.translatesAutoresizingMaskIntoConstraints = false
         page.isHidden = !show
         tab.chromiumView = page
+        page.popupHandler = { [weak self, weak tab, weak page] address, background in
+            guard let self, let tab, let page, tab.chromiumView === page else { return nil }
+            return self.prepareChromiumPopup(address: address, background: background, from: tab)
+        }
         page.allowsDownload = { [weak self, weak tab] in
             guard let self, let tab else { return false }
             guard let host = tab.pageURL?.host else { return true }
             return SitePermission.choice(.downloads, host: host, profile: self.ownerSpace(for: tab).saved.id) != 2
         }
+        page.automationDownloadDestination = { [weak self] identifier, name, reply in
+            guard let self, let id = UUID(uuidString: identifier) else { reply(nil); return }
+            self.downloads.prepareEngineDownload(id, name: name) { reply($0?.path) }
+        }
+        page.automationDownloadFinished = { [weak self] identifier, status in
+            if let id = UUID(uuidString: identifier) { self?.downloads.finishEngineDownload(id, status: status) }
+        }
+        page.routeLink = { [weak self, weak tab, weak page] address in
+            guard let self, let tab, let page, tab.chromiumView === page,
+                  let url = URL(string: address) else { return false }
+            return self.routeClickedLink(url, in: tab, from: page)
+        }
         page.eventHandler = { [weak self, weak tab, weak page] event, value in
             guard let self, let tab, let page, tab.chromiumView === page else { return }
             switch event {
+            case "favicon":
+                if value.isEmpty {
+                    tab.favicon = nil
+                } else if let data = Data(base64Encoded: value), let image = NSImage(data: data) {
+                    tab.favicon = image
+                    if let url = tab.pageURL { self.rememberFavicon(image, for: tab, pageURL: url) }
+                }
+                self.refreshTabContent(tab)
+                return
+            case "find":
+                if tab.id == self.activeTabID, self.findBar?.isHidden == false {
+                    self.findStatus?.stringValue = value
+                }
+                return
             case "title": if !value.isEmpty { tab.title = value }
             case "url": tab.searchDraft = value; self.scheduleSessionSave()
             case "loading":
@@ -8266,6 +8723,7 @@ extension BrowserApp {
                     }
                 }
             case "activity":
+                if tab.id == self.activeTabID { self.sampleChromiumAgentEdge() }
                 if let data = value.data(using: .utf8),
                    let state = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                     tab.hasUnsavedEdits = state["edited"] as? Bool ?? true
@@ -8289,14 +8747,15 @@ extension BrowserApp {
                 }
                 return
             case "error": tab.loadError = value; tab.navigationInProgress = false
-            case "popup":
-                if let host = tab.pageURL?.host,
-                   SitePermission.choice(.popups, host: host, profile: self.ownerSpace(for: tab).saved.id) == 2 { return }
-                guard let url = URL(string: value), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
-                let fresh = BrowserTab(); fresh.engine = .chromium; fresh.ownerSpaceID = tab.ownerSpaceID
-                self.displaySpace(for: tab).tabs.append(fresh)
-                if BrowserExperiment.cyclesNewTabProfiles { self.fusedTabOrder.append(fresh.id) }
-                self.selectTab(fresh); _ = self.openChromium(url, in: fresh, show: true)
+            case "close", "popupAborted":
+                // CEF is still unwinding its lifecycle callback. Remove the tab
+                // on the next queue turn, retaining its original window proxy.
+                let remember = event != "popupAborted"
+                DispatchQueue.main.async { [weak self, weak tab, weak page] in
+                    guard let self, let tab, let page, self.tab(id: tab.id) === tab,
+                          tab.chromiumView === page else { return }
+                    self.closeTab(id: tab.id, remember: remember)
+                }
                 return
             default: return
             }
@@ -8325,7 +8784,9 @@ extension BrowserApp {
         NSLayoutConstraint.activate(constraints)
         pageArea.layoutSubtreeIfNeeded()
         let profile = chromiumRoot.appendingPathComponent(ownerSpace(for: tab).saved.id.uuidString, isDirectory: true)
-        guard page.openURL(url.absoluteString, profile: profile.path) else {
+        let context = tab.privateSessionID.map { "private:" + $0.uuidString } ?? profile.path
+        page.setAudioMuted(tab.isMuted)
+        guard adoptingPopup || page.openURL(url.absoluteString, profile: context) else {
             page.closePage(); page.removeFromSuperview(); NSLayoutConstraint.deactivate(constraints)
             tab.chromiumView = nil
             return false
@@ -8333,9 +8794,11 @@ extension BrowserApp {
         // Keep the previous WebKit page until Chromium has actually been created.
         releaseWebKit(for: tab)
         tab.pageConstraints = constraints; tab.engine = .chromium
-        tab.searchDraft = url.absoluteString; tab.title = url.host ?? url.absoluteString
+        tab.searchDraft = url.absoluteString
+        tab.title = url.absoluteString == "about:blank" ? "New Tab" : (url.host ?? url.absoluteString)
         tab.hasUnsavedEdits = false; tab.captureMayBeActive = false
         tab.showsSearchView = false; tab.navigationInProgress = true; tab.loadError = nil
+        tab.pendingSearchInput = url.absoluteString
         tab.suspendedURL = nil
         if tab.isFloating { attachFloatingContent(for: tab) }
         else if show {
@@ -8348,6 +8811,7 @@ extension BrowserApp {
     }
 
     private func recordChromiumHistory(_ tab: BrowserTab, url: URL) {
+        guard !tab.isPrivate else { return }
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
         let space = ownerSpace(for: tab)
         space.recordVisit(url: url, title: tab.title)
@@ -8355,7 +8819,7 @@ extension BrowserApp {
     }
 
     @objc private func switchRenderingEngine() {
-        guard let tab = activeTab, !tab.isTerminal, tab.ide == nil, !tab.isFloating else { return }
+        guard let tab = activeTab, !tab.isTerminal, tab.ide == nil, !tab.isInternalPage, !tab.isFloating else { return }
         engineSwitchPopover?.close()
         let next = tab.engine.other
         guard tab.pageURL != nil || tab.suspendedURL != nil else {
@@ -8391,7 +8855,9 @@ extension BrowserApp {
 
     @objc private func newTabWithOtherEngine() {
         let engine = (activeTab?.engine ?? BrowserEngine.defaultEngine).other
+        let session = activeTab?.privateSession
         addTab(select: true)
+        activeTab?.privateSession = session
         activeTab?.engine = engine
         updateEngineAppearance(); if let tab = activeTab { refreshTabContent(tab) }
     }
@@ -8464,6 +8930,261 @@ extension BrowserApp {
         try await waitForEngine("Password fixtures did not close") { !WBChromiumHasBrowsers() }
         print("PASS: Chromium shares Webby's vault for automatic/manual fill; HTTPS, origin, and profile boundaries preserved; synthetic credentials only")
     }
+    private func evaluateChromiumFixture(_ page: WBChromiumView, _ expression: String) async throws -> Any {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Any, Error>) in
+            page.automation(method: "Runtime.evaluate", parameters: [
+                "expression": expression, "returnByValue": true, "awaitPromise": true, "userGesture": true
+            ]) { result, error in
+                if let error { continuation.resume(throwing: EngineUIFailure(message: error)); return }
+                if let details = result?["exceptionDetails"] {
+                    continuation.resume(throwing: EngineUIFailure(message: "Popup fixture failed: \(details)")); return
+                }
+                let value = (result?["result"] as? [String: Any])?["value"] ?? NSNull()
+                continuation.resume(returning: value)
+            }
+        }
+    }
+
+    private func verifyChromiumPopups(base: String) async throws {
+        addTab(select: true)
+        let source = activeTab!
+        source.engine = .chromium
+        navigate(base + "/popup-opener", in: source)
+        try await waitForEngine("Popup opener did not load") { !source.navigationInProgress }
+        let page = source.chromiumView!
+        let before = Set(tabs.map(\.id))
+        let opened = try await evaluateChromiumFixture(page, """
+        (() => {
+          window.webbyPopup = window.open('', 'webby-script-popup');
+          if (!webbyPopup) throw new Error('window.open returned null');
+          webbyPopup.document.open();
+          webbyPopup.document.write('<!doctype html><title>Adopted blank popup</title><p>Written through the window proxy</p>');
+          webbyPopup.document.close();
+          return webbyPopup.opener === window && webbyPopup.document.body.textContent.includes('Written through');
+        })()
+        """)
+        try engineCheck(opened as? Bool == true, "Blank popup lost opener identity or document.write")
+        try await waitForEngine("Adopted popup did not appear as a native tab") {
+            self.tabs.contains { !before.contains($0.id) && $0.title == "Adopted blank popup" }
+        }
+        let popup = tabs.first { !before.contains($0.id) }!
+        try engineCheck(popup.ownerSpaceID == source.ownerSpaceID && popup.chromiumView != nil,
+                        "Popup lost the opener profile or native page")
+        let reused = try await evaluateChromiumFixture(page, "window.open('', 'webby-script-popup') === window.webbyPopup")
+        try engineCheck(reused as? Bool == true && tabs.count == before.count + 1,
+                        "Named popup reuse created a second window proxy or native tab")
+        let pong = try await evaluateChromiumFixture(page, """
+        new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('postMessage timed out')), 2500);
+          const receive = event => {
+            if (event.source === webbyPopup && event.data === 'webby-pong') {
+              clearTimeout(timeout); removeEventListener('message', receive); resolve(true);
+            }
+          };
+          addEventListener('message', receive);
+          webbyPopup.eval("addEventListener('message', event => { if(event.data === 'webby-ping') event.source.postMessage('webby-pong', event.origin); })");
+          webbyPopup.postMessage('webby-ping', location.origin);
+        })
+        """)
+        try engineCheck(pong as? Bool == true, "Popup and opener could not exchange postMessage")
+        _ = try await evaluateChromiumFixture(page, "webbyPopup.close(); true")
+        try await waitForEngine("window.close left an orphan popup tab") { self.tab(id: popup.id) == nil }
+        let host = source.pageURL!.host!, profile = ownerSpace(for: source).saved.id
+        let key = "webbyPermission.\(profile.uuidString).\(host.lowercased()).popups"
+        let previous = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let previous { UserDefaults.standard.set(previous, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        SitePermission.set(2, for: .popups, host: host, profile: profile)
+        let blocked = try await evaluateChromiumFixture(page, "window.open('', 'webby-blocked-popup') === null")
+        try engineCheck(blocked as? Bool == true && tabs.count == before.count,
+                        "Blocked popup created a tab or exposed a live window proxy")
+        SitePermission.set(0, for: .popups, host: host, profile: profile)
+        closeTab(id: source.id)
+        newPrivateTab()
+        let privateSource = activeTab!
+        privateSource.engine = .chromium
+        navigate(base + "/private-popup-opener", in: privateSource)
+        try await waitForEngine("Private popup opener did not load") { !privateSource.navigationInProgress }
+        let privateIDs = Set(tabs.map(\.id))
+        _ = try await evaluateChromiumFixture(privateSource.chromiumView!, """
+        (() => {
+          localStorage.setItem('webbyPrivatePopup', 'private-only');
+          window.privatePopup = window.open('', 'webby-private-popup');
+          if (!privatePopup) throw new Error('Private popup was blocked');
+          privatePopup.document.title = 'Private adopted popup';
+          return true;
+        })()
+        """)
+        try await waitForEngine("Private popup was not adopted") {
+            self.tabs.contains { !privateIDs.contains($0.id) && $0.chromiumView?.pageTitle == "Private adopted popup" }
+        }
+        let privatePopup = tabs.first { !privateIDs.contains($0.id) }!
+        try engineCheck(privatePopup.privateSession === privateSource.privateSession && privatePopup.isPrivate,
+                        "Popup escaped its private browsing session")
+        let storage = try await evaluateChromiumFixture(privatePopup.chromiumView!, "localStorage.getItem('webbyPrivatePopup')")
+        try engineCheck(storage as? String == "private-only", "Private popup did not inherit the actual CEF session")
+        closeTab(id: privatePopup.id); closeTab(id: privateSource.id)
+        try await waitForEngine("Popup browsers did not finish closing") { !WBChromiumHasBrowsers() }
+        print("PASS: adopted Chromium popups preserve blank document.write, opener/window proxy, named reuse, postMessage, window.close, permissions, and private storage")
+    }
+
+    private func verifyPrivateBrowsingAndMute(base: String) async throws {
+        let original = activeTab!
+        for engine in [BrowserEngine.webKit, .chromium] {
+            newPrivateTab()
+            let page = activeTab!
+            page.engine = engine
+            navigate(base + "/private?set=privateSecret", in: page)
+            try await waitForEngine("Private page did not load with empty storage") {
+                (page.webView?.title ?? page.title) == "private|empty" && !page.navigationInProgress
+            }
+            if let view = page.webView {
+                try engineCheck(!view.configuration.websiteDataStore.isPersistent, "Private WebKit used persistent storage")
+            }
+            let mute = NSMenuItem()
+            mute.representedObject = page.id
+            toggleTabMute(mute)
+            func nativeMuted() -> Bool {
+                if let view = page.chromiumView { return view.isAudioMuted() }
+                guard let view = page.webView else { return false }
+                let selector = NSSelectorFromString("_mediaMutedState")
+                guard view.responds(to: selector), let implementation = view.method(for: selector) else { return false }
+                typealias Getter = @convention(c) (AnyObject, Selector) -> UInt
+                return unsafeBitCast(implementation, to: Getter.self)(view, selector) & 1 != 0
+            }
+            try engineCheck(page.isMuted && nativeMuted(), "Tab mute did not reach the renderer")
+            navigate(base + "/private-next", in: page)
+            try await waitForEngine("Private navigation lost the session") {
+                (page.webView?.title ?? page.title) == "private-next|privateSecret" && !page.navigationInProgress
+            }
+            try engineCheck(nativeMuted(), "Navigation cleared tab mute")
+            toggleTabMute(mute)
+            try engineCheck(!page.isMuted && !nativeMuted(), "Tab unmute did not reach the renderer")
+            try engineCheck(!supportsPin(for: page.id), "Private tab could be saved as a pin")
+            let history = ownerSpace(for: page).saved.history
+            try engineCheck(!history.contains(where: { $0.url.contains("/private") }), "Private URL entered browsing history")
+            let beforeClosed = recentlyClosedTabs.count
+            closeTab(id: page.id)
+            try engineCheck(recentlyClosedTabs.count == beforeClosed, "Private tab entered recently closed tabs")
+            await Task.yield()
+            newPrivateTab()
+            let fresh = activeTab!
+            fresh.engine = engine
+            navigate(base + "/private-check", in: fresh)
+            try await waitForEngine("A new private session inherited cookies or local storage") {
+                (fresh.webView?.title ?? fresh.title) == "private-check|empty" && !fresh.navigationInProgress
+            }
+            closeTab(id: fresh.id)
+            selectTab(original)
+        }
+        print("PASS: WebKit and Chromium private storage isolation, private history exclusion, native tab mute, navigation, and unmute")
+    }
+
+    private func verifyPinnedTabLifecycle(base: String) throws {
+        let key = pinnedKey(for: activeSpace)
+        let layoutKey = "webbyPinLayoutV3.\(activeSpace.saved.id.uuidString)"
+        defer {
+            UserDefaults.standard.removeObject(forKey: key)
+            UserDefaults.standard.removeObject(forKey: layoutKey)
+        }
+        let pinRecord = PinnedTabRecord(title: "Saved pin", url: base + "/first", ownerSpaceID: activeSpace.saved.id,
+                                        widthFraction: 0.5, height: 72, instanceClosed: false, split: nil, engine: .webKit)
+        UserDefaults.standard.set(try JSONEncoder().encode([pinRecord]), forKey: key)
+        guard let pin = restorePinnedTabs(), let original = activeTab else {
+            throw WebbyAutomationError.message("Pinned tab fixture did not restore")
+        }
+        func showsUnderline() -> Bool {
+            (tabRows[pin.id] ?? horizontalRows[pin.id])?.showsPinnedOpenIndicator == true
+        }
+        try engineCheck(pin.pinnedInstanceClosed && pin.pageView == nil && !showsUnderline(),
+                        "A previously open pin restored as open")
+        closeTab(id: original.id)
+        try engineCheck(activeTab?.isPinned == false && activeTabID != original.id && pin.pageView == nil,
+                        "Closing the last regular tab opened a saved pin")
+        let home = activeTab!
+        selectTab(pin)
+        try engineCheck(!pin.pinnedInstanceClosed && pin.webView != nil && showsUnderline(),
+                        "Opening a pin did not show its underline")
+        selectTab(home)
+        try engineCheck(showsUnderline(), "Open pin lost its underline when deselected")
+        closeTab(id: home.id)
+        try engineCheck(activeTab?.isPinned == false && activeTabID != home.id && showsUnderline(),
+                        "Closing the last regular tab selected an already-open pin")
+        closeTab(id: pin.id)
+        try engineCheck(pin.pinnedInstanceClosed && pin.pageView == nil && !showsUnderline(),
+                        "Closing a pin kept its page or underline")
+        activeSpace.tabs.removeAll { $0.id == pin.id }
+        refreshTabs()
+        print("PASS: saved pins start closed, regular tabs close to a new tab, and open pins keep their underline")
+    }
+
+    private func verifyWallpaperAcrossTabs(base: String, preferences: inout [String: Any]) async throws {
+        let original = activeSpace
+        let other = BrowserSpace(.init(id: UUID(), name: "Wallpaper checks", chromeDirectory: nil, bookmarks: [], history: []))
+        try FileManager.default.createDirectory(at: chromiumRoot, withIntermediateDirectories: true)
+        for (space, color, name) in [(original, NSColor.red, "red"), (other, NSColor.blue, "blue")] {
+            let art = chromiumRoot.appendingPathComponent(name + ".png")
+            guard let context = CGContext(data: nil, width: 16, height: 16, bitsPerComponent: 8,
+                                          bytesPerRow: 64, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                throw EngineUIFailure(message: "Wallpaper fixture could not allocate an image")
+            }
+            context.setFillColor(color.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+            guard let rendered = context.makeImage(),
+                  let image = NSBitmapImageRep(cgImage: rendered).representation(using: .png, properties: [:]) else {
+                throw EngineUIFailure(message: "Wallpaper fixture could not encode an image")
+            }
+            try image.write(to: art)
+            let id = space.saved.id.uuidString
+            preferences["webbyWallpaper.\(id)"] = try JSONEncoder().encode(
+                WallpaperSettings(path: art.path, fade: 0, opacity: 1, pageOpacity: 0.5))
+            preferences["webbyWallpaperFullWindow.\(id)"] = true
+            preferences["webbyWidgetCanvas.\(id)"] = Data("[]".utf8)
+        }
+        preferences["webbyMatchWebsiteEdge"] = true
+        UserDefaults.standard.setVolatileDomain(preferences, forName: UserDefaults.argumentDomain)
+        NotificationCenter.default.post(name: NSNotification.Name("WebbyWallpaperSetChanged"), object: nil)
+        window.orderFrontRegardless()
+        content.layoutSubtreeIfNeeded()
+        func renderedColor() -> NSColor? {
+            guard !wallpaper.isHidden else { return nil }
+            return wallpaper.chromeColor(at: NSPoint(x: wallpaper.bounds.midX, y: wallpaper.bounds.midY))?.usingColorSpace(.deviceRGB)
+        }
+        try await waitForEngine("Original wallpaper did not render") { (renderedColor()?.redComponent ?? 0) > 0.9 }
+        let home = activeTab!
+        addTab(select: true)
+        let page = activeTab!
+        navigate(base + "/wallpaper", in: page)
+        try await waitForEngine("The sidebar did not display a solid website color over the wallpaper") {
+            self.homeView.isHidden && self.sidebarEdgeBackdrop?.isHidden == false
+                && self.sidebarEdgeBackdrop?.alphaValue == 1
+                && self.sidebarEdgeBackdrop?.layer?.backgroundColor?.alpha == 1
+                && (renderedColor()?.redComponent ?? 0) > 0.9
+        }
+        preferences["webbyTabStackPlacement"] = "horizontal"
+        UserDefaults.standard.setVolatileDomain(preferences, forName: UserDefaults.argumentDomain)
+        applyTabPlacement()
+        try await waitForEngine("The horizontal tab pane did not display a solid website color") {
+            self.websiteEdgeBackdrop?.isHidden == false && self.websiteEdgeBackdrop?.alphaValue == 1
+                && self.websiteEdgeBackdrop?.layer?.backgroundColor?.alpha == 1
+        }
+        preferences["webbyTabStackPlacement"] = "top"
+        UserDefaults.standard.setVolatileDomain(preferences, forName: UserDefaults.argumentDomain)
+        applyTabPlacement()
+        selectTab(home)
+        spaces.append(other)
+        switchToSpace(1)
+        try await waitForEngine("The other profile did not display its own wallpaper") { (renderedColor()?.blueComponent ?? 0) > 0.9 }
+        switchToSpace(0)
+        try await waitForEngine("Returning to the original profile did not restore its wallpaper") { (renderedColor()?.redComponent ?? 0) > 0.9 }
+        spaces.removeLast()
+        closeTab(id: page.id, remember: false)
+        print("PASS: loaded distinct image files through profile changes and verified solid website colors in both tab layouts")
+    }
+
     fileprivate func runEngineUIChecks(base: String) async {
         do {
             let fixture = BrowserSpace(.init(id: UUID(), name: "Engine checks", chromeDirectory: nil, bookmarks: [], history: []))
@@ -8471,7 +9192,8 @@ extension BrowserApp {
             var preferences: [String: Any] = ["webbyExperimentalProfileCycle": false,
                 "webbyTabStackPlacement": "top", "webbyAddressPlacement": "strip",
                 "webbyRestoreTabs": false, "webbyOffloadMinutes": 1,
-                "webbyActionSounds": false, "webbyDefaultRenderingEngine": "webKit",
+                "webbyActionSounds": false, "webbyDesktopWidgetsEnabled": false, "webbyDefaultRenderingEngine": "webKit",
+                "webbyEngineRules": Data("[]".utf8),
                 "webbyWidgetCanvas.\(fixture.saved.id.uuidString)": Data("[]".utf8)]
             UserDefaults.standard.setVolatileDomain(preferences, forName: UserDefaults.argumentDomain)
             downloads = BrowserDownloads(destinationFolder: chromiumRoot.appendingPathComponent("Downloads"),
@@ -8479,6 +9201,8 @@ extension BrowserApp {
             makeWindow(); makeSidebar(); makeMainArea(); makeHome(); installMenus()
             BrowserTheme.activate(fixture.saved.id)
             addTab(select: true)
+            try verifyPinnedTabLifecycle(base: base)
+            try await verifyWallpaperAcrossTabs(base: base, preferences: &preferences)
             let empty = activeTab!
             try engineCheck(empty.engine == .webKit, "Default WebKit tab was not created")
             switchRenderingEngine()
@@ -8504,10 +9228,26 @@ extension BrowserApp {
             navigate(base + "/first", in: empty)
             try await waitForEngine("WebKit fixture failed") { empty.navigationTiming.finished != nil }
             try engineCheck(empty.webView != nil && empty.chromiumView == nil, "WebKit default was not retained")
+            try await verifyAgentDock(in: empty, base: base, profile: fixture.saved.id)
             selectTab(chromium)
             try engineCheck(chromium.pageView?.isHidden == false && empty.pageView?.isHidden == true && homeView.isHidden, "Mixed-engine selection failed")
             try engineCheck(splitTabs(sourceID: empty.id, targetID: chromium.id), "Mixed-engine split failed")
             try engineCheck(splitTabIDs?.count == 2, "Mixed-engine split did not contain both pages")
+            activateSplitPane(containing: empty.webView!)
+            try engineCheck(activeTabID == empty.id && splitTabIDs?.count == 2,
+                            "Clicking a WebKit split pane did not target browser commands to that pane")
+            activateSplitPane(containing: chromium.chromiumView!)
+            try engineCheck(activeTabID == chromium.id && splitTabIDs?.count == 2,
+                            "Clicking a Chromium split pane did not target browser commands to that pane")
+            showFindBar()
+            findField?.stringValue = "first"; findNext()
+            try await waitForEngine("Chromium find did not report a match") { self.findStatus?.stringValue == "Found" }
+            findField?.stringValue = "webby-no-matching-fixture-text"; findNext()
+            try await waitForEngine("Chromium find did not report no match") { self.findStatus?.stringValue == "No match" }
+            findField?.stringValue = ""; findNext()
+            try engineCheck(findStatus?.stringValue == "", "Clearing find left stale match status")
+            hideFindBar()
+            try engineCheck(findBar?.isHidden == true, "Closing find left its bar visible")
             endSplit(); activeTabID = nil; selectTab(chromium)
             // Exercise the real popover callbacks without any network beyond the fixture.
             window.orderBack(nil)
@@ -8552,9 +9292,42 @@ extension BrowserApp {
             try await waitForEngine("Schoology fixture did not close") { !WBChromiumHasBrowsers() }
             print("PASS: Chromium applies the bundled Schoology theme, including the course-grade summary")
             try await checkChromiumPasswordVault(fixture: fixture)
+            let siteRule = BrowserEngineRule(input: base, scope: .site, engine: .chromium)!
+            let exactRule = BrowserEngineRule(input: base + "/webkit-route?match=1", scope: .link, engine: .webKit)!
+            preferences["webbyEngineRules"] = try JSONEncoder().encode([siteRule, exactRule])
+            UserDefaults.standard.setVolatileDomain(preferences, forName: UserDefaults.argumentDomain)
+            selectTab(empty)
+            navigate(base + "/chromium-route", in: empty)
+            try await waitForEngine("Site rule did not route address entry to Chromium") {
+                empty.engine == .chromium && empty.title.hasPrefix("chromium-route|") && !empty.navigationInProgress
+            }
+            navigate(base + "/webkit-route?match=1", in: empty)
+            try await waitForEngine("Exact URL did not override the site rule") {
+                empty.engine == .webKit && empty.webView?.url?.path == "/webkit-route" && empty.navigationTiming.finished != nil
+            }
+            _ = try await empty.webView!.evaluateJavaScript("const link=document.createElement('a'); link.href='/clicked-rule'; document.body.append(link); link.click(); true")
+            try await waitForEngine("Clicked WebKit link did not route to Chromium") {
+                empty.engine == .chromium && empty.title.hasPrefix("clicked-rule|") && !empty.navigationInProgress
+            }
+            closeTab(id: empty.id)
+            try await waitForEngine("Rule fixture did not close") { !WBChromiumHasBrowsers() }
+            preferences["webbyEngineRules"] = Data("[]".utf8)
+            UserDefaults.standard.setVolatileDomain(preferences, forName: UserDefaults.argumentDomain)
+            print("PASS: engine rules route address entry and clicked links; exact URLs override site rules")
+            try await verifyChromiumPopups(base: base)
+            try await verifyPrivateBrowsingAndMute(base: base)
             print("PASS: actual Webby UI paths: default inheritance, empty-tab switching, both engines, toolbar navigation, selection, split, confirmation/cancel, switching both ways, offload/resume, session engine, close.")
             // Dispatch the real Quit command from inside CEF's event pump.
             // Direct shutdown/exit cannot catch the nested quit-loop deadlock.
+            for index in 0..<3 {
+                addTab(select: true)
+                let background = activeTab!
+                background.engine = .chromium
+                navigate(base + "/first?quit-fixture=\(index)", in: background)
+                try await waitForEngine("Background quit fixture did not load") {
+                    background.chromiumView != nil && !background.navigationInProgress
+                }
+            }
             addTab(select: true)
             let quitTab = activeTab!
             quitTab.engine = .chromium
@@ -8575,6 +9348,11 @@ extension BrowserApp {
                 originalHandler?(event, value)
                 guard event == "title", !quitSent else { return }
                 quitSent = true
+                self.addTab(select: false)
+                if let pending = self.tabs.last {
+                    pending.engine = .chromium
+                    self.navigate(base + "/first?pending-quit", in: pending)
+                }
                 guard let key = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command],
                     timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: self.window.windowNumber,
                     context: nil, characters: "q", charactersIgnoringModifiers: "q", isARepeat: false, keyCode: 12),
@@ -8758,6 +9536,7 @@ extension BrowserApp {
             WebbyTypography.apply(to:root);typographyWindows.add(host)
         }
         if let mini=notification.object as? MiniWebbyWindow {mini.lastUsed=Date()}
+        if notification.object as? NSWindow === window { activeTab?.settingsPage?.model.refresh() }
         updateWidgetActivity()
     }
     func application(_ application:NSApplication,open urls:[URL]){
@@ -8765,9 +9544,12 @@ extension BrowserApp {
         guard window != nil else {pendingMiniURLs += valid;return}
         for url in valid {openExternalLink(url)}
     }
-    private func openExternalLink(_ url:URL) {
-        let profile=BrowserExternalLinks.resolvedProfile(available:spaces.map{$0.saved.id},current:activeSpace.saved.id)
-        if MiniWebbySettings.externalLinks {openMiniWebby(url:url,profile:profile);return}
+    private func openExternalLink(_ url: URL, profileID: UUID? = nil) {
+        let profile = profileID ?? BrowserExternalLinks.resolvedProfile(available: spaces.map { $0.saved.id }, current: activeSpace.saved.id)
+        if MiniWebbySettings.externalLinks && BrowserEngineRule.engine(for: url) != .chromium {
+            openMiniWebby(url: url, profile: profile)
+            return
+        }
         guard let index=spaces.firstIndex(where:{$0.saved.id==profile}) else{return}
         if !BrowserExperiment.cyclesNewTabProfiles {switchToSpace(index)}
         let tab=BrowserTab();tab.ownerSpaceID=profile
@@ -8839,11 +9621,14 @@ extension BrowserApp {
         }
         wallpaperPaneBlur?.isHidden = !full || wallpaper.tabBlurScope != 1 || BrowserTabPlacement.current != .horizontal || tabsHiddenByUser
         wallpaperPaneBlur?.alphaValue=tabFrost
-        if BrowserGlass.matchWebsiteEdge, let edge=websiteEdgeBackdrop { mainArea.addSubview(edge, positioned: .below, relativeTo: horizontalScroll) }
+        addressEdgeBackdrop?.alphaValue = wallpaper.addressBackdropOpacity
+        if BrowserGlass.matchWebsiteEdge, let edge = websiteEdgeBackdrop {
+            mainArea.addSubview(edge, positioned: .below, relativeTo: horizontalScroll)
+        }
         for group in Array(groupContainers.values)+Array(horizontalGroupContainers.values) {
             group.updateGlass(opacity:Double(full && wallpaper.tabBlurScope==0 ? tabFrost:0),material:BrowserGlass.matchPageGlassSidebar ? .popover:.sidebar)
         }
-        let frostedIDs=Set(tabs.lazy.filter{$0.groupID==nil || $0.isPinned}.map(\.id))
+        let frostedIDs=Set(tabs.lazy.filter{$0.groupID==nil && !$0.isPinned}.map(\.id))
         for row in Array(tabRows.values)+Array(horizontalRows.values) {
             let existing=row.subviews.first{$0 is WallpaperTabFrost} as? WallpaperTabFrost
             if !(BrowserGlass.matchWebsiteEdge && homeView?.isHidden == true && BrowserTabPlacement.current == .horizontal) && full && wallpaper.tabBlurScope==0 && frostedIDs.contains(row.tabID) {
@@ -8852,5 +9637,968 @@ extension BrowserApp {
                 frost.alphaValue=tabFrost;frost.isHidden=false;row.updateTabGlassMask()
             } else {existing?.isHidden=true}
         }
+    }
+}
+
+
+extension BrowserApp {
+    private func initialOnboardingDraft() -> WebbyOnboardingDraft {
+        var draft = WebbyOnboardingDraft(spaces: spaces.map { .init(id: $0.saved.id, name: $0.saved.name) },
+                                         selectedSpace: activeSpace.saved.id)
+        draft.layout = BrowserTabPlacement.current.rawValue
+        draft.address = BrowserAddressPlacement.current.rawValue
+        draft.search = BrowserSearchEngine.selected(for: draft.selectedSpace).rawValue
+        draft.fuse = BrowserExperiment.cyclesNewTabProfiles
+        draft.restoreTabs = UserDefaults.standard.bool(forKey: "webbyRestoreTabs")
+        draft.offloadMinutes = UserDefaults.standard.integer(forKey: "webbyOffloadMinutes")
+        draft.glances = BrowserHoverPreferences.glancesEnabled
+        draft.sounds = WebbySounds.enabled
+        draft.externalProfile = BrowserExternalLinks.profileID
+        draft.theme = BrowserTheme.petID
+        if BrowserTheme.selectedID == "custom" { draft.customColors = BrowserTheme.customColors.map(BrowserTheme.hex) }
+        draft.petPath = BrowserTheme.customPetURL?.path
+        draft.iconMode = WebbyIconSettings.value.mode
+        if let widgets = WidgetCanvas.onboardingWidgets(for: draft.selectedSpace) {
+            draft.widgets = widgets.map(\.rawValue)
+            draft.widgetPreset = widgets.isEmpty ? "Minimal" : "Current canvas"
+        }
+        draft.widgetFrames = WidgetCanvas.onboardingFrames(for: draft.selectedSpace)
+        draft.glass = BrowserGlass.onboardingSettings(for: draft.selectedSpace)
+        draft.originalGlass = draft.glass
+        draft.readWallpaper()
+        return draft
+    }
+
+    @objc private func replayOnboarding() {
+        presentOnboarding(firstRun: WebbyOnboardingDraft.load()?.phase == .inProgress)
+    }
+
+    private func presentOnboarding(firstRun: Bool) {
+        if let onboarding { onboarding.show(over: window); return }
+        var state = (firstRun ? WebbyOnboardingDraft.load() : nil) ?? initialOnboardingDraft()
+        let actual = Set(spaces.map { $0.saved.id })
+        state.spaces.removeAll { !$0.isNew && !actual.contains($0.id) }
+        let drafts = Set(state.spaces.map(\.id))
+        for space in spaces where !drafts.contains(space.saved.id) {
+            state.spaces.append(.init(id: space.saved.id, name: space.saved.name))
+        }
+        if state.currentSpace == nil { state.selectedSpace = activeSpace.saved.id }
+        if state.glass == nil {
+            state.glass = BrowserGlass.onboardingSettings(for: state.selectedSpace)
+            state.originalGlass = state.glass
+        }
+        if state.widgetFrames == nil { state.widgetFrames = WidgetCanvas.onboardingFrames(for: state.selectedSpace) }
+        closeSuggestions()
+        dismissTabSwitcher()
+        onboarding = WebbyOnboarding(draft: state, firstRun: firstRun, importedDirectories: { [weak self] in
+            Set(self?.spaces.compactMap { $0.saved.chromeDirectory } ?? [])
+        }, installImports: { [weak self] payloads in
+            guard let self else { throw CancellationError() }
+            return try await self.installOnboardingImports(payloads)
+        }, apply: { [weak self] draft in
+            guard let self else { throw CancellationError() }
+            try await self.applyOnboarding(draft, firstRun: firstRun)
+        }, done: { [weak self] completed in
+            guard let self else { return }
+            self.onboarding = nil
+            self.firstRunSetupPending = false
+            self.showBrowserWindow()
+            self.updateWidgetActivity()
+            self.refreshGoogleWidgets(force: true)
+            if completed && self.homeView.isHidden == false {
+                self.window.makeFirstResponder(self.homeSearchField)
+            }
+        })
+        onboarding?.show(over: window)
+    }
+
+    private func persistOnboardingSpaces(_ values: [SavedBrowserSpace]) throws {
+        pendingSpaceSave?.cancel()
+        try spaceSaveQueue.sync { try BrowserSpaceStore.save(values) }
+    }
+
+    private func installOnboardingImports(_ payloads: [WebbyChromePayload]) async throws -> WebbyChromeResult {
+        guard !importInProgress else { throw CocoaError(.fileLocking) }
+        importInProgress = true
+        defer { importInProgress = false; scheduleSpaceSave() }
+        var report = WebbyChromeResult()
+        for payload in payloads {
+            let saved = payload.space
+            guard let directory = saved.chromeDirectory else { continue }
+            let existing = spaces.first { $0.saved.chromeDirectory == directory }
+            // A retry may finish credentials for a profile created by this setup.
+            // An unrelated existing profile must never be touched.
+            guard existing == nil || existing?.saved.id == saved.id else { continue }
+            if !payload.issues.isEmpty {
+                report.issues += payload.issues.map { saved.name + " · " + $0 }
+                report.retryChrome.insert(directory)
+            }
+            guard payload.hasReadableData || existing != nil else {
+                report.retryChrome.insert(directory)
+                continue
+            }
+            let space = existing ?? BrowserSpace(saved)
+            let passwordCount = await Task.detached(priority: .utility) {
+                payload.passwords.filter { BrowserPasswords.save($0, in: saved.id) == errSecSuccess }.count
+            }.value
+            if passwordCount != payload.passwords.count {
+                report.issues.append(saved.name + " · Some passwords couldn’t be saved to Keychain.")
+                report.retryChrome.insert(directory)
+            }
+            for cookie in payload.cookies {
+                await withCheckedContinuation { continuation in
+                    space.dataStore.httpCookieStore.setCookie(cookie) { continuation.resume() }
+                }
+            }
+            var bookmarks = saved.bookmarks
+            var history = saved.history
+            if let existing {
+                let existingBookmarks = Set(existing.saved.bookmarks.map(\.url))
+                let existingHistory = Set(existing.saved.history.map(\.url))
+                bookmarks.removeAll { existingBookmarks.contains($0.url) }
+                history.removeAll { existingHistory.contains($0.url) }
+                history = Array(history.prefix(max(0, 10000 - existing.saved.history.count)))
+            }
+            if existing == nil || !bookmarks.isEmpty || !history.isEmpty {
+                let record = SavedBrowserSpace(id: saved.id, name: space.saved.name, chromeDirectory: directory,
+                    bookmarks: (existing?.saved.bookmarks ?? []) + bookmarks,
+                    history: (existing?.saved.history ?? []) + history, isolatesWebsiteData: space.saved.isolatesWebsiteData)
+                let snapshot = spaces.map { $0.saved.id == saved.id ? record : $0.saved }
+                // Commit separately so failure preserves previously imported profiles.
+                do { try persistOnboardingSpaces(existing == nil ? snapshot + [record] : snapshot) }
+                catch {
+                    report.issues.append(saved.name + " · " + error.localizedDescription)
+                    report.retryChrome.insert(directory)
+                    continue
+                }
+                space.saved = record
+                if existing == nil { spaces.append(space) }
+                report.bookmarks += bookmarks.count
+                report.history += history.count
+            }
+            cookieHosts.removeValue(forKey: saved.id)
+            report.spaces.append(.init(id: saved.id, name: space.saved.name))
+            report.passwords += passwordCount
+            report.cookies += payload.cookies.count
+        }
+        if !report.spaces.isEmpty { updateSpaceLabel(); refreshTabs() }
+        return report
+    }
+
+    private func applyOnboarding(_ draft: WebbyOnboardingDraft, firstRun: Bool) async throws {
+        guard !importInProgress else { throw CocoaError(.fileLocking) }
+        let palette = BrowserTheme.onboardingProfile(draft.theme, colors: draft.customColors).palette
+        let artwork: WallpaperSettings?
+        if draft.backgroundChanged {
+            artwork = try await Task.detached(priority: .utility) {
+                let colors = (draft.wallpaperDesign ?? .profile).colors(profile: [palette.shadow, palette.secondary, palette.primary])
+                return try BrowserWallpaperView.prepareOnboardingWallpaper(draft, colors: colors)
+            }.value
+        } else { artwork = nil }
+        let byID = Dictionary(uniqueKeysWithValues: draft.spaces.map { ($0.id, $0) })
+        let updated = spaces.map { space -> SavedBrowserSpace in
+            var value = space.saved
+            if let edited = byID[value.id] {
+                let name = edited.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty { value.name = String(name.prefix(60)) }
+            }
+            return value
+        }
+        let existing = Set(updated.map(\.id))
+        let added = draft.spaces.filter { $0.isNew && !existing.contains($0.id) }.map {
+            let name = $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return SavedBrowserSpace(id: $0.id, name: name.isEmpty ? "New Space" : String(name.prefix(60)),
+                                     chromeDirectory: nil, bookmarks: [], history: [], isolatesWebsiteData: true)
+        }
+        guard let index = (updated + added).firstIndex(where: { $0.id == draft.selectedSpace }) else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        try persistOnboardingSpaces(updated + added)
+        for (space, saved) in zip(spaces, updated) { space.saved = saved }
+        spaces += added.map(BrowserSpace.init)
+        if activeSpaceIndex != index { switchToSpace(index) }
+        BrowserTheme.activate(draft.selectedSpace)
+        if draft.themeChanged {
+            if let path = draft.petPath {
+                try BrowserTheme.saveCustomPet(from: URL(fileURLWithPath: path))
+            }
+            if let colors = draft.customColors {
+                BrowserTheme.selectCustomPet(draft.theme)
+                BrowserTheme.saveCustom(colors.map { BrowserTheme.color($0) })
+            } else if draft.petPath == nil { BrowserTheme.select(draft.theme) }
+        }
+        if let iconMode = draft.iconMode, iconMode != WebbyIconSettings.value.mode || draft.iconPath != nil {
+            if iconMode == "image", let path = draft.iconPath, path != WebbyIconSettings.value.imagePath {
+                try WebbyIconSettings.importArtwork(URL(fileURLWithPath: path), background: false)
+            } else if iconMode != "image" {
+                var settings = WebbyIconSettings.value
+                settings.mode = iconMode
+                WebbyIconSettings.value = settings
+                WebbyIcon.updateDockIcon()
+            }
+        }
+        if let artwork { try BrowserWallpaperView.saveOnboardingWallpaper(artwork, draft: draft) }
+        if let glass = draft.glass, let original = draft.originalGlass {
+            BrowserGlass.applyOnboarding(glass, changedFrom: original, profile: draft.selectedSpace)
+        }
+        if let layout = BrowserTabPlacement(rawValue: draft.layout) { BrowserTabPlacement.current = layout }
+        if let placement = BrowserAddressPlacement(rawValue: draft.address) { BrowserAddressPlacement.current = placement }
+        if let engine = BrowserSearchEngine(rawValue: draft.search) { BrowserSearchEngine.set(engine, for: draft.selectedSpace) }
+        UserDefaults.standard.set(draft.restoreTabs, forKey: "webbyRestoreTabs")
+        UserDefaults.standard.set(draft.offloadMinutes, forKey: "webbyOffloadMinutes")
+        BrowserHoverPreferences.glancesEnabled = draft.glances
+        WebbySounds.enabled = draft.sounds
+        BrowserExternalLinks.profileID = draft.externalProfile.flatMap { id in spaces.contains { $0.saved.id == id } ? id : nil }
+        if BrowserExperiment.cyclesNewTabProfiles != (draft.fuse && spaces.count > 1) {
+            BrowserExperiment.cyclesNewTabProfiles = draft.fuse && spaces.count > 1
+            experimentalModeChanged()
+        }
+        applyTabPlacement()
+        applyAddressChrome()
+        if draft.widgetsChanged || firstRun || !(draft.widgetEdits ?? [:]).isEmpty {
+            var seen: Set<WebbyWidget> = []
+            let kinds = draft.widgets.compactMap(WebbyWidget.init(rawValue:)).filter { seen.insert($0).inserted }
+            let existing = draft.widgetFrames ?? [:]
+            let edits = draft.widgetEdits ?? [:]
+            let fresh = widgetCanvas?.applyOnboardingWidgets(kinds, replaceUncustomized: firstRun) == true
+            if fresh && !kinds.isEmpty {
+                arrangeHomepage(Notification(name: Notification.Name("WebbyArrangeHomepage"), object: HomepageLayout.header.rawValue))
+            }
+            content.layoutSubtreeIfNeeded()
+            let layout = WidgetCanvas.onboardingLayout(kinds: kinds, existing: existing, edits: edits)
+            let touched = Set(kinds.filter { fresh || existing[$0.rawValue] == nil }.map(\.rawValue)).union(edits.keys)
+            widgetCanvas?.applyOnboardingFrames(layout, to: touched)
+        }
+        updateSpaceLabel()
+        scheduleSessionSave()
+    }
+
+    @objc private func exploreWebby() {
+        let categories: [WebbyExploreItem] = [
+            .init("Profiles, Fuse & tabs", "Keep spaces separate or view their tabs together. Use ⌘S to split two pages.", "rectangle.split.2x1") { [weak self] in self?.openSettingsTab(section: .profiles) },
+            .init("Backgrounds & wallpaper pairs", "Choose media, effects, saved looks, and animated ASCII artwork.", "photo.on.rectangle") { [weak self] in self?.openWallpaperSettings() },
+            .init("Glass, pets & indicators", "Make the browser feel like yours.", "paintpalette") { [weak self] in self?.openSettingsTab(section: .appearance) },
+            .init("Mini Webby", "Open a floating browser. The default shortcut is ⌥Space.", "macwindow.on.rectangle") { [weak self] in self?.openMiniWebby() },
+            .init("Terminal & workbench", "Use a native terminal or the local workbench with ⌘⇧I. The workbench can require runtime setup.", "terminal") { [weak self] in self?.openSettingsTab(section: .tabs) },
+            .init("Widget connections", "Manage Google, GitHub, Codex, Spotify, and native desktop widgets. WidgetKit on macOS 14+ can display saved snapshots.", "square.grid.2x2") { [weak self] in self?.openSettingsTab(section: .homepage) },
+            .init("Privacy & performance", "Manage saved passwords, history, site permissions, and performance reporting.", "lock.shield") { [weak self] in self?.openSettingsTab(section: .privacy) },
+            .init("Replay introduction", "See the guided setup again and make new choices if you want.", "arrow.counterclockwise") { [weak self] in self?.replayOnboarding() }
+        ]
+        WebbyExplorePanel.show(categories, over: window)
+    }
+}
+
+
+@MainActor extension BrowserApp {
+    @objc private func openAgentTab() {
+        guard NSApp.currentEvent?.isARepeat != true else { return }
+        if let id = dockedAgentTabID {
+            agentDockTabs.remove(id)
+            closeAgentDock()
+            return
+        }
+        showAgent()
+    }
+
+    private func changeAgentShortcut(_ key: String, mask: NSEvent.ModifierFlags) throws {
+        func conflict(in menu: NSMenu?) -> NSMenuItem? {
+            for item in menu?.items ?? [] {
+                if item !== agentSummonItem && item.keyEquivalent.lowercased() == key
+                    && item.keyEquivalentModifierMask.intersection([.command, .shift, .option, .control]) == mask { return item }
+                if let conflict = conflict(in: item.submenu) { return conflict }
+            }
+            return nil
+        }
+        if let existing = conflict(in: NSApp.mainMenu) {
+            throw WebbyAutomationError.message("Shortcut already opens \(existing.title).")
+        }
+        agentSummonItem?.keyEquivalent = key
+        agentSummonItem?.keyEquivalentModifierMask = mask
+        UserDefaults.standard.set(key, forKey: "webbyAgent.summonKey")
+        UserDefaults.standard.set(Int(mask.rawValue), forKey: "webbyAgent.summonModifiers")
+    }
+
+    private func agentPane(for tab: BrowserTab, profileID: UUID) -> WebbyAgentPane {
+        if let pane = agentPanes[tab.id] { return pane }
+        let id = tab.id
+        let pane = WebbyAgentPane(theme: BrowserTheme.profile(for: profileID), cliEnabled: agentListener != nil,
+                                  setCLI: { [weak self] in try self?.setLocalCLI($0) },
+                                  browser: { [weak self] request, reply in
+                                      self?.runAutomation(request, agentProfile: profileID, agentContext: id, reply: reply)
+                                  })
+        pane.updateAppearance(profileID: profileID)
+        pane.onDismiss = { [weak self] in
+            guard let self else { return }
+            if let floating = self.agentFloatWindows[id] { floating.close() }
+            else if self.dockedAgentTabID == id {
+                self.agentDockTabs.remove(id)
+                self.closeAgentDock()
+            } else { self.closeTab(id: id) }
+        }
+        pane.onFloat = { [weak self] in self?.toggleFloatingAgent(for: id) }
+        pane.onShortcut = { [weak self] key, mask in try self?.changeAgentShortcut(key, mask: mask) }
+        pane.onReleaseTabs = { [weak self] in self?.releaseAgentTabs(for: profileID, context: id) }
+        pane.agentTabs = { [weak self] in
+            guard let self else { return [] }
+            return self.spaces.flatMap(\.tabs).filter { self.agentContexts[$0.id] == id }.map { ($0.id, $0.title) }
+        }
+        pane.onInspectTab = { [weak self] id in
+            self?.runAutomation(["command": "focus", "tab": id.uuidString]) { _ in }
+        }
+        agentPanes[id] = pane
+        agentTabProfiles[id] = profileID
+        return pane
+    }
+
+    private func showAgent() {
+        if let dockedAgent, !agentDockClosing { dockedAgent.focusComposer(); return }
+        let profileID = activeSpace.saved.id
+        if let tab = activeTab, let floating = agentFloatWindows[tab.id] {
+            floating.makeKeyAndOrderFront(nil)
+            agentPanes[tab.id]?.focusComposer()
+            return
+        }
+        if let tab = activeTab, tab.webView != nil || tab.chromiumView != nil || tab.suspendedURL != nil {
+            let pane = agentPane(for: tab, profileID: ownerSpace(for: tab).saved.id)
+            agentDockTabs.insert(tab.id)
+            syncAgentDock(for: tab.id)
+            showBrowserWindow()
+            pane.focusComposer()
+            return
+        }
+        if let existing = activeSpace.tabs.first(where: { $0.agentPane != nil }) {
+            selectTab(existing)
+            existing.agentPane?.focusComposer()
+            return
+        }
+        let tab = BrowserTab()
+        tab.ownerSpaceID = profileID
+        tab.title = "Webby Agent"
+        let pane = agentPane(for: tab, profileID: profileID)
+        attachAgentTab(pane, to: tab)
+        activeSpace.tabs.append(tab)
+        if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(tab.id) }
+        selectTab(tab)
+        pane.reveal(from: 18)
+        showBrowserWindow()
+        pane.focusComposer()
+    }
+
+    private func attachAgentTab(_ pane: WebbyAgentPane, to tab: BrowserTab) {
+        tab.favicon = agentPet(for: ownerSpace(for: tab).saved.id)
+        tab.agentPane = pane
+        pane.translatesAutoresizingMaskIntoConstraints = false
+        pane.isHidden = true
+        pageArea.addSubview(pane, positioned: .below, relativeTo: homeView)
+        tab.pageConstraints = [
+            pane.leadingAnchor.constraint(equalTo: pageArea.leadingAnchor),
+            pane.trailingAnchor.constraint(equalTo: pageArea.trailingAnchor),
+            pane.topAnchor.constraint(equalTo: pageArea.topAnchor),
+            pane.bottomAnchor.constraint(equalTo: pageArea.bottomAnchor)
+        ]
+        NSLayoutConstraint.activate(tab.pageConstraints)
+    }
+
+    private func syncAgentDock(for id: UUID) {
+        if dockedAgentTabID == id && !agentDockClosing { return }
+        if dockedAgent != nil { closeAgentDock(animated: false) }
+        if agentDockTabs.contains(id), agentFloatWindows[id] == nil, let pane = agentPanes[id] {
+            showAgentDock(pane, tabID: id)
+        }
+    }
+
+    private func toggleFloatingAgent(for id: UUID) {
+        guard let tab = tab(id: id), let pane = agentPanes[id] else { return }
+        if let floating = agentFloatWindows.removeValue(forKey: id) {
+            floating.onClose = nil
+            floating.contentView = NSView()
+            floating.close()
+            pane.setFloating(false)
+            agentDockTabs.insert(id)
+            if activeTabID == id { syncAgentDock(for: id) }
+            if activeTabID == id { showBrowserWindow(); pane.focusComposer() }
+            return
+        }
+        guard dockedAgentTabID == id else { return }
+        agentDockTabs.remove(id)
+        closeAgentDock(animated: false)
+        pane.setFloating(true)
+        let panel = WebbyFloatingAgentPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 580),
+                                           styleMask: [.titled, .closable, .resizable, .utilityWindow],
+                                           backing: .buffered, defer: false)
+        panel.title = "Webby Agent · " + tab.title
+        panel.isReleasedWhenClosed = false
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = true
+        panel.minSize = NSSize(width: 305, height: 300)
+        let content = NSView()
+        panel.contentView = content
+        pane.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(pane)
+        NSLayoutConstraint.activate([
+            pane.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            pane.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            pane.topAnchor.constraint(equalTo: content.topAnchor),
+            pane.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+        ])
+        panel.onClose = { [weak self, weak pane] in
+            pane?.removeFromSuperview()
+            pane?.setFloating(false)
+            self?.agentFloatWindows.removeValue(forKey: id)
+        }
+        agentFloatWindows[id] = panel
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        pane.focusComposer()
+    }
+
+    private func discardAgent(for id: UUID) {
+        if dockedAgentTabID == id { closeAgentDock(animated: false) }
+        agentFloatWindows[id]?.close()
+        agentDockTabs.remove(id)
+        agentPanes.removeValue(forKey: id)?.stopForClosedTab()
+        if let profile = agentTabProfiles.removeValue(forKey: id) { releaseAgentTabs(for: profile, context: id) }
+        agentWorkingProfiles.removeValue(forKey: id)
+    }
+
+    private var preferredAgentDockWidth: CGFloat {
+        min(490, max(245, mainArea.bounds.width * 0.30), mainArea.bounds.width * 0.46)
+    }
+
+    private func showAgentDock(_ pane: WebbyAgentPane, tabID: UUID) {
+        let width = preferredAgentDockWidth
+        dockedAgent = pane
+        dockedAgentTabID = tabID
+        pane.setFloating(false, canFloat: true)
+        pane.setDocked(true)
+        updateAgentDockAppearance()
+        if let activeWebView { updateGlassTone(for: activeWebView) }
+        pane.translatesAutoresizingMaskIntoConstraints = false
+        pane.isHidden = false
+        mainArea.addSubview(pane)
+        let widthConstraint = pane.widthAnchor.constraint(equalToConstant: width)
+        let trailing = pane.trailingAnchor.constraint(equalTo: mainArea.trailingAnchor, constant: width)
+        let top = pane.topAnchor.constraint(equalTo: pageArea.topAnchor, constant: -pageFrameInset)
+        agentDockWidth = widthConstraint
+        agentDockTrailing = trailing
+        agentDockTop = top
+        agentDockConstraints = [
+            widthConstraint, trailing, top,
+            pane.bottomAnchor.constraint(equalTo: mainArea.bottomAnchor)
+        ]
+        NSLayoutConstraint.activate(agentDockConstraints)
+        mainArea.layoutSubtreeIfNeeded()
+        agentDockInset = width
+        pageFrameEdges[1].constant = -width
+        trailing.constant = 0
+        animateAgentDock()
+        pane.reveal(from: 0)
+    }
+
+    private func storeAgentPageTone(_ sample: [String: Any], for tab: BrowserTab) {
+        guard let rgb = sample["rgb"] as? [Double], rgb.count == 3,
+              rgb.allSatisfy({ $0.isFinite && (0...255).contains($0) }) else { return }
+        let color = NSColor(srgbRed: rgb[0]/255, green: rgb[1]/255, blue: rgb[2]/255, alpha: 1)
+        agentPageTones[tab.id] = (tab.pageURL, color, sample["glass"] as? Bool == true && tab.webView != nil && BrowserGlass.pageInjectionEnabled)
+    }
+
+    private func updateAgentDockAppearance() {
+        guard let dockedAgent, !agentDockClosing else { return }
+        guard let tab = activeTab, homeView?.isHidden == true, tab.pageURL != nil else {
+            dockedAgent.applyPageSurface(nil)
+            return
+        }
+        if let tone = agentPageTones[tab.id], tone.url == tab.pageURL {
+            dockedAgent.applyPageSurface(tone.color, glass: tone.glass && BrowserGlass.pageInjectionEnabled)
+        } else {
+            let color = pageChromeColors[tab.id] ?? (tab.prefersDarkGlass ? NSColor(white: 0.13, alpha: 1) : .white)
+            dockedAgent.applyPageSurface(color, glass: tab.webView != nil && BrowserGlass.pageInjectionEnabled)
+        }
+        sampleChromiumAgentEdge()
+    }
+
+    private func sampleChromiumAgentEdge() {
+        guard dockedAgent != nil, !agentDockClosing, let tab = activeTab, let page = tab.chromiumView,
+              let address = tab.pageURL, !page.loading, let agentEdgeScript else { return }
+        let time = ProcessInfo.processInfo.systemUptime
+        if let last = chromiumAgentSample, last.id == tab.id, last.url == address, time - last.time < 0.4 { return }
+        chromiumAgentSample = (tab.id, address, time)
+        let script = "(() => { \(agentEdgeScript)\n return window.__webbyReadAgentEdge?.(); })()"
+        page.automation(method: "Runtime.evaluate", parameters: ["expression": script, "returnByValue": true]) { [weak self, weak tab, weak page] result, _ in
+            guard let self, let tab, let page, self.activeTabID == tab.id, tab.chromiumView === page, tab.pageURL == address,
+                  let remote = result?["result"] as? [String: Any], let sample = remote["value"] as? [String: Any] else { return }
+            self.storeAgentPageTone(sample, for: tab)
+            if let tone = self.agentPageTones[tab.id] { self.dockedAgent?.applyPageSurface(tone.color, glass: tone.glass) }
+        }
+    }
+
+    private func closeAgentDock(animated: Bool = true) {
+        guard let pane = dockedAgent, !agentDockClosing || !animated else { return }
+        agentDockClosing = true
+        agentDockGeneration += 1
+        let generation = agentDockGeneration
+        if let editor = window.firstResponder as? NSView, editor.isDescendant(of: pane) {
+            window.makeFirstResponder(activeTab?.webView)
+            activeTab?.chromiumView?.focusPage()
+        }
+        agentDockInset = 0
+        pageFrameEdges[1].constant = -pageFrameInset
+        agentDockTrailing?.constant = agentDockWidth?.constant ?? 0
+        animateAgentDock(animated: animated) { [weak self, weak pane] in
+            guard let self, self.agentDockGeneration == generation else { return }
+            NSLayoutConstraint.deactivate(self.agentDockConstraints)
+            self.agentDockConstraints = []
+            self.agentDockWidth = nil
+            self.agentDockTrailing = nil
+            self.agentDockTop = nil
+            pane?.removeFromSuperview()
+            pane?.setDocked(false)
+            pane?.applyPageSurface(nil)
+            self.dockedAgent = nil
+            self.dockedAgentTabID = nil
+            self.agentDockClosing = false
+            self.chromiumAgentSample = nil
+            if let webView = self.activeWebView { self.updateGlassTone(for: webView) }
+        }
+    }
+
+    private func animateAgentDock(animated: Bool = true, completion: (() -> Void)? = nil) {
+        guard animated && Motion.enabled else {
+            mainArea.layoutSubtreeIfNeeded()
+            completion?()
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.allowsImplicitAnimation = true
+            context.duration = 0.30
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
+            mainArea.layoutSubtreeIfNeeded()
+        } completionHandler: { completion?() }
+    }
+
+    private func resizeAgentDock() {
+        guard let agentDockWidth, !agentDockClosing else { return }
+        let width = preferredAgentDockWidth
+        agentDockWidth.constant = width
+        agentDockInset = width
+        pageFrameEdges[1].constant = -width
+    }
+
+    private func agentPet(for id: UUID) -> NSImage {
+        if let image = agentPets[id] { return image }
+        let image = WebbyAgentPane.petImage(for: id)
+        agentPets[id] = image
+        return image
+    }
+
+    private func releaseAgentTabs(for profileID: UUID, context: UUID? = nil) {
+        let ids = agentOwners.filter { $0.value == profileID && (context == nil || agentContexts[$0.key] == context) }.keys
+        for id in ids {
+            agentOwners.removeValue(forKey: id)
+            agentContexts.removeValue(forKey: id)
+            if let tab = tab(id: id) { refreshTabContent(tab) }
+        }
+        updateAgentOutline()
+    }
+
+    private func updateAgentOutline() {
+        guard let id = activeTabID, let profileID = agentOwners[id],
+              activeTab?.pageView != nil, homeView?.isHidden == true else {
+            agentOutline?.isHidden = true
+            return
+        }
+        let outline: WebbyAgentOutline
+        if let agentOutline { outline = agentOutline }
+        else {
+            outline = WebbyAgentOutline(frame: .zero)
+            outline.translatesAutoresizingMaskIntoConstraints = false
+            mainArea.addSubview(outline, positioned: .above, relativeTo: pageArea)
+            NSLayoutConstraint.activate([
+                outline.leadingAnchor.constraint(equalTo: pageArea.leadingAnchor),
+                outline.trailingAnchor.constraint(equalTo: pageArea.trailingAnchor),
+                outline.topAnchor.constraint(equalTo: pageArea.topAnchor),
+                outline.bottomAnchor.constraint(equalTo: pageArea.bottomAnchor)
+            ])
+            agentOutline = outline
+        }
+        outline.apply(BrowserTheme.profile(for: profileID), cornerRadius: pageArea.layer?.cornerRadius ?? 0)
+        outline.isHidden = false
+    }
+
+    private func closeAgentPane(in tab: BrowserTab) {
+        guard let pane = tab.agentPane else { return }
+        NSLayoutConstraint.deactivate(tab.pageConstraints)
+        tab.pageConstraints = []
+        pane.removeFromSuperview()
+        tab.agentPane = nil
+        tab.favicon = nil
+    }
+
+    private func setLocalCLI(_ enabled: Bool) throws {
+        if enabled, agentListener == nil {
+            agentListener = try WebbyAgentListener { [weak self] request, reply in
+                guard let self, self.agentListener != nil else {
+                    reply(.failure(WebbyAutomationError.message("Local CLI is disabled."))); return
+                }
+                self.runAutomation(request, reply: reply)
+            }
+        } else if !enabled { agentListener = nil }
+        UserDefaults.standard.set(enabled, forKey: "webbyLocalCLI")
+        for pane in agentPanes.values { pane.updateCLI(enabled) }
+    }
+
+    private func automationTabInfo(_ tab: BrowserTab) -> [String: Any] {
+        ["id": tab.id.uuidString, "title": tab.title, "profile": ownerSpace(for: tab).saved.id.uuidString,
+         "displayProfile": displaySpace(for: tab).saved.id.uuidString, "active": tab.id == activeTabID,
+         "url": (tab.pageURL ?? tab.suspendedURL)?.absoluteString as Any? ?? NSNull(),
+         "engine": tab.isInternalPage || tab.isTerminal || tab.ide != nil ? NSNull() as Any : tab.engine.rawValue,
+         "loading": tab.navigationInProgress || tab.webView?.isLoading == true || tab.chromiumView?.loading == true,
+         "suspended": tab.suspendedURL != nil, "error": tab.loadError as Any? ?? NSNull(),
+         "agentControlled": agentOwners[tab.id] != nil]
+    }
+
+    private func waitForAutomationTab(_ id: UUID, deadline: TimeInterval, reply: @escaping WebbyAgentListener.Reply) {
+        guard let tab = tab(id: id) else {
+            reply(.failure(WebbyAutomationError.message("Tab closed while waiting."))); return
+        }
+        if let error = tab.loadError {
+            reply(.failure(WebbyAutomationError.message(error)))
+        } else if !tab.navigationInProgress, tab.webView?.isLoading != true, tab.chromiumView?.loading != true {
+            reply(.success(automationTabInfo(tab)))
+        } else if ProcessInfo.processInfo.systemUptime >= deadline {
+            reply(.failure(WebbyAutomationError.message("Tab is still loading.")))
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.waitForAutomationTab(id, deadline: deadline, reply: reply)
+            }
+        }
+    }
+
+    private func backgroundAgentOwns(_ webView: WKWebView) -> Bool {
+        guard let tab = tab(for: webView) else { return false }
+        return agentOwners[tab.id] != nil && !agentTabIsVisible(tab)
+    }
+
+    private func verifyAgentDock(in page: BrowserTab, base: String, profile: UUID) async throws {
+        mainArea.layoutSubtreeIfNeeded()
+        let fullWidth = pageArea.frame.width
+        showAgent()
+        try engineCheck(activeTabID == page.id && dockedAgent != nil, "Agent panel replaced the visible page")
+        if ProcessInfo.processInfo.environment["WEBBY_CHECK_AGENT_INPUT"] == "1" {
+            try dockedAgent?.verifyComposerCommands()
+            print("PASS: Agent slash suggestions, keyboard selection, Escape, direct settings, and draft preservation")
+        }
+        try engineCheck(pageArea.frame.width < fullWidth && (dockedAgent?.frame.width ?? 0) > 0,
+                        "Agent panel did not resize the website")
+        if let pane = dockedAgent {
+            mainArea.layoutSubtreeIfNeeded()
+            try engineCheck(abs(pane.frame.minX - pageArea.frame.maxX) < 1
+                            && abs(pane.frame.maxX - mainArea.bounds.maxX) < 1
+                            && abs(pane.frame.minY - mainArea.bounds.minY) < 1
+                            && pane.layer?.cornerRadius == 0,
+                            "The Agent dock left an exposed strip around the page")
+        }
+        let other = BrowserSpace(.init(id: UUID(), name: "Agent test", chromeDirectory: nil, bookmarks: [], history: []))
+        spaces.append(other)
+        defer {
+            releaseAgentTabs(for: profile)
+            agentWorkingProfiles.removeValue(forKey: profile)
+            discardAgent(for: page.id)
+            spaces.removeAll { $0 === other }
+        }
+        func command(_ arguments: [String: Any]) async throws -> Any {
+            try await withCheckedThrowingContinuation { continuation in
+                runAutomation(arguments, agentProfile: profile) { continuation.resume(with: $0) }
+            }
+        }
+        _ = try await command(["command": "use-profile", "profile": other.saved.id.uuidString])
+        let result = try await command(["command": "open", "url": base + "/second", "engine": "webKit", "foreground": true])
+        guard let record = result as? [String: Any], let rawID = record["id"] as? String,
+              let id = UUID(uuidString: rawID), let owned = tab(id: id) else {
+            throw WebbyAutomationError.message("Agent did not return a background tab.")
+        }
+        try await waitForEngine("Agent background tab failed to load") { owned.navigationTiming.finished != nil }
+        _ = try await command(["command": "focus", "tab": id.uuidString])
+        try engineCheck(activeTabID == page.id && activeSpace.saved.id == profile && owned.pageView?.isHidden == true
+                        && ownerSpace(for: owned) === other && agentOwners[id] == profile, "Agent changed the visible tab or profile")
+        switchToSpace(spaces.count - 1)
+        selectTab(owned)
+        try engineCheck(agentOutline?.isHidden == false && dockedAgent == nil, "Agent dock followed a different tab")
+        showAgent()
+        try engineCheck(dockedAgentTabID == owned.id && dockedAgent !== agentPanes[page.id], "Agent chat was shared across tabs")
+        if ProcessInfo.processInfo.environment["WEBBY_CHECK_AGENT_SURFACE"] == "1" {
+            let edge = """
+            (() => {
+              let edge = document.getElementById('fixture-agent-edge');
+              if (!edge) {
+                edge = document.createElement('div'); edge.id = 'fixture-agent-edge';
+                edge.style.cssText = 'position:fixed;top:0;bottom:0;right:0;width:20px;z-index:2147483647';
+                document.body.append(edge);
+              }
+              edge.style.setProperty('background-color','COLOR','important');
+              return true;
+            })()
+            """
+            func assertTone(_ color: NSColor, appearance: NSAppearance.Name, for target: BrowserTab) async throws {
+                try await waitForEngine("Agent panel did not match the fixture page edge") {
+                    self.agentPageTones[target.id]?.color == color && self.dockedAgent?.appearance?.name == appearance
+                }
+            }
+            _ = try await command(["command": "eval", "tab": id.uuidString, "script": edge.replacingOccurrences(of: "COLOR", with: "rgb(245,242,226)")])
+            try await assertTone(NSColor(srgbRed: 245.0/255, green: 242.0/255, blue: 226.0/255, alpha: 1), appearance: .aqua, for: owned)
+            _ = try await command(["command": "eval", "tab": id.uuidString, "script": edge.replacingOccurrences(of: "COLOR", with: "rgb(24,33,43)")])
+            try await assertTone(NSColor(srgbRed: 24.0/255, green: 33.0/255, blue: 43.0/255, alpha: 1), appearance: .darkAqua, for: owned)
+            let record = try await command(["command": "open", "url": base + "/second", "engine": "chromium"]) as? [String: Any]
+            guard let key = record?["id"] as? String, let uid = UUID(uuidString: key), let chromium = tab(id: uid) else {
+                throw WebbyAutomationError.message("Could not create the Chromium Agent color fixture.")
+            }
+            try await waitForEngine("Chromium Agent color fixture failed to load") { chromium.pageURL != nil && !chromium.navigationInProgress }
+            _ = try await command(["command": "eval", "tab": key, "script": edge.replacingOccurrences(of: "COLOR", with: "rgb(245,242,226)")])
+            selectTab(chromium)
+            showAgent()
+            sampleChromiumAgentEdge()
+            try await assertTone(NSColor(srgbRed: 245.0/255, green: 242.0/255, blue: 226.0/255, alpha: 1), appearance: .aqua, for: chromium)
+            selectTab(owned)
+            _ = try await command(["command": "close", "tab": key])
+            print("PASS: Agent dock samples the WebKit and Chromium page edge and updates light/dark text")
+        }
+        if let filename = ProcessInfo.processInfo.environment["WEBBY_AGENT_CHECK_IMAGE"],
+           let image = mainArea.bitmapImageRepForCachingDisplay(in: mainArea.bounds) {
+            mainArea.cacheDisplay(in: mainArea.bounds, to: image)
+            try image.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: filename))
+        }
+        switchToSpace(0)
+        _ = try await command(["command": "close", "tab": id.uuidString])
+        try engineCheck(tab(id: id) == nil && activeTabID == page.id, "Closing an agent tab moved the user")
+        try engineCheck(dockedAgentTabID == page.id && dockedAgent === agentPanes[page.id], "Original tab did not restore its chat")
+        toggleFloatingAgent(for: page.id)
+        try engineCheck(dockedAgent == nil && agentFloatWindows[page.id] != nil, "Agent did not detach into a floating window")
+        toggleFloatingAgent(for: page.id)
+        try engineCheck(dockedAgentTabID == page.id && agentFloatWindows[page.id] == nil, "Floating Agent did not dock back into its tab")
+        print("PASS: Agent dock, background profile and focus, owned tab outline, and background close")
+    }
+
+    private func agentTabIsVisible(_ tab: BrowserTab) -> Bool {
+        tab.id == activeTabID || tab.isFloating || (splitTabIDs?.contains(tab.id) == true && splitView?.isHidden == false)
+    }
+
+    private func runAutomation(_ request: [String: Any], agentProfile: UUID? = nil, agentContext: UUID? = nil,
+                               reply: @escaping WebbyAgentListener.Reply) {
+        do {
+            if let agentContext, agentPanes[agentContext] == nil {
+                throw WebbyAutomationError.message("This Agent tab has closed.")
+            }
+            let workingKey = agentContext ?? agentProfile
+            let anchorID = agentContext.flatMap { id in tab(id: id)?.isInternalPage == false ? id : nil }
+            guard agentProfile == nil || spaces.contains(where: { $0.saved.id == agentProfile }) else {
+                throw WebbyAutomationError.message("This Agent tab’s profile has been deleted.")
+            }
+            guard let command = request["command"] as? String else { throw WebbyAutomationError.message("Missing command.") }
+            func required(_ key: String) throws -> String {
+                guard let value = request[key] as? String, !value.isEmpty else {
+                    throw WebbyAutomationError.message("Missing \(key).")
+                }
+                return value
+            }
+            func profileIndex(_ key: String) throws -> Int {
+                let matches = spaces.indices.filter { index in
+                    let profile = spaces[index].saved
+                    return profile.id == UUID(uuidString: key) || profile.name.caseInsensitiveCompare(key) == .orderedSame
+                }
+                guard matches.count == 1, let index = matches.first else {
+                    throw WebbyAutomationError.message("Profile not found or ambiguous. Run webby profiles and use its ID.")
+                }
+                return index
+            }
+            func address(_ raw: String) throws -> URL {
+                guard let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                      url.host != nil else { throw WebbyAutomationError.message("Use a full http or https URL.") }
+                return url
+            }
+            switch command {
+            case "status":
+                let contextProfile = anchorID.flatMap { tab(id: $0) }.map { ownerSpace(for: $0).saved.id } ?? activeSpace.saved.id
+                reply(.success(["version": 1, "profile": contextProfile.uuidString,
+                                "tab": (anchorID ?? activeTabID)?.uuidString as Any? ?? NSNull()]))
+            case "profiles":
+                reply(.success(spaces.map {
+                    ["id": $0.saved.id.uuidString, "name": $0.saved.name,
+                     "active": $0 === activeSpace, "tabs": $0.tabs.count] as [String: Any]
+                }))
+            case "tabs":
+                reply(.success((spaces.flatMap(\.tabs) + Array(miniTabs.values)).map(automationTabInfo)))
+            case "agent":
+                if agentProfile == nil { showAgent() }
+                reply(.success(["opened": true]))
+            case "downloads":
+                reply(.success(downloads.automationEntries))
+            case "use-profile":
+                let index = try profileIndex(required("profile"))
+                if agentProfile == nil, activeSpaceIndex != index {
+                    if BrowserExperiment.cyclesNewTabProfiles {
+                        guard let item = tabs.first(where: { !$0.isFloating && ownerSpace(for: $0) === spaces[index] }) else {
+                            throw WebbyAutomationError.message("This fused profile has no open tabs. Use webby open with a profile ID.")
+                        }
+                        selectTab(item)
+                    } else { switchToSpace(index) }
+                }
+                if let workingKey { agentWorkingProfiles[workingKey] = spaces[index].saved.id }
+                reply(.success(["profile": spaces[index].saved.id.uuidString, "active": activeSpaceIndex == index]))
+            case "open":
+                let url = try address(required("url"))
+                let workingProfile = workingKey.flatMap { agentWorkingProfiles[$0] } ?? agentProfile
+                let origin = spaces.firstIndex { $0.saved.id == workingProfile } ?? activeSpaceIndex
+                let index = try (request["profile"] as? String).map(profileIndex) ?? origin
+                let foreground = agentProfile == nil && (request["foreground"] as? Bool ?? true)
+                let tab = BrowserTab()
+                if let name = request["engine"] as? String {
+                    guard let engine = BrowserEngine.allCases.first(where: { $0.rawValue.caseInsensitiveCompare(name) == .orderedSame }) else {
+                        throw WebbyAutomationError.message("Engine must be webkit or chromium.")
+                    }
+                    tab.engine = engine
+                }
+                tab.ownerSpaceID = spaces[index].saved.id
+                tab.fuseSearch = false
+                agentOwners[tab.id] = agentProfile
+                agentContexts[tab.id] = agentContext
+                spaces[index].tabs.append(tab)
+                if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(tab.id) }
+                if foreground {
+                    if !BrowserExperiment.cyclesNewTabProfiles && activeSpaceIndex != index { switchToSpace(index) }
+                    selectTab(tab)
+                } else { refreshTabs() }
+                navigate(url.absoluteString, in: tab)
+                if !foreground { tab.pageView?.isHidden = true }
+                reply(.success(automationTabInfo(tab)))
+            default:
+                let id = try required("tab")
+                guard let uuid = id == "@active" ? (anchorID ?? activeTabID) : UUID(uuidString: id), let tab = tab(id: uuid) else {
+                    throw WebbyAutomationError.message("Tab not found. Run webby tabs.")
+                }
+                if command == "wait" {
+                    waitForAutomationTab(uuid, deadline: ProcessInfo.processInfo.systemUptime + 20, reply: reply)
+                    return
+                }
+                if agentProfile != nil && command == "close" {
+                    guard !agentTabIsVisible(tab), agentOwners[uuid] == agentProfile, agentContexts[uuid] == agentContext, !tab.isPinned else {
+                        throw WebbyAutomationError.message("Webby Agent can close only its own background tabs.")
+                    }
+                    closeTab(id: uuid)
+                    reply(.success(["closed": self.tab(id: uuid) == nil]))
+                    return
+                }
+                if command == "close" || (command == "focus" && agentProfile == nil) {
+                    let space = displaySpace(for: tab)
+                    if !BrowserExperiment.cyclesNewTabProfiles, space !== activeSpace,
+                       let index = spaces.firstIndex(where: { $0 === space }) { switchToSpace(index) }
+                    if command == "close" {
+                        if miniTabs[uuid] != nil { closeMiniWebby(uuid) }
+                        else { closeTab(id: uuid) }
+                        reply(.success(["closed": self.tab(id: uuid) == nil || tab.pinnedInstanceClosed]))
+                    } else {
+                        if !tab.isFloating { showBrowserWindow() }
+                        selectTab(tab)
+                        reply(.success(automationTabInfo(tab)))
+                    }
+                    return
+                }
+                guard !tab.isInternalPage, !tab.isTerminal, tab.ide == nil else {
+                    throw WebbyAutomationError.message("This command requires a website tab.")
+                }
+                if let agentProfile {
+                    let modifiesPage = ["navigate", "back", "forward", "reload", "click", "fill", "press", "scroll", "eval"].contains(command)
+                    let ownsTab = agentOwners[uuid] == agentProfile && agentContexts[uuid] == agentContext
+                    if (modifiesPage || command == "focus" || command == "download") && agentOwners[uuid] != nil && !ownsTab {
+                        throw WebbyAutomationError.message("This tab belongs to another Agent chat.")
+                    }
+                    if (modifiesPage || command == "focus") && (agentTabIsVisible(tab) || uuid == anchorID) && !ownsTab {
+                        throw WebbyAutomationError.message("This tab is visible. Open its URL in a background tab using the same profile before changing it.")
+                    }
+                    if modifiesPage || command == "focus" || command == "download" {
+                        agentOwners[uuid] = agentProfile
+                        agentContexts[uuid] = agentContext
+                        refreshTabContent(tab)
+                    }
+                }
+                if command == "focus" {
+                    reply(.success(automationTabInfo(tab))); return
+                }
+                if command == "navigate" {
+                    navigate(try address(required("url")).absoluteString, in: tab, profileID: ownerSpace(for: tab).saved.id)
+                    reply(.success(automationTabInfo(tab))); return
+                }
+                if tab.suspendedURL != nil || tab.pinnedInstanceClosed { resumeTab(tab, show: tab.id == activeTabID) }
+                if command == "download" {
+                    let url = try address(required("url"))
+                    let host = tab.pageURL?.host ?? url.host ?? ""
+                    let profile = ownerSpace(for: tab).saved.id
+                    guard SitePermission.choice(.downloads, host: host, profile: profile) != 2,
+                          SitePermission.choice(.downloads, host: url.host ?? "", profile: profile) != 2 else {
+                        throw WebbyAutomationError.message("Downloads are blocked by this profile’s site permissions.")
+                    }
+                    if let page = tab.chromiumView {
+                        let id = downloads.queueEngineDownload(url.lastPathComponent, isPrivate: tab.isPrivate,
+                            onCancel: { [weak page] id in page?.cancelAutomationDownload(id.uuidString) })
+                        guard page.startAutomationDownload(url.absoluteString, identifier: id.uuidString) else {
+                            downloads.finishEngineDownload(id, status: "Could not start download")
+                            throw WebbyAutomationError.message("Chromium could not start the download.")
+                        }
+                        reply(.success(["id": id.uuidString, "requested": true]))
+                    } else if let page = tab.webView {
+                        let id = downloads.startGET(URLRequest(url: url), from: page.configuration.websiteDataStore.httpCookieStore,
+                                                    sourceURL: page.url, suggestedFilename: nil, isPrivate: tab.isPrivate)
+                        reply(.success(["id": id.uuidString, "requested": true]))
+                    } else { throw WebbyAutomationError.message("Open a website in this tab first.") }
+                    return
+                }
+                switch command {
+                case "back", "forward", "reload":
+                    if let page = tab.chromiumView {
+                        if command == "back" { page.goBack() } else if command == "forward" { page.goForward() } else { page.reload() }
+                    } else if let page = tab.webView {
+                        if command == "back" { page.goBack() } else if command == "forward" { page.goForward() } else { page.reload() }
+                    } else { throw WebbyAutomationError.message("Open a website in this tab first.") }
+                    reply(.success(automationTabInfo(tab)))
+                case "screenshot":
+                    if let page = tab.chromiumView {
+                        page.automation(method: "Page.captureScreenshot", parameters: ["format": "png", "captureBeyondViewport": false]) { result, error in
+                            if let png = result?["data"] as? String { reply(.success(["png": png])) }
+                            else { reply(.failure(WebbyAutomationError.message(error ?? "Could not capture Chromium."))) }
+                        }
+                    } else if let page = tab.webView {
+                        let config = WKSnapshotConfiguration()
+                        config.snapshotWidth = min(1280, page.bounds.width) as NSNumber
+                        page.takeSnapshot(with: config) { image, error in
+                            if let tiff = image?.tiffRepresentation,
+                               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                                reply(.success(["png": png.base64EncodedString()]))
+                            } else { reply(.failure(error ?? WebbyAutomationError.message("Could not capture WebKit."))) }
+                        }
+                    } else { throw WebbyAutomationError.message("Open a website in this tab first.") }
+                default:
+                    let script = try WebbyPageAutomation.script(command: command, request: request)
+                    if let page = tab.chromiumView {
+                        page.automation(method: "Runtime.evaluate", parameters: [
+                            "expression": script, "returnByValue": true, "awaitPromise": true, "userGesture": true
+                        ]) { result, error in
+                            if let error { reply(.failure(WebbyAutomationError.message(error))) }
+                            else if let exception = result?["exceptionDetails"] as? [String: Any] {
+                                let object = exception["exception"] as? [String: Any]
+                                reply(.failure(WebbyAutomationError.message(object?["description"] as? String ?? exception["text"] as? String ?? "JavaScript failed.")))
+                            } else {
+                                let remote = result?["result"] as? [String: Any]
+                                reply(.success(remote?["value"] ?? remote?["unserializableValue"] ?? NSNull()))
+                            }
+                        }
+                    } else if let page = tab.webView {
+                        // Use the page world for JS framework actions and promise
+                        // results. The app itself never exposes this dispatcher to pages.
+                        page.callAsyncJavaScript("return await (\(script)\n)", arguments: [:], in: nil, in: .page) { result in
+                            reply(result.map { $0 ?? NSNull() })
+                        }
+                    } else { throw WebbyAutomationError.message("Open a website in this tab first.") }
+                }
+            }
+        } catch { reply(.failure(error)) }
     }
 }

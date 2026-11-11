@@ -38,6 +38,8 @@ rule_dir="$app/Contents/Resources/ContentRules"
 mkdir -p "$app/Contents/MacOS"
 mkdir -p "$module_cache"
 mkdir -p "$rule_dir"
+mkdir -p "$app/Contents/Resources/SettingsAssets"
+cp "$script_dir/SettingsAssets/"* "$app/Contents/Resources/SettingsAssets/"
 mkdir -p "$app/Contents/Resources/WidgetBrands"
 cp "$script_dir/WidgetBrands/"* "$app/Contents/Resources/WidgetBrands/"
 mkdir -p "$app/Contents/Resources/Fonts/Geist"
@@ -84,7 +86,7 @@ if [ "${WEBBY_OFFLINE:-0}" = 1 ]; then offline_flag=--offline; else offline_flag
 mkdir -p "$app/Contents/Resources/CodeBackground"
 cp "$script_dir/Vendor/CodeBackground/Monocode-MIT.txt" "$script_dir/Vendor/CodeBackground/NOTICE.md" "$script_dir/Vendor/CodeBackground/ThirdPartyLicenses.txt" "$app/Contents/Resources/CodeBackground/"
 
-swiftc -O -parse-as-library -target "$webby_arch-apple-macos14.0" -module-cache-path "$module_cache" -import-objc-header "$script_dir/ChromiumBridge.h" -framework AppKit -framework WebKit -framework AVFoundation -framework Security -framework CryptoKit -framework IOKit -framework JavaScriptCore -framework Carbon -framework WidgetKit \
+swiftc -O -whole-module-optimization -parse-as-library -target "$webby_arch-apple-macos14.0" -module-cache-path "$module_cache" -import-objc-header "$script_dir/ChromiumBridge.h" -framework AppKit -framework WebKit -framework AVFoundation -framework Security -framework CryptoKit -framework IOKit -framework JavaScriptCore -framework Carbon -framework WidgetKit \
   "$script_dir/BrowserEngine.swift" \
   "$script_dir/PlainWebKitBrowser.swift" \
   "$script_dir/BrowserGlass.swift" \
@@ -97,6 +99,15 @@ swiftc -O -parse-as-library -target "$webby_arch-apple-macos14.0" -module-cache-
   "$script_dir/FusedProfileLabel.swift" \
   "$script_dir/WebbyIcon.swift" \
   "$script_dir/BrowserMenuBar.swift" \
+  "$script_dir/BrowserSettings.swift" \
+  "$script_dir/WebbyAgentSocket.swift" \
+  "$script_dir/WebbyAgentListener.swift" \
+  "$script_dir/WebbyPageAutomation.swift" \
+  "$script_dir/WebbyAgentSession.swift" \
+  "$script_dir/WebbyAgentPane.swift" \
+  "$script_dir/WebbyOnboardingState.swift" \
+  "$script_dir/WebbyOnboarding.swift" \
+  "$script_dir/WebbyOnboardingView.swift" \
   "$script_dir/GoogleWorkspace.swift" \
   "$script_dir/WidgetCanvas.swift" \
   "$script_dir/ASCIIBackgrounds.swift" \
@@ -137,8 +148,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>Webby</string>
   <key>CFBundleIconFile</key><string>Webby</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>85</string>
-  <key>CFBundleShortVersionString</key><string>3.15.0</string>
+  <key>CFBundleVersion</key><string>96</string>
+  <key>CFBundleShortVersionString</key><string>3.17.8</string>
   <key>NSAppleEventsUsageDescription</key><string>Webby reads and controls Spotify for its music widget.</string>
   <key>NSCameraUsageDescription</key><string>Allow a website you choose to use the camera.</string>
   <key>NSMicrophoneUsageDescription</key><string>Allow a website you choose to use the microphone.</string>
@@ -170,5 +181,9 @@ fi
 
 sh "$script_dir/DesktopWidgets/build-extension.sh" "$app"
 
+mkdir -p "$app/Contents/Helpers"
+swiftc -O -parse-as-library -target "$webby_arch-apple-macos14.0" -module-cache-path "$module_cache" \
+  "$script_dir/WebbyAgentSocket.swift" "$script_dir/WebbyCLI.swift" -o "$app/Contents/Helpers/webby"
+codesign --force --sign "$WEBBY_SIGN_IDENTITY" "$app/Contents/Helpers/webby"
 codesign --force --sign "${WEBBY_SIGN_IDENTITY:-system local code signing}" "$app"
 echo "$app"

@@ -34,6 +34,17 @@ struct CodexAppConfiguration: Sendable {
     let cli: URL
     let socket: URL
     let home: URL
+    static func agentEndpoint() -> Self {
+        let environment = ProcessInfo.processInfo.environment
+        let home = environment["CODEX_HOME"].flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        let socket = environment["WEBBY_AGENT_SOCKET"].flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil }
+            ?? home.appendingPathComponent("app-server-control/app-server-control.sock")
+        // The Agent tab only connects. The CLI executable is used by widgets
+        // when they explicitly request daemon startup.
+        return .init(cli: URL(fileURLWithPath: "/usr/bin/false"), socket: socket, home: home)
+    }
+
     @MainActor static func current() -> Self? {
         let workspace = NSWorkspace.shared
         let app = workspace.runningApplications.first(where: { $0.bundleIdentifier == "com.openai.codex" })?.bundleURL
@@ -130,6 +141,7 @@ final class CodexAppTransport {
     private var socketFD:Int32 = -1
     private var wire = CodexWebSocketWire()
     private var nextID = 0, bytesRead = 0
+    func resetReadBudget() { bytesRead = 0 }
     static func startArguments() -> [String] { ["app-server","daemon","start"] }
     static func mayStartShared(after error:Error) -> Bool {
         if case CodexAppWidgetError.noServer = error { return true }
@@ -262,26 +274,48 @@ final class CodexAppTransport {
         try wire.append(Data(data[range.upperBound...]))
     }
     private func send(_ packet:[String:Any]) throws { try write(CodexWebSocketWire.frame(JSONSerialization.data(withJSONObject:packet))) }
-    func call(_ method:String,params:[String:Any]? = nil) throws -> [String:Any] {
+    func reply(id: Any, result: [String: Any]) throws {
+        try send(["id": id, "result": result])
+    }
+
+    func reject(id: Any) throws {
+        try send(["id": id, "error": ["code": -32601, "message": "This request requires the Codex app."]])
+    }
+
+    func receive(until: Double) throws -> [String: Any] {
+        while ProcessInfo.processInfo.systemUptime < until {
+            if let event = try wire.next() {
+                switch event {
+                case .message(let data):
+                    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        throw CodexAppWidgetError.protocolError
+                    }
+                    return json
+                case .ping(let data): try write(CodexWebSocketWire.frame(data, opcode: 10))
+                case .pong: break
+                case .closed: throw CodexAppWidgetError.unavailable
+                }
+            } else { try wire.append(read(until: until)) }
+        }
+        throw CodexAppWidgetError.timeout
+    }
+
+    func call(_ method:String,params:[String:Any]? = nil,
+              onEvent: (([String: Any]) throws -> Void)? = nil) throws -> [String:Any] {
         nextID += 1; let id = nextID
         var packet:[String:Any] = ["id":id,"method":method]
         if let params { packet["params"] = params }
         try send(packet); let until = ProcessInfo.processInfo.systemUptime+8
         while ProcessInfo.processInfo.systemUptime < until {
-            if let event = try wire.next() {
-                switch event {
-                case .message(let data):
-                    guard let json = try JSONSerialization.jsonObject(with:data) as? [String:Any] else { throw CodexAppWidgetError.protocolError }
-                    if json["id"] as? Int == id {
-                        if let error = json["error"] as? [String:Any] { throw CodexAppWidgetError.rpc(method,error["code"] as? Int ?? -1) }
-                        guard let result = json["result"] as? [String:Any] else { throw CodexAppWidgetError.protocolError }
-                        return result
-                    }
-                case .ping(let data): try write(CodexWebSocketWire.frame(data,opcode:10))
-                case .pong: break
-                case .closed: throw CodexAppWidgetError.unavailable
+            let json = try receive(until: until)
+            if (json["id"] as? Int) == id && json["method"] == nil {
+                if let error = json["error"] as? [String: Any] {
+                    throw CodexAppWidgetError.rpc(method, error["code"] as? Int ?? -1)
                 }
-            } else { try wire.append(read(until:until)) }
+                guard let result = json["result"] as? [String: Any] else { throw CodexAppWidgetError.protocolError }
+                return result
+            }
+            try onEvent?(json)
         }
         throw CodexAppWidgetError.timeout
     }

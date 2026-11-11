@@ -20,10 +20,260 @@ extension BrowserApp {
         try await waitFor("Page failed: "+path) { target.navigationTiming.finished != nil }
         return target
     }
+    private func verifySettingsTab(base: String, in folder: URL) async throws {
+        makeMenuBar()
+        installMenus()
+        let website = try await loadFixture("/settings-fixture", base: base)
+        let shortcut = NSApp.mainMenu?.items.first?.submenu?.items.first
+        try expect(shortcut?.keyEquivalent == ",", "Settings keyboard shortcut is missing")
+        try expect(NSApp.sendAction(#selector(showBrowserPreferences), to: self, from: shortcut),
+                   "Settings menu action did not dispatch")
+        guard let settingsTab = activeTab, let settings = settingsTab.settingsPage else {
+            throw PerformanceTestFailure(message: "Settings did not open in a tab")
+        }
+        try expect(settings.view.window === window && !settings.view.isHidden && homeView.isHidden,
+                   "Settings is not visible in Webby's main content area")
+        try expect(addressField.stringValue == BrowserSettingsPage.address && settingsTab.pageURL == nil,
+                   "Internal settings address was not presented correctly")
+        selectTab(website)
+        try expect(settings.view.isHidden && website.webView?.isHidden == false, "Settings covered another tab")
+        navigate(BrowserSettingsPage.address)
+        try expect(activeTab === settingsTab && tabs.filter { $0.settingsPage != nil }.count == 1,
+                   "The internal address duplicated the Settings tab")
+        showEngineRuleForCurrentSite()
+        try expect(settings.model.section == .engines && settings.model.draft?.input == website.pageURL?.absoluteString,
+                   "The site shortcut did not prefill the Engine Rules editor")
+        try await waitFor("The engine rule editor did not attach to the browser window") { self.window.attachedSheet != nil }
+        settings.model.draft = nil
+        try await waitFor("The engine rule editor did not close") { self.window.attachedSheet == nil }
+        for (name, width) in [("wide", 1160.0), ("compact", 850.0)] {
+            var frame = window.frame
+            frame.size = NSSize(width: width, height: 720)
+            window.setFrame(frame, display: true)
+            try await Task.sleep(nanoseconds: 240_000_000)
+            content.layoutSubtreeIfNeeded()
+            try expect((settings.view.bounds.width >= BrowserSettingsPage.sidebarMinimumWidth) == (name == "wide"), "Settings viewport did not resize for \(name): \(settings.view.bounds.width) in \(window.frame.width)")
+            guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming]),
+                  let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
+                throw PerformanceTestFailure(message: "The Settings tab could not be captured")
+            }
+            try png.write(to: folder.appendingPathComponent("settings-tab-\(name).png"))
+        }
+        navigate(base + "/after-settings")
+        try await waitFor("Address navigation did not replace Settings with a website") {
+            settingsTab.settingsPage == nil && settingsTab.pageURL?.path == "/after-settings" && settingsTab.navigationTiming.finished != nil
+        }
+        showBrowserPreferences()
+        guard let reopened = activeTab, reopened.settingsPage != nil else {
+            throw PerformanceTestFailure(message: "Could not reopen Settings after navigating away")
+        }
+        closeTab(id: reopened.id)
+        try expect(activeTab?.settingsPage == nil && tabs.allSatisfy { $0.settingsPage == nil },
+                   "Closing the Settings tab did not return to a website")
+        print("PASS: browser Settings tab, shortcut, internal address, rule editor, responsive layout, navigation and close")
+    }
+
+    private func verifyOnboarding(in folder: URL) async throws {
+        let root = folder.appendingPathComponent("chrome-fixture")
+        let available = ChromeProfileImporter.availableProfiles(in: root)
+        try expect(available.count == 2, "Chrome fixture discovery missed profiles")
+        let personal = activeSpace.saved.id
+        var draft = initialOnboardingDraft()
+        draft.animatedDetails = false
+        firstRunSetupPending = true
+        var completed = false
+        var payloads: [WebbyChromePayload] = []
+        let model = WebbyOnboarding(draft: draft, firstRun: false, discoverChrome: { available },
+            importedDirectories: { [] }, installImports: { result in
+                payloads = result
+                return try await self.installOnboardingImports(result)
+            }, apply: { try await self.applyOnboarding($0, firstRun: true) },
+            done: { completed = $0 })
+        model.show(over: window)
+        let setupWindow = window!
+        setupWindow.setContentSize(NSSize(width: 1200, height: 760))
+        let overlay = setupWindow.contentView?.subviews.last
+        try expect(model.isPresented && overlay?.accessibilityIdentifier() == "WebbyOnboarding"
+                   && overlay?.frame == setupWindow.contentView?.bounds, "Setup does not fill the browser window")
+        func capture(_ name: String) async throws {
+            try await Task.sleep(for: .milliseconds(240))
+            guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(setupWindow.windowNumber), [.boundsIgnoreFraming]),
+                  let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
+                throw PerformanceTestFailure(message: "Could not capture " + name)
+            }
+            try data.write(to: folder.appendingPathComponent("onboarding-" + name + ".png"))
+        }
+        try await capture("welcome")
+        model.next()
+        try await waitFor("Chrome discovery did not finish") { !model.scanning }
+        try expect(model.sources.count == 2 && !model.importOptions.passwords && !model.importOptions.cookies,
+                   "Import starts with protected data selected")
+        model.importExpanded = true
+        try await capture("migration")
+        model.importExpanded = false
+        try expect(payloads.isEmpty && spaces.count == 2, "Opening the import options changed browser data")
+        model.importChrome()
+        try await waitFor("Fixture import did not finish") { model.busy == nil }
+        try expect(payloads.count == 2 && payloads.allSatisfy { $0.passwords.isEmpty && $0.cookies.isEmpty },
+                   "Default import touched protected data")
+        try expect(model.importFeedback?.contains("2 bookmarks") == true && spaces.count == 4, "Import counts or new profiles are incorrect")
+        let protectedSource = available[0]
+        let syntheticKey = Data(repeating: 0x41, count: 16)
+        var protected = WebbyChromePayload.read(protectedSource, id: UUID())
+        protected.readProtected(protectedSource, selection: .init(passwords: true, cookies: true), key: .success(syntheticKey))
+        try expect(protected.passwords.count == 1 && protected.cookies.count == 1 && protected.issues.isEmpty,
+                   "Synthetic encrypted password/cookie import failed")
+        protected.readProtected(protectedSource, selection: .init(passwords: true), key: .failure(ChromeSessions.ImportError.keyUnavailable))
+        try expect(protected.issues.count == 1, "Protected access failure was not reported")
+        var retry = WebbyChromePayload.read(protectedSource, id: payloads[0].space.id)
+        retry.readProtected(protectedSource, selection: .init(passwords: true), key: .failure(ChromeSessions.ImportError.keyUnavailable))
+        let failedRetry = try await installOnboardingImports([retry])
+        try expect(failedRetry.retryChrome == [protectedSource.directory] && spaces.count == 4,
+                   "Partial retry did not preserve profile identity")
+        model.next()
+        model.selectSpace(personal)
+        model.addSpace(named: "Study")
+        guard let study = model.draft.spaces.last else { throw PerformanceTestFailure(message: "Missing new profile") }
+        model.selectSpace(study.id)
+        model.draft.fuse = true
+        try await capture("spaces")
+        model.next()
+        model.draft.theme = "fireball"
+        model.draft.themeChanged = true
+        try await capture("signature")
+        model.next()
+        for layout in ["bottom", "horizontal", "top"] { model.draft.layout = layout }
+        for engine in BrowserSearchEngine.allCases { model.draft.search = engine.rawValue }
+        model.draft.address = "tabBar"
+        model.back()
+        try expect(model.draft.theme == "fireball" && model.draft.layout == "top", "Back discarded draft choices")
+        model.next()
+        model.draft.layout = "horizontal"
+        try await capture("layout")
+        model.next()
+        model.selectWallpaperDesign(.blueHour)
+        model.draft.effect = 5
+        model.draft.glass?.background = 0.61
+        model.draft.glass?.toolbar = 0.22
+        model.draft.glass?.sidebar = 0.34
+        model.draft.glass?.widgets = 0.78
+        model.draft.glass?.pages = false
+        model.refreshWallpaper()
+        try await waitFor("Wallpaper preview did not render") { model.wallpaperImage != nil }
+        try await capture("glass")
+        model.editingGlass = false
+        try await capture("wallpaper")
+        var previousLook = WallpaperSettings()
+        previousLook.opacity = 0.24
+        let wallpaperKey = WallpaperSetStore.prefixes[0] + study.id.uuidString
+        let previousData = try JSONEncoder().encode(previousLook)
+        UserDefaults.standard.set(previousData, forKey: wallpaperKey)
+        let previousPair = WallpaperSetStore.load().active
+        model.draft.opacity = 0.63
+        model.draft.saveLook = true
+        model.next()
+        model.draft.widgets = ["note", "calculator", "note"]
+        model.draft.widgetPreset = "Custom"
+        model.draft.widgetsChanged = true
+        let sized = OnboardingWidgetFrame(CGRect(x: 160, y: 370, width: 310, height: 154), in: CGSize(width: 1000, height: 700))
+        model.draft.widgetEdits = ["note": sized]
+        try await capture("canvas")
+        let wideFrame = setupWindow.frame
+        var compactFrame = wideFrame
+        compactFrame.size = NSSize(width: 830, height: 470)
+        setupWindow.setFrame(compactFrame, display: true)
+        try await capture("compact")
+        try expect(setupWindow.frame.width < 900 || setupWindow.frame.height < 485, "Setup did not fit a compact window")
+        setupWindow.setFrame(wideFrame, display: true)
+        model.next()
+        model.demoPlaying = true
+        try await capture("tour")
+        model.skipTour()
+        try expect(model.draft.step == .links && !model.draft.toured, "Skipping the tour advanced incorrectly")
+        try await capture("links")
+        model.next()
+        try await capture("ready")
+        model.next()
+        try await waitFor("Final browser reveal did not finish") { completed }
+        try expect(activeSpace.saved.id == study.id && activeSpace.saved.isolatesWebsiteData == true,
+                   "New isolated profile was not selected")
+        try expect(activeSpace.dataStore.identifier == study.id && activeSpace.dataStore !== WKWebsiteDataStore.default(),
+                   "New profile shares the default WebKit data store")
+        try expect(BrowserTheme.selectedID == "fireball" && BrowserTabPlacement.current == .horizontal &&
+                   BrowserAddressPlacement.current == .tabBar && BrowserSearchEngine.selected(for: study.id) == .ecosia,
+                   "The browser did not receive the selected appearance or browsing preferences")
+        try expect(WidgetCanvas.onboardingWidgets(for: study.id) == [.note, .calculator], "Canvas was not persisted or duplicated a widget")
+        try expect(BrowserGlass.backgroundTransparency == 0.61 && BrowserGlass.topTransparency == 0.22 &&
+                   BrowserGlass.sidebarTransparency == 0.34 && BrowserGlass.widgetOpacity(profile: study.id) == 0.78 &&
+                   !BrowserGlass.pageInjectionEnabled, "Setup glass controls did not reach the live browser")
+        let note = WidgetCanvas.onboardingFrames(for: study.id)?["note"]
+        try expect(abs((note?.width ?? 0) - sized.width) < 0.025 && abs((note?.height ?? 0) - sized.height) < 0.025,
+                   "Widget dimensions did not reach the live canvas")
+        try expect(!model.isPresented && setupWindow.isVisible && overlay?.superview == nil, "Setup dismissed the browser window")
+        let archive = WallpaperSetStore.load()
+        let activeWallpaper = UserDefaults.standard.data(forKey: wallpaperKey).flatMap {
+            try? JSONDecoder().decode(WallpaperSettings.self, from: $0)
+        }
+        try expect(archive.active != previousPair && activeWallpaper?.opacity == 0.63
+                   && activeWallpaper?.effect == 5
+                   && archive.sets.first(where: { $0.id == previousPair })?.profiles[study.id.uuidString]?.settings == previousData,
+                   "Applying a new wallpaper pair changed the previous pair")
+        guard let generated = activeWallpaper?.path, let image = NSImage(contentsOfFile: generated) else {
+            throw PerformanceTestFailure(message: "The selected wallpaper design was not installed")
+        }
+        try expect(image.isValid, "The installed wallpaper could not be decoded")
+
+
+        try await applyOnboarding(model.draft, firstRun: false)
+        try expect(spaces.count == 5 && WidgetCanvas.onboardingWidgets(for: study.id) == [.note, .calculator],
+                   "Replay duplicated profiles or widgets")
+        for _ in 0..<3 {
+            let replay = WebbyOnboarding(draft: initialOnboardingDraft(), firstRun: false, discoverChrome: { [] },
+                importedDirectories: { [] }, installImports: { _ in .init() },
+                apply: { _ in throw PerformanceTestFailure(message: "Skip called apply") }, done: { _ in })
+            replay.show(over: window)
+            replay.next()
+            try await waitFor("No-Chrome discovery did not finish") { !replay.scanning }
+            try expect(replay.sources.isEmpty, "No-Chrome fixture detected personal profiles")
+            replay.draft.glass?.background = 0.1
+            replay.skip()
+            try expect(!replay.isPresented && BrowserGlass.backgroundTransparency == 0.61,
+                       "Skipping replay committed a preview edit")
+        }
+        try expect(!setupWindow.contentView!.subviews.contains(where: { $0.accessibilityIdentifier() == "WebbyOnboarding" }),
+                   "Repeated setup left an overlay behind")
+        print("PASS: full-window onboarding, glass and wallpaper persistence, widget resizing, profile isolation, protected consent, and replay")
+    }
+
+    private func runStartupChecks(output: URL) async throws {
+        let profile = UUID()
+        let saved = SavedBrowserSpace(id: profile, name: "Startup fixture", chromeDirectory: nil, bookmarks: [], history: [], isolatesWebsiteData: true)
+        // The builder redirects BrowserSpaceStore to a disposable file.
+        try BrowserSpaceStore.save([saved])
+        UserDefaults.standard.setVolatileDomain([
+            "webbyRestoreTabs": true, "webbyLocalCLI": false, WebbyOnboardingDraft.storageKey: Data(),
+            "webbyWidgetCanvas.\(profile.uuidString)": Data("[]".utf8),
+            "webbySessionTabs": try JSONEncoder().encode(BrowserSessionRecord(pages: (0..<80).map {
+                BrowserSessionRecord.Page(title: "Restored \($0)", url: "https://example.invalid/\($0)", ownerSpaceID: profile, displaySpaceID: profile, groupID: nil)
+            }))
+        ], forName: UserDefaults.argumentDomain)
+        let began = ProcessInfo.processInfo.systemUptime
+        applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        content.layoutSubtreeIfNeeded()
+        try expect(window.isVisible && activeTab != nil && homeView.isHidden == false, "Startup did not produce a usable home window")
+        try expect(spaces.flatMap(\.tabs).filter { $0.pageView != nil }.isEmpty, "Startup eagerly created restored pages")
+        let restored = spaces.flatMap(\.tabs)
+        try expect(restored.count == 81, "Startup did not restore all 80 fixture tabs")
+        let data: [String: Any] = ["windowConfiguredMs": ((windowShownAt ?? ProcessInfo.processInfo.systemUptime) - began) * 1000, "restoredTabCount": restored.count - 1, "residentPageViews": restored.filter { $0.pageView != nil }.count]
+        try JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]).write(to: output)
+        exit(0)
+    }
+
     private func runPerformanceChecks(base: String, output: URL) async throws {
         try expect(Bundle.main.bundleIdentifier == "local.webby.performance-tests", "Test bundle identity is not isolated")
         BrowserExperiment.cyclesNewTabProfiles = false
         BrowserTabPlacement.current = .top
+        BrowserAddressPlacement.current = .strip
         UserDefaults.standard.set(true, forKey: BrowserWindowStyle.insetKey)
         UserDefaults.standard.set(false, forKey: "sidebarHidden")
         UserDefaults.standard.set(true, forKey: "webbyRestoreTabs")
@@ -32,7 +282,7 @@ extension BrowserApp {
         let b = BrowserSpace(.init(id: UUID(), name: "Fixture B", chromeDirectory: nil, bookmarks: [], history: []))
         spaces = [a,b]
         for space in spaces { UserDefaults.standard.set(Data("[]".utf8), forKey: "webbyWidgetCanvas.\(space.saved.id.uuidString)") }
-        if ProcessInfo.processInfo.environment["WEBBY_TEST_DOWNLOADS"] == "only" {
+        if ["WEBBY_TEST_DOWNLOADS", "WEBBY_TEST_AGENT"].contains(where: { ProcessInfo.processInfo.environment[$0] == "only" }) {
             let folder=output.deletingLastPathComponent().appendingPathComponent("downloads",isDirectory:true)
             downloads = BrowserDownloads(destinationFolder:folder,defaults:UserDefaults(suiteName:"webby-download-browser-test-"+UUID().uuidString)!)
         } else { downloads = BrowserDownloads() }
@@ -45,6 +295,31 @@ extension BrowserApp {
         NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: .browserThemeChanged, object: nil)
         BrowserTheme.activate(a.saved.id)
         themeChanged()
+        #if WEBBY_TEST_AGENT
+        if ProcessInfo.processInfo.environment["WEBBY_TEST_AGENT"] == "only" {
+            installMenus()
+            openAgentTab()
+            try expect(activeTab?.agentPane?.window === window, "Agent tab did not attach to the browser window")
+            try expect(window.firstResponder is NSTextView, "Agent composer was not focused")
+            try setLocalCLI(true)
+            try Data("{\"ready\":true}".utf8).write(to: output)
+            while true { try await Task.sleep(nanoseconds: 500_000_000) }
+        }
+        #endif
+        if ProcessInfo.processInfo.environment["WEBBY_TEST_CATALOG"] == "only" {
+            _ = BrowserTheme.presets
+            var counts = 0
+            let began = ProcessInfo.processInfo.systemUptime
+            for _ in 0..<10000 { counts += BrowserTheme.presets.count }
+            let elapsed = (ProcessInfo.processInfo.systemUptime - began) * 1000
+            try JSONSerialization.data(withJSONObject: ["catalogAccess10000Ms": elapsed, "presetCountTotal": counts], options: [.prettyPrinted, .sortedKeys]).write(to: output)
+            exit(0)
+        }
+        if ProcessInfo.processInfo.environment["WEBBY_TEST_ONBOARDING"] == "only" {
+            try await verifyOnboarding(in: output.deletingLastPathComponent())
+            try Data("{\"passed\":true,\"onboarding\":true}".utf8).write(to: output)
+            exit(0)
+        }
         if ProcessInfo.processInfo.environment["WEBBY_TEST_WINDOW_FRAME"] == "only" {
             try await verifyWindowFrame(base: base, output: output, other: b)
             exit(0)
@@ -137,6 +412,18 @@ extension BrowserApp {
             try Data("{\"passed\":true,\"nativeMedia\":true}".utf8).write(to:output)
             print("Native media checks passed");exit(0)
         }
+        let menuTest=BrowserMenuBar(showBrowser:{},addWidget:{},resetWidgets:{},
+            currentSpaceName:{"Fixture A"},currentSpaceID:{a.saved.id},importChrome:{},deleteProfile:{},
+            openBookmarks:{},openHistory:{},importPasswords:{},showPasswords:{},importSignIns:{},fillPassword:{},
+            profiles:{[(a.saved.id,"Fixture A"),(b.saved.id,"Fixture B")]},openTerminal:{},
+            experimentChanged:{},tabPlacementChanged:{},chooseGoogleClient:{},connectGoogle:{_ in},
+            disconnectGoogle:{_ in},googleConnected:{_ in false})
+        try expect(menuTest.verifyOrganization(),"Menu organization lost controls or actions")
+        if ProcessInfo.processInfo.environment["WEBBY_TEST_SETTINGS"] == "only" {
+            try await verifySettingsTab(base: base, in: output.deletingLastPathComponent())
+            try Data("{\"passed\":true,\"settings\":true}".utf8).write(to: output)
+            exit(0)
+        }
         try expect(BrowserWallpaperView(frame:NSRect(x:0,y:0,width:200,height:100)).verifyChromeSampling(),"Homepage tab sampling failed")
         try verifyTabGlassShape()
         try expect(widgetCanvas.verifyAlignmentBounds(), "Widget alignment guides or canvas boundaries failed")
@@ -145,13 +432,6 @@ extension BrowserApp {
         try expect(CodexAppWidgetView(usage:true).verifyUsageRing(),"Codex usage ring/logo layout failed")
         try expect(widgetCanvas.verifyCodexInput(),"Codex prompt cannot focus, type, or submit")
         try expect(widgetCanvas.verifyWidgetGlass(), "Widget glass opacity, profile isolation, or backdrop mode failed")
-        let menuTest=BrowserMenuBar(showBrowser:{},addWidget:{},resetWidgets:{},
-            currentSpaceName:{"Fixture A"},currentSpaceID:{a.saved.id},importChrome:{},deleteProfile:{},
-            openBookmarks:{},openHistory:{},importPasswords:{},showPasswords:{},importSignIns:{},fillPassword:{},
-            profiles:{[(a.saved.id,"Fixture A"),(b.saved.id,"Fixture B")]},openTerminal:{},
-            experimentChanged:{},tabPlacementChanged:{},chooseGoogleClient:{},connectGoogle:{_ in},
-            disconnectGoogle:{_ in},googleConnected:{_ in false})
-        try expect(menuTest.verifyOrganization(),"Menu organization lost controls or actions")
         window.orderBack(nil)
         addTab(select: true)
         let home = activeTab!
@@ -509,13 +789,43 @@ extension BrowserApp {
         let suffix=activeSpace.saved.id.uuidString
         let keys=["webbyWallpaperFullWindow.","webbyWallpaperTabBlurScope.","webbyWallpaperTabBlurStrength."].map{$0+suffix}
         let previous=keys.map{UserDefaults.standard.object(forKey:$0)}
-        defer {for(i,key) in keys.enumerated(){if let value=previous[i]{UserDefaults.standard.set(value,forKey:key)}else{UserDefaults.standard.removeObject(forKey:key)}};applyWallpaperPresentation()}
+        let previousPlacement = BrowserTabPlacement.current
+        guard let groupMember = tabs.first(where: { $0.groupID == nil && !$0.isPinned && $0.id != activeTabID }) else {
+            throw PerformanceTestFailure(message: "Wallpaper fixture lacks a tab to group")
+        }
+        let testGroup = TabGroupRecord(id: UUID(), profileID: activeSpace.saved.id, name: "Wallpaper Fixture", collapsed: false)
+        tabGroups.append(testGroup)
+        groupMember.groupID = testGroup.id
+        BrowserTabPlacement.current = .top
+        applyTabPlacement()
+        defer {
+            groupMember.groupID = nil
+            tabGroups.removeAll { $0.id == testGroup.id }
+            for (index, key) in keys.enumerated() {
+                if let value = previous[index] { UserDefaults.standard.set(value, forKey: key) }
+                else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+            BrowserTabPlacement.current = previousPlacement
+            applyTabPlacement()
+            applyWallpaperPresentation()
+        }
         UserDefaults.standard.set(true,forKey:keys[0]);UserDefaults.standard.set(0,forKey:keys[1]);UserDefaults.standard.set(0.6,forKey:keys[2]);applyWallpaperPresentation()
         try expect(wallpaper.superview === content,"Full-window wallpaper did not extend behind chrome")
         try expect(wallpaperWindowBackdrop?.blendingMode == .behindWindow && mainBackdrop.isHidden,"Window transparency is tinting the wallpaper instead of revealing desktop glass")
         try expect(abs((wallpaperWindowBackdrop?.alphaValue ?? -1)-(1-BrowserGlass.backgroundTransparency))<0.001,"Desktop glass ignores window transparency")
         try expect(abs(mainBackdrop.alphaValue-(1-BrowserGlass.backgroundTransparency))<0.001 && sidebarBackdrop.alphaValue==0,"Tabs-only blur still frosts the entire pane")
-        for row in tabRows.values {try expect(row.subviews.contains{$0 is WallpaperTabFrost && !$0.isHidden},"Individual tab frost missing")}
+        let ungroupedRows = tabs.filter { $0.groupID == nil && !$0.isPinned }.compactMap { tabRows[$0.id] }
+        try expect(!ungroupedRows.isEmpty, "Wallpaper fixture lacks an ungrouped tab row")
+        for row in ungroupedRows {
+            try expect(row.subviews.contains { $0 is WallpaperTabFrost && !$0.isHidden }, "Individual tab frost missing")
+        }
+        for tab in tabs where tab.groupID != nil || tab.isPinned {
+            let hasFrost = tabRows[tab.id]?.subviews.contains { $0 is WallpaperTabFrost && !$0.isHidden } ?? false
+            try expect(!hasFrost, "Grouped or pinned tab has an extra individual frost layer")
+        }
+        let groupFrost = groupContainers[testGroup.id]?.frost.alphaValue ?? -1
+        try expect(abs(groupFrost - 0.6 * (1 - BrowserGlass.sidebarTransparency * 0.86)) < 0.001,
+                   "Tab group does not share a single frost layer")
         UserDefaults.standard.set(1,forKey:keys[1]);applyWallpaperPresentation()
         try expect(abs(sidebarBackdrop.alphaValue-0.6*(1-BrowserGlass.sidebarTransparency*0.86))<0.001 && sidebarBackdrop.blendingMode == .withinWindow,"Pane frost does not sample the wallpaper")
         UserDefaults.standard.set(false,forKey:keys[0]);applyWallpaperPresentation()
@@ -914,6 +1224,9 @@ extension BrowserApp {
                 if ProcessInfo.processInfo.environment["WEBBY_TEST_WORKBENCH"] == "only" {
                     try await CodeWorkbench.verifyWorkbench(project: output.deletingLastPathComponent().appendingPathComponent("ide-fixture"), screenshot: output.deletingLastPathComponent().appendingPathComponent("workbench-native.png")); exit(0)
                 }
+                if ProcessInfo.processInfo.environment["WEBBY_TEST_STARTUP"] == "only" {
+                    try await browser.runStartupChecks(output: output); return
+                }
                 try await browser.runPerformanceChecks(base: base, output: output)
             }
             catch { print("Browser integration check failed: \(error)"); exit(1) }
@@ -1004,7 +1317,7 @@ extension BrowserApp {
         let frost=WallpaperTabFrost(frame:row.bounds);frost.wantsLayer=true;frost.autoresizingMask=[.width,.height];row.addSubview(frost)
         for width in [210.0,300.0] {
             row.frame.size.width=width
-            row.update(title:"New Tab",selected:true,favicon:nil,splitFavicons:nil,isTerminal:false,isPinned:false,loadingProgress:nil)
+            row.update(title:"New Tab",selected:true,favicon:nil,splitFavicons:nil,isTerminal:false,isPinned:false,pinOpen:false,loadingProgress:nil)
             row.setHorizontal(pinned:false,color:.red);row.needsLayout=true;row.layoutSubtreeIfNeeded()
             guard let mask=frost.layer?.mask as? CAShapeLayer,let path=mask.path else{throw PerformanceTestFailure(message:"Horizontal tab glass has no shape mask")}
             try expect(path.contains(NSPoint(x:width/2,y:20)) && !path.contains(NSPoint(x:1,y:36)),"Tab glass protrudes into the shoulder cutout")
@@ -1014,12 +1327,12 @@ extension BrowserApp {
             }}
         }
         row.horizontal=false
-        row.update(title:"Devpost",selected:false,favicon:nil,splitFavicons:nil,isTerminal:false,isPinned:false,loadingProgress:nil)
+        row.update(title:"Devpost",selected:false,favicon:nil,splitFavicons:nil,isTerminal:false,isPinned:false,pinOpen:false,loadingProgress:nil)
         row.needsLayout=true;row.layoutSubtreeIfNeeded()
         let short=row.verticalGlassRect()
         try expect(short.width<row.bounds.width*0.7 && short.height<row.bounds.height,"Vertical glass still fills the entire tab row")
         try expect((frost.layer?.mask as? CAShapeLayer)?.path?.boundingBoxOfPath==short,"Vertical glass does not follow the title-sized mask")
-        row.update(title:"A very long title that needs truncation near the close button",selected:true,favicon:nil,splitFavicons:nil,isTerminal:false,isPinned:false,loadingProgress:nil)
+        row.update(title:"A very long title that needs truncation near the close button",selected:true,favicon:nil,splitFavicons:nil,isTerminal:false,isPinned:false,pinOpen:false,loadingProgress:nil)
         row.needsLayout=true;row.layoutSubtreeIfNeeded()
         try expect(row.verticalGlassRect().width>short.width && row.bounds.contains(row.verticalGlassRect()),"Vertical glass fails to grow safely with the title")
         print("PASS: horizontal glass follows the exact tab silhouette at multiple widths; vertical glass restored")
@@ -1500,8 +1813,55 @@ extension BrowserApp {
 }
 
 extension BrowserApp {
+    private func verifyPermissionIsolation(base: String) async throws {
+        let unrelated = try await loadFixture("/form?permission-unrelated", base: base)
+        let unrelatedView = unrelated.webView!
+        var affectedBase = URLComponents(string: base)!
+        affectedBase.host = affectedBase.host == "localhost" ? "127.0.0.1" : "localhost"
+        let affected = try await loadFixture("/form?permission-affected", base: affectedBase.url!.absoluteString)
+        let affectedView = affected.webView!
+        let owner = ownerSpace(for: affected).saved.id
+        let host = affected.pageURL!.host!
+        let keys = [SitePermission.downloads, .clipboard].map {
+            "webbyPermission.\(owner.uuidString).\(host.lowercased()).\($0.rawValue)"
+        }
+        defer {
+            keys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
+            permissionEditingHost = nil; permissionEditingProfile = nil
+            endSplit(); closeTab(id: affected.id); closeTab(id: unrelated.id)
+        }
+        _ = try await unrelatedView.evaluateJavaScript("document.getElementById('editor').value='unsaved permission regression';document.getElementById('editor').dispatchEvent(new Event('input',{bubbles:true}));true")
+        try expect(splitTabs(sourceID: unrelated.id, targetID: affected.id), "Permission split setup failed")
+        permissionEditingHost = host; permissionEditingProfile = owner
+        let picker = NSPopUpButton()
+        picker.addItems(withTitles: ["Ask", "Allow", "Block"])
+        picker.selectItem(at: 2)
+        picker.tag = SitePermission.allCases.firstIndex(of: .downloads)!
+        sitePermissionChanged(picker)
+        try expect(unrelated.webView === unrelatedView && affected.webView === affectedView && splitTabIDs?.count == 2,
+                   "Native permission change recreated a document or destroyed the split")
+        picker.tag = SitePermission.allCases.firstIndex(of: .clipboard)!
+        sitePermissionChanged(picker)
+        try expect(unrelated.webView === unrelatedView && affected.webView !== affectedView && splitTabIDs?.count == 2,
+                   "Scripted permission change reloaded an unrelated host or broke split reconstruction")
+        try await waitFor("Permission target did not reload") { affected.navigationTiming.finished != nil }
+        let unsaved = try await unrelatedView.evaluateJavaScript("document.getElementById('editor').value") as? String
+        try expect(unsaved == "unsaved permission regression", "Permission change destroyed another site's unsaved form")
+        let controller = unrelatedView.configuration.userContentController
+        let otherScripts = controller.userScripts.filter { !$0.source.hasPrefix("/* Webby site permissions */") }.map(\.source)
+        installSitePolicy(into: unrelatedView.configuration, profile: owner)
+        installSitePolicy(into: unrelatedView.configuration, profile: owner)
+        let policies = controller.userScripts.filter { $0.source.hasPrefix("/* Webby site permissions */") }
+        try expect(policies.count == 1 && policies[0].source.contains(host) && policies[0].source.contains("clipboard"),
+                   "Future navigation kept stale permissions or duplicate policy scripts")
+        try expect(controller.userScripts.filter { !$0.source.hasPrefix("/* Webby site permissions */") }.map(\.source) == otherScripts,
+                   "Updating permissions removed or reordered unrelated page scripts")
+        print("PASS: site permission changes preserve unrelated unsaved forms/splits, update future documents, and retain other scripts")
+    }
+
     private func verifyReliability(base: String, output: URL) async throws {
         window.makeKeyAndOrderFront(nil)
+        try await verifyPermissionIsolation(base: base)
         loadRules()
         try await waitFor("Local rule compilation failed", timeout: 15) { fastRule != nil }
         let page = try await loadFixture("/plain?recovery", base: base)

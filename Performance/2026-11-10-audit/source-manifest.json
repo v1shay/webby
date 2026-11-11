@@ -1,0 +1,38 @@
+{
+  "BrowserApp.swift": {
+    "beforeSHA256": "2a902bea92d9d2933450418c714cbc4fdebe1d9442a6421e9ae5525feb64448d",
+    "afterSHA256": "5f27a0075e330b785705ae2fce8cecdce4d08c405794f2de8f3b1a9f2a98eaec"
+  },
+  "BrowserDownloads.swift": {
+    "beforeSHA256": "e0e4623d3ad508ae94ded39289fcf84abc924a7eda0a914c0de88e11e9ef33cd",
+    "afterSHA256": "7f25db0998e014bce561464e3d8acee7ba0c850fc94cb3735339cbf8ecd97016"
+  },
+  "BrowserPerformance.swift": {
+    "beforeSHA256": "ff5d33710a547ee11f04b3658a108c01a273f0358628590433ed8798402a406f",
+    "afterSHA256": "9e2ea08279072763402b2086f12b5032ccc524879768fedb21a38155ab38b74a"
+  },
+  "BrowserSuggestions.swift": {
+    "beforeSHA256": "0732635292b63e16bb8438aa057ed11fee0636036d2740d92a31a01e90639594",
+    "afterSHA256": "46246baa380c0407507012ba78825cd684228a5592daf1e600e658e4cfd8eac1"
+  },
+  "BrowserTheme.swift": {
+    "beforeSHA256": "f056c3544c9eb3f93b8d213f3845eb533648ecca76e5efdd506f8c9fb28fe523",
+    "afterSHA256": "68e6b383256a6bd34952d7d5e35d2541eaf42913d50a87c37f1791cee331ae49"
+  },
+  "BrowserWallpaper.swift": {
+    "beforeSHA256": "bdea847b6ea109d35abbe754e689c5c558a3bdb60b467516b27153d62d8d2096",
+    "afterSHA256": "80de09d7b8047cbac44c6241ed41638e3210dccc0f55db421fcafe23b20825b1"
+  },
+  "ChromiumBridge.h": {
+    "beforeSHA256": "95a2ee13d1264b044575bf012a83b636aa5cd9dd5deafa75d32f15357c824c3d",
+    "afterSHA256": "a6f18ac77db5f646ebee414a1279340c11dd0c3c95d4fda65dc42125cc930aa8"
+  },
+  "ChromiumBridge.mm": {
+    "beforeSHA256": "ece18ae268abf1f02287d067ddcb0ba41f5d626abbca87234316abebb67ed247",
+    "afterSHA256": "cb9a9de8f917bc700308aa32d9d94518f2c94fbe3d078145a2bfcb9786ada80a"
+  },
+  "WidgetFeeds.swift": {
+    "beforeSHA256": "4d58489502f00c58be9a0ff87a9220ec6c471dd15a0eea84b5fbe6cfca017487",
+    "afterSHA256": "4fe3e686b25ed5d6b905a91ea9b486b60c6627e5eac88d356081e6e541759b82"
+  }
+}

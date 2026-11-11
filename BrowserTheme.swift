@@ -34,29 +34,47 @@ extension Notification.Name {
         return try? JSONDecoder().decode(GradientCatalog.self, from: data)
     }()
 
-    static var presets: [(id: String, name: String)] {
+    static let presets: [(id: String, name: String)] = {
         (catalog?.profileByPetID ?? [:]).map { id, profile in
             (id: id, name: profile.displayName ?? id)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }()
+
+    static func onboardingProfile(_ id: String, colors: [String]?) -> PetGradientProfile {
+        let base = catalog?.profileByPetID[id] ?? catalog?.profileByPetID["aqua-wisp"] ?? fallbackProfile
+        guard let colors, colors.count == 3 else { return base }
+        return customProfile(base: base, colors: colors)
     }
 
-    static var selectedID: String {
-        let saved = UserDefaults.standard.string(forKey: key("browserGradientProfile"))
+    static var selectedID: String { selectedID(for: activeSpaceID) }
+
+    private static func selectedID(for space: UUID?) -> String {
+        let saved = UserDefaults.standard.string(forKey: key("browserGradientProfile", space: space))
             ?? UserDefaults.standard.string(forKey: "browserGradientProfile") ?? "aqua-wisp"
         return saved == "custom" || presets.contains(where: { $0.id == saved }) ? saved : "aqua-wisp"
     }
 
-    static var petID: String {
-        if selectedID != "custom" { return selectedID }
-        let saved = UserDefaults.standard.string(forKey: key("browserCustomPetID")) ?? "aqua-wisp"
+    static var petID: String { petID(for: activeSpaceID) }
+
+    private static func petID(for space: UUID?) -> String {
+        let selected = selectedID(for: space)
+        if selected != "custom" { return selected }
+        let saved = UserDefaults.standard.string(forKey: key("browserCustomPetID", space: space)) ?? "aqua-wisp"
         return presets.contains(where: { $0.id == saved }) ? saved : "aqua-wisp"
     }
 
-    static var customPetURL: URL? {
-        guard selectedID == "custom",
-              let path = UserDefaults.standard.string(forKey: key("browserCustomIconPetURL")),
+    static var customPetURL: URL? { customPetURL(for: activeSpaceID) }
+
+    private static func customPetURL(for space: UUID?) -> URL? {
+        guard selectedID(for: space) == "custom",
+              let path = UserDefaults.standard.string(forKey: key("browserCustomIconPetURL", space: space)),
               FileManager.default.fileExists(atPath: path) else { return nil }
         return URL(fileURLWithPath: path)
+    }
+
+    static func onboardingAppearance(for space: UUID) -> (pet: String, colors: [String]?, petURL: URL?) {
+        let colors = selectedID(for: space) == "custom" ? customColorValues(for: space) : nil
+        return (petID(for: space), colors, customPetURL(for: space))
     }
 
     static func saveCustomPet(from source: URL) throws {
@@ -67,12 +85,16 @@ extension Notification.Name {
         let folder = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Webby/ProfilePets", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let target = folder.appendingPathComponent(space.uuidString + "." + source.pathExtension.lowercased())
-        if let old = UserDefaults.standard.string(forKey: key("browserCustomIconPetURL")) {
+        let old = UserDefaults.standard.string(forKey: key("browserCustomIconPetURL"))
+        if old == source.path { select("custom"); return }
+        let target = folder.appendingPathComponent(space.uuidString + "-" + UUID().uuidString)
+            .appendingPathExtension(source.pathExtension.lowercased())
+        let data = try Data(contentsOf: source, options: .mappedIfSafe)
+        try data.write(to: target, options: .atomic)
+        UserDefaults.standard.set(target.path, forKey: key("browserCustomIconPetURL"))
+        if let old, URL(fileURLWithPath: old).deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL {
             try? FileManager.default.removeItem(atPath: old)
         }
-        try FileManager.default.copyItem(at: source, to: target)
-        UserDefaults.standard.set(target.path, forKey: key("browserCustomIconPetURL"))
         select("custom")
     }
 
@@ -101,9 +123,7 @@ extension Notification.Name {
     }
 
     static func profile(for spaceID: UUID?) -> PetGradientProfile {
-        let saved = UserDefaults.standard.string(forKey: key("browserGradientProfile", space: spaceID))
-            ?? UserDefaults.standard.string(forKey: "browserGradientProfile") ?? "aqua-wisp"
-        let selected = saved == "custom" || presets.contains(where: { $0.id == saved }) ? saved : "aqua-wisp"
+        let selected = selectedID(for: spaceID)
         if selected == "custom", let custom = customProfile(for: spaceID) { return custom }
         return catalog?.profileByPetID[selected]
             ?? catalog?.profileByPetID["aqua-wisp"]
@@ -129,11 +149,13 @@ extension Notification.Name {
         select("custom")
     }
 
-    static var customColors: [NSColor] {
-        let values = UserDefaults.standard.stringArray(forKey: key("browserCustomGradientStops"))
-            ?? UserDefaults.standard.stringArray(forKey: "browserCustomGradientStops")
-            ?? ["#60DEE0", "#0690B3", "#DFF9F3"]
-        return values.map { color($0) }
+    static var customColors: [NSColor] { customColorValues(for: activeSpaceID).map { color($0) } }
+
+    private static func customColorValues(for space: UUID?) -> [String] {
+        let fallback = ["#60DEE0", "#0690B3", "#DFF9F3"]
+        let values = UserDefaults.standard.stringArray(forKey: key("browserCustomGradientStops", space: space))
+            ?? UserDefaults.standard.stringArray(forKey: "browserCustomGradientStops") ?? fallback
+        return values.count == 3 ? values : fallback
     }
 
     static func color(_ hex: String, alpha: CGFloat = 1) -> NSColor {
@@ -172,6 +194,10 @@ extension Notification.Name {
             ?? UserDefaults.standard.stringArray(forKey: "browserCustomGradientStops")
             ?? ["#60DEE0", "#0690B3", "#DFF9F3"]
         guard values.count == 3 else { return nil }
+        return customProfile(base: base, colors: values)
+    }
+
+    private static func customProfile(base: PetGradientProfile, colors values: [String]) -> PetGradientProfile {
         let stops = zip([0.0, 0.5, 1.0], values).map { GradientStop(location: $0.0, color: $0.1) }
         let ambient = GradientRecipe(angleDegrees: 35, cycleDurationMs: 2500, stops: stops)
         let working = GradientRecipe(angleDegrees: 0, cycleDurationMs: 1050, stops: stops)

@@ -41,12 +41,21 @@ extension CodeWorkbench {
         try await Task.sleep(nanoseconds: 2_000_000_000)
         _ = try await host.web.evaluateJavaScript("(()=>{const e=Array.from(document.querySelectorAll('.label-name')).find(e=>e.textContent==='Main.java'); if(e){e.dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));e.click();}return !!e})()")
         let diagnosticsDeadline = Date().addingTimeInterval(90)
+        let diagnostic = "Type mismatch: cannot convert from String to int"
+        let showProblems = """
+        (() => {
+          const panel = document.querySelector('.markers-panel');
+          if (!panel?.getClientRects().length) document.getElementById('status.problems')?.querySelector('a.statusbar-item-label')?.click();
+          return document.querySelector('.markers-panel')?.innerText ?? '';
+        })()
+        """
         var diagnosed = false
         while Date() < diagnosticsDeadline {
             _ = try? await host.web.evaluateJavaScript("Array.from(document.querySelectorAll('a,button')).find(e=>e.textContent.trim().startsWith('Yes, I trust the authors'))?.click();true")
             let text = (try? await host.web.evaluateJavaScript("document.body.innerText")) as? String ?? ""
             if text.contains("Language Support for Java") && text.contains("Reload") { print("JAVA reload requested",text.suffix(2000)) }
-            if (try? await host.web.evaluateJavaScript("document.querySelectorAll('.squiggly-error').length > 0")) as? Bool == true { diagnosed = true; break }
+            let problems = (try? await host.web.evaluateJavaScript(showProblems)) as? String ?? ""
+            if problems.contains("Main.java") && problems.contains(diagnostic) { diagnosed = true; break }
             try await Task.sleep(nanoseconds: 1_000_000_000)
         }
         print("JAVA diagnostics",diagnosed)
@@ -54,12 +63,19 @@ extension CodeWorkbench {
         try "public class Main {\n    public static void main(String[] args) {\n        int value = 9;\n        System.out.println(value);\n    }\n}\n".write(to: file, atomically: true, encoding: .utf8)
         var refreshed = false
         for _ in 0..<40 {
-            let text = (try? await host.web.evaluateJavaScript("document.body.innerText")) as? String ?? ""
-            let clear = (try? await host.web.evaluateJavaScript("document.querySelectorAll('.squiggly-error').length===0")) as? Bool == true
-            if !text.contains("bad") && clear { refreshed = true; break }
+            let problems = (try? await host.web.evaluateJavaScript(showProblems)) as? String ?? ""
+            let cleared = (try? await host.web.evaluateJavaScript(#"""
+            (() => {
+              const status = document.getElementById('status.problems')?.querySelector('a.statusbar-item-label');
+              const editor = document.querySelector('.monaco-editor .view-lines');
+              return status?.innerText.trim().split(/\s+/)[0] === '0' && /int\s+value\s*=\s*9/.test(editor?.innerText ?? '');
+            })()
+            """#)) as? Bool == true
+            if cleared && !problems.contains(diagnostic) { refreshed = true; break }
             try await Task.sleep(nanoseconds: 500_000_000)
         }
         guard refreshed else { throw Check(message: "Java diagnostics did not clear after fixing the file") }
+        _ = try await host.web.evaluateJavaScript("document.getElementById('status.problems')?.querySelector('a.statusbar-item-label')?.click();true")
         window.makeFirstResponder(host.web)
         _ = try await host.web.evaluateJavaScript("document.querySelector('.monaco-editor textarea')?.focus();true")
         func key(_ code:UInt16,_ character:UInt32,_ flags:NSEvent.ModifierFlags = []) {
@@ -96,7 +112,6 @@ extension CodeWorkbench {
             host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])?.write(to: screenshot)
         }
-        guard diagnosed else { throw Check(message: "Java error diagnostics did not appear") }
         guard host.web.configuration.websiteDataStore.isPersistent == false else { throw Check(message: "Workbench leaked into persistent browser store") }
         print("PASS: real authenticated VS Code workbench loaded in native WKWebView with isolated cookies")
     }

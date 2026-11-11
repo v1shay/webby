@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 private func codeBackground(_ bytes: UnsafeMutablePointer<UInt8>, _ width: UInt32, _ height: UInt32,
     _ effect: UInt32, _ fade: UInt32, _ start: Float, _ end: Float, _ soften: Bool, _ empty: Bool) -> Bool
 
-private struct WallpaperSettings: Codable {
+struct WallpaperSettings: Codable, Equatable {
     var path: String? = nil
     var kind = "image"
     var effect = 0
@@ -73,24 +73,47 @@ enum WallpaperSetStore {
         var archive=load(defaults)
         if let index=archive.sets.firstIndex(where:{$0.id==archive.active}) {archive.sets[index].profiles=capture(defaults);persist(archive,defaults)}
     }
-    static func duplicate(name:String,defaults:UserDefaults = .standard) {
+    static func duplicate(name:String,defaults:UserDefaults = .standard,id:UUID = UUID()) {
         _=load(defaults);update(defaults)
         var archive=load(defaults)
-        let copy=Set(id:UUID(),name:name,profiles:capture(defaults));archive.sets.append(copy);archive.active=copy.id;persist(archive,defaults)
+        guard !archive.sets.contains(where: { $0.id == id }) else { return }
+        let copy=Set(id:id,name:name,profiles:capture(defaults));archive.sets.append(copy);archive.active=copy.id;persist(archive,defaults)
     }
     static func select(_ id:UUID,defaults:UserDefaults = .standard) {
         var archive=load(defaults)
         guard id != archive.active,let target=archive.sets.first(where:{$0.id==id}) else{return}
         if let index=archive.sets.firstIndex(where:{$0.id==archive.active}) {archive.sets[index].profiles=capture(defaults)}
-        // A profile that was blank in the saved pair must become blank again,
-        // even if another pair subsequently gave it a wallpaper.
-        for id in Swift.Set(capture(defaults).keys).union(target.profiles.keys) {
-            let value=target.profiles[id] ?? Profile(settings:nil,fullWindow:false,tabBlurScope:1,tabBlurStrength:0.85)
-            if let data=value.settings {defaults.set(data,forKey:prefixes[0]+id)} else {defaults.removeObject(forKey:prefixes[0]+id)}
-            defaults.set(value.fullWindow,forKey:prefixes[1]+id);defaults.set(value.tabBlurScope,forKey:prefixes[2]+id);defaults.set(value.tabBlurStrength,forKey:prefixes[3]+id)
-        }
-        archive.active=id;persist(archive,defaults)
+        restore(target, defaults: defaults)
+        archive.active = id
+        persist(archive, defaults)
     }
+
+    @discardableResult
+    static func delete(_ id: UUID, defaults: UserDefaults = .standard) -> Bool {
+        var archive = load(defaults)
+        guard archive.sets.count > 1, let index = archive.sets.firstIndex(where: { $0.id == id }) else { return false }
+        archive.sets.remove(at: index)
+        if archive.active == id {
+            let replacement = archive.sets[index % archive.sets.count]
+            restore(replacement, defaults: defaults)
+            archive.active = replacement.id
+        }
+        persist(archive, defaults)
+        return true
+    }
+
+    private static func restore(_ target: Set, defaults: UserDefaults) {
+        // A profile that was blank in the saved pair must become blank again.
+        for id in Swift.Set(capture(defaults).keys).union(target.profiles.keys) {
+            let value = target.profiles[id] ?? Profile(settings: nil, fullWindow: false, tabBlurScope: 1, tabBlurStrength: 0.85)
+            if let data = value.settings { defaults.set(data, forKey: prefixes[0] + id) }
+            else { defaults.removeObject(forKey: prefixes[0] + id) }
+            defaults.set(value.fullWindow, forKey: prefixes[1] + id)
+            defaults.set(value.tabBlurScope, forKey: prefixes[2] + id)
+            defaults.set(value.tabBlurStrength, forKey: prefixes[3] + id)
+        }
+    }
+
     static func nextID(_ defaults:UserDefaults = .standard)->UUID? {
         let archive=load(defaults)
         guard archive.sets.count>1,let index=archive.sets.firstIndex(where:{$0.id==archive.active}) else{return nil}
@@ -134,8 +157,15 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
         }
     }
     private var resizeWakePending = false
+    private var terminating = false
     private var lastChromeColorUpdate:CFTimeInterval=0
     var fillsWindow:Bool {UserDefaults.standard.bool(forKey:"webbyWallpaperFullWindow.\(profile.uuidString)")}
+    // Let full-window artwork show through the address bar backdrop.
+    var addressBackdropOpacity: CGFloat {
+        guard fillsWindow, !isSuppressed, settings.path != nil else { return 1 }
+        return 1 - CGFloat(settings.pageOpacity)
+    }
+
     var tabBlurScope:Int {UserDefaults.standard.object(forKey:"webbyWallpaperTabBlurScope.\(profile.uuidString)")==nil ? 1:UserDefaults.standard.integer(forKey:"webbyWallpaperTabBlurScope.\(profile.uuidString)")}
     var tabBlurStrength:Double {UserDefaults.standard.object(forKey:"webbyWallpaperTabBlurStrength.\(profile.uuidString)") as? Double ?? 0.85}
     private var profile = UUID()
@@ -196,6 +226,15 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
     @objc private func motionPreferenceChanged() { refreshActivity() }
     func refreshActivity() { tick() }
 
+    func prepareForTermination() {
+        flushSetEdits()
+        terminating = true
+        generation += 1
+        updateTicker(0)
+        player?.pause()
+        html?.stopLoading()
+    }
+
     private func updateTicker(_ interval: Double) {
         guard tickInterval != interval else { return }
         timer?.invalidate();timer=nil;tickInterval=interval
@@ -236,6 +275,7 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
     }
     private func resetSource() {
         lastChromeColorUpdate=0
+        cachedDelay = 0
         generation += 1; dirty = true; gifIndex = 0; nextFrame = 0; cachedFrame = nil; decodedStatic = nil
         pendingArtworkTransition=true
         source = nil; sourcePath = nil
@@ -246,19 +286,81 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
         errorText?.stringValue = ""
         tick()
     }
+    nonisolated private static func renderWallpaper(_ image: CGImage, width: Int, height: Int,
+                                                     options: WallpaperSettings, home: Bool,
+                                                     context: CIContext, scale: CGFloat) -> CGImage? {
+        var bytes = [UInt8](repeating:0,count:width*height*4)
+        var result: CGImage?
+        do {
+            bytes.withUnsafeMutableBytes { raw in
+                guard let context = CGContext(data:raw.baseAddress,width:width,height:height,bitsPerComponent:8,bytesPerRow:width*4,
+                    space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+                context.interpolationQuality = .high
+                let sx=CGFloat(width)/CGFloat(image.width),sy=CGFloat(height)/CGFloat(image.height)
+                let factor = options.fit == 1 ? min(sx,sy) : max(sx,sy)
+                let rect = options.fit == 2 ? CGRect(x:0,y:0,width:width,height:height) : CGRect(x:(CGFloat(width)-CGFloat(image.width)*factor)/2,y:(CGFloat(height)-CGFloat(image.height)*factor)/2,width:CGFloat(image.width)*factor,height:CGFloat(image.height)*factor)
+                context.draw(image,in:rect)
+            }
+            // Core Graphics is premultiplied; Code operates on straight RGBA.
+            for i in stride(from:0,to:bytes.count,by:4) {
+                let alpha=Int(bytes[i+3]); if alpha > 0 && alpha < 255 {
+                    for c in 0..<3 {bytes[i+c]=UInt8(min(255,Int(bytes[i+c])*255/alpha))}
+                }
+            }
+            _ = bytes.withUnsafeMutableBufferPointer { codeBackground($0.baseAddress!,UInt32(width),UInt32(height),UInt32(options.effect),UInt32(options.fade),Float(options.start),Float(options.end),options.soften,home) }
+            for i in stride(from:0,to:bytes.count,by:4) {let a=Int(bytes[i+3]);for c in 0..<3 {bytes[i+c]=UInt8(Int(bytes[i+c])*a/255)}}
+            if let provider=CGDataProvider(data:Data(bytes) as CFData) {
+                result=CGImage(width:width,height:height,bitsPerComponent:8,bitsPerPixel:32,bytesPerRow:width*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo(rawValue:CGImageAlphaInfo.premultipliedLast.rawValue),provider:provider,decode:nil,shouldInterpolate:true,intent:.defaultIntent)
+                if options.blur > 0, let original=result {
+                    let input=CIImage(cgImage:original)
+                    let blurred=input.clampedToExtent().applyingFilter("CIGaussianBlur",parameters:[kCIInputRadiusKey:options.blur*Double(scale)])
+                    result=context.createCGImage(blurred,from:input.extent)
+                }
+            }
+        }
+        return result
+    }
+
+    nonisolated static func onboardingPreview(_ image: CGImage, settings: WallpaperSettings) -> CGImage? {
+        renderWallpaper(image, width: 576, height: 336, options: settings, home: true,
+                        context: CIContext(options: [.cacheIntermediates: false]), scale: 0.55)
+    }
+
+    nonisolated static func onboardingAtmosphere(_ colors: [String], width: Int, height: Int) -> CGImage? {
+        let rgb = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: rgb, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+            return nil
+        }
+        let stops = colors.map { hex -> CGColor in
+            let value = Int(hex.dropFirst(), radix: 16) ?? 0x60DEE0
+            return CGColor(red: Double(value >> 16 & 255) / 255, green: Double(value >> 8 & 255) / 255,
+                           blue: Double(value & 255) / 255, alpha: 1)
+        }
+        guard let gradient = CGGradient(colorsSpace: rgb, colors: stops as CFArray, locations: nil) else {
+            return nil
+        }
+        context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: width, y: height), options: [])
+        return context.makeImage()
+    }
+
     private func save() {
         if let data = try? JSONEncoder().encode(settings) { UserDefaults.standard.set(data, forKey: key);WallpaperSetStore.update() }
     }
     private func tick() {
+        guard !terminating else { return }
         let home = homepage?.isHidden == false
         let visibility = home ? settings.opacity : settings.pageOpacity
-        let visible = !isSuppressed && settings.path != nil && visibility > 0.001 && (!settings.homeOnly || home || fillsWindow) && window?.occlusionState.contains(.visible) == true
+        let visible = !isSuppressed && settings.path != nil && visibility > 0.001
+            && (!settings.homeOnly || home || fillsWindow) && window?.isVisible == true
+        let canAnimate = window?.occlusionState.contains(.visible) == true && settings.motion && Motion.enabled
         let animated = settings.kind != "image" || cachedDelay > 0
         isHidden = !visible
         alphaValue = visibility
         if visible != lastVisible {
             lastVisible = visible
             if !visible {
+                generation += 1
                 player?.pause(); html?.stopLoading(); html?.removeFromSuperview(); html = nil
             } else { dirty = true; nextFrame = 0 }
         }
@@ -267,12 +369,13 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
         // including paused HTML/video. Completed static artwork stays timer-free.
         guard !isResizing else { return }
         let preparing = dirty || busy
-        updateTicker(visible && (preparing || (animated && settings.motion && Motion.enabled)) ? 0.05 : 0)
+        updateTicker(visible && (preparing || (animated && canAnimate)) ? 0.05 : 0)
         guard visible, let path = settings.path, bounds.width > 1, bounds.height > 1 else { return }
         if settings.kind == "html" {
             showHTML(path)
             guard !busy, let html, !html.isLoading,
-                  dirty || (settings.motion && Motion.enabled && CACurrentMediaTime() >= nextFrame) else { return }
+                  CACurrentMediaTime() >= nextFrame,
+                  dirty || canAnimate else { return }
             busy = true
             let token = generation
             let configuration = WKSnapshotConfiguration(); configuration.snapshotWidth = NSNumber(value: min(640,bounds.width))
@@ -296,7 +399,13 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
         }
         if settings.kind == "video" {
             if player == nil { makeVideo(path) }
-            let moving = settings.motion && Motion.enabled
+            if player?.currentItem?.status == .failed {
+                dirty = false
+                updateTicker(0)
+                errorText?.stringValue = "We couldn’t decode this movie. Let’s choose another file."
+                return
+            }
+            let moving = canAnimate
             if moving && player?.rate == 0 { player?.play() }
             if !moving { player?.pause() }
             guard !busy, let output = videoOutput, let player else { return }
@@ -304,7 +413,7 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
             guard dirty || (moving && output.hasNewPixelBuffer(forItemTime: time)),
                   let pixel = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { return }
             render(path: path, pixel: pixel, home: home)
-        } else if !busy && (dirty || (settings.motion && Motion.enabled && CACurrentMediaTime() >= nextFrame && cachedDelay > 0)) {
+        } else if !busy && (dirty || (canAnimate && CACurrentMediaTime() >= nextFrame && cachedDelay > 0)) {
             render(path: path, pixel: nil, home: home)
         }
     }
@@ -370,34 +479,9 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
             let limit: CGFloat = animated ? 640 : 2048
             let scale = min(1,limit/max(size.width,size.height))
             let width = max(1,Int(size.width*scale)), height = max(1,Int(size.height*scale))
-            var bytes = [UInt8](repeating:0,count:width*height*4)
-            var result: CGImage?
-            if let image {
-                bytes.withUnsafeMutableBytes { raw in
-                    guard let context = CGContext(data:raw.baseAddress,width:width,height:height,bitsPerComponent:8,bytesPerRow:width*4,
-                        space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
-                    context.interpolationQuality = .high
-                    let sx=CGFloat(width)/CGFloat(image.width),sy=CGFloat(height)/CGFloat(image.height)
-                    let factor = options.fit == 1 ? min(sx,sy) : max(sx,sy)
-                    let rect = options.fit == 2 ? CGRect(x:0,y:0,width:width,height:height) : CGRect(x:(CGFloat(width)-CGFloat(image.width)*factor)/2,y:(CGFloat(height)-CGFloat(image.height)*factor)/2,width:CGFloat(image.width)*factor,height:CGFloat(image.height)*factor)
-                    context.draw(image,in:rect)
-                }
-                // Core Graphics is premultiplied; Code operates on straight RGBA.
-                for i in stride(from:0,to:bytes.count,by:4) {
-                    let alpha=Int(bytes[i+3]); if alpha > 0 && alpha < 255 {
-                        for c in 0..<3 {bytes[i+c]=UInt8(min(255,Int(bytes[i+c])*255/alpha))}
-                    }
-                }
-                _ = bytes.withUnsafeMutableBufferPointer { codeBackground($0.baseAddress!,UInt32(width),UInt32(height),UInt32(options.effect),UInt32(options.fade),Float(options.start),Float(options.end),options.soften,home) }
-                for i in stride(from:0,to:bytes.count,by:4) {let a=Int(bytes[i+3]);for c in 0..<3 {bytes[i+c]=UInt8(Int(bytes[i+c])*a/255)}}
-                if let provider=CGDataProvider(data:Data(bytes) as CFData) {
-                    result=CGImage(width:width,height:height,bitsPerComponent:8,bitsPerPixel:32,bytesPerRow:width*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo(rawValue:CGImageAlphaInfo.premultipliedLast.rawValue),provider:provider,decode:nil,shouldInterpolate:true,intent:.defaultIntent)
-                    if options.blur > 0, let original=result {
-                        let input=CIImage(cgImage:original)
-                        let blurred=input.clampedToExtent().applyingFilter("CIGaussianBlur",parameters:[kCIInputRadiusKey:options.blur*Double(scale)])
-                        result=context.createCGImage(blurred,from:input.extent)
-                    }
-                }
+            let result = image.flatMap {
+                Self.renderWallpaper($0, width: width, height: height, options: options,
+                                     home: home, context: context, scale: scale)
             }
             let output=result, source=src, frameCount=frames, frameDelay=delay
             let decodedImage = frames == 1 && !hasVideo && snapshot == nil ? image : nil
@@ -421,7 +505,8 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
                     if CACurrentMediaTime()-self.lastChromeColorUpdate>0.25 {self.lastChromeColorUpdate=CACurrentMediaTime();self.chromeColorChanged?()}
                 } else { self.errorText?.stringValue="We couldn’t decode this file. Let’s choose another image or movie." }
                 // Once a still image is decoded, its timer is unnecessary.
-                let moving = self.lastVisible && (self.settings.kind != "image" || frameDelay > 0) && self.settings.motion && Motion.enabled
+                let moving = self.lastVisible && self.window?.occlusionState.contains(.visible) == true
+                    && (self.settings.kind != "image" || frameDelay > 0) && self.settings.motion && Motion.enabled
                 self.updateTicker(moving ? 0.05 : 0)
             }
         }
@@ -459,10 +544,26 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
         let heading=NSTextField(labelWithString:"Your canvas, in motion.");heading.font = WebbyTypography.font(ofSize:24,weight:.semibold);stack.addArrangedSubview(heading)
         let subtitle=NSTextField(wrappingLabelWithString:"Code’s original effects, behind our widgets and search.");subtitle.textColor = .secondaryLabelColor;stack.addArrangedSubview(subtitle)
         let library=WallpaperSetStore.load()
-        let pairs=NSPopUpButton();pairs.target=self;pairs.action=#selector(selectWallpaperSet(_:))
-        for set in library.sets {pairs.addItem(withTitle:set.name);pairs.lastItem?.representedObject=set.id.uuidString;if set.id==library.active {pairs.select(pairs.lastItem)}}
+        let pairs = NSPopUpButton()
+        pairs.target = self
+        pairs.action = #selector(selectWallpaperSet(_:))
+        for (index, set) in library.sets.enumerated() {
+            let item = NSMenuItem(title: pairTitle(at: index, in: library), action: nil, keyEquivalent: "")
+            item.representedObject = set.id.uuidString
+            pairs.menu?.addItem(item)
+            if set.id == library.active { pairs.select(item) }
+        }
         let pairRow=NSStackView(views:[NSTextField(labelWithString:"Wallpaper pair"),pairs]);pairRow.spacing=12;stack.addArrangedSubview(pairRow)
-        let pairActions=NSStackView(views:[NSButton(title:"New pair…",target:self,action:#selector(newWallpaperSet)),NSButton(title:"Rename…",target:self,action:#selector(renameWallpaperSet))]);pairActions.spacing=8;stack.addArrangedSubview(pairActions)
+        let deletePair = NSButton(title: "Delete Pair…", target: self, action: #selector(deleteWallpaperSet))
+        deletePair.isEnabled = library.sets.count > 1
+        if !deletePair.isEnabled { deletePair.toolTip = "Keep at least one wallpaper pair." }
+        let pairActions = NSStackView(views: [
+            NSButton(title: "New pair…", target: self, action: #selector(newWallpaperSet)),
+            NSButton(title: "Rename…", target: self, action: #selector(renameWallpaperSet)),
+            deletePair
+        ])
+        pairActions.spacing = 8
+        stack.addArrangedSubview(pairActions)
         let pairHelp=NSTextField(wrappingLabelWithString:"A pair saves all profiles together, including their effects and tab glass. New pair starts as a copy; edits stay with the selected pair.");pairHelp.font=WebbyTypography.font(ofSize:11);pairHelp.textColor = .secondaryLabelColor;stack.addArrangedSubview(pairHelp)
         let choose=NSButton(title:"Choose image, GIF, movie or HTML…",target:self,action:#selector(chooseSource));choose.bezelStyle = .rounded;stack.addArrangedSubview(choose)
         let status=NSTextField(labelWithString:settings.path.map{URL(fileURLWithPath:$0).lastPathComponent} ?? "No background selected");status.lineBreakMode = .byTruncatingMiddle;stack.addArrangedSubview(status);statusText=status
@@ -537,6 +638,29 @@ private final class WallpaperDocument: NSView { override var isFlipped: Bool { t
         guard let current=archive.sets.first(where:{$0.id==archive.active}),let name=pairName("Rename this wallpaper pair",value:current.name) else{return}
         flushAllSetEdits();WallpaperSetStore.rename(name);showSelectedSet()
     }
+    private func pairTitle(at index: Int, in archive: WallpaperSetStore.Archive) -> String {
+        let name = archive.sets[index].name
+        let matches = archive.sets.indices.filter { archive.sets[$0].name == name }
+        guard matches.count > 1, let number = matches.firstIndex(of: index) else { return name }
+        return "\(name) (\(number + 1))"
+    }
+
+    @objc private func deleteWallpaperSet() {
+        let archive = WallpaperSetStore.load()
+        guard archive.sets.count > 1,
+              let index = archive.sets.firstIndex(where: { $0.id == archive.active }) else { return }
+        let current = archive.sets[index]
+        let next = (index + 1) % archive.sets.count
+        let alert = NSAlert()
+        alert.messageText = "Delete “\(pairTitle(at: index, in: archive))”?"
+        alert.informativeText = "Webby will switch to “\(pairTitle(at: next, in: archive))”. Your wallpaper files will be kept."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Delete Pair").hasDestructiveAction = true
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        flushAllSetEdits()
+        if WallpaperSetStore.delete(current.id) { showSelectedSet() }
+    }
+
     private func row(_ title:String,_ control:NSControl,_ key:String,_ stack:NSStackView) {
         let label=NSTextField(labelWithString:title);label.font = WebbyTypography.font(ofSize:12,weight:.medium);label.widthAnchor.constraint(equalToConstant:140).isActive=true
         let row=NSStackView(views:[label,control]);row.spacing=12;row.distribution = .fill;row.translatesAutoresizingMaskIntoConstraints=false

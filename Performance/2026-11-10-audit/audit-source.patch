@@ -1,0 +1,1012 @@
+--- before/BrowserApp.swift
++++ after/BrowserApp.swift
+@@ -3729,7 +3729,8 @@
+         let pages = spaces.flatMap { space in
+             space.tabs.compactMap { tab -> BrowserSessionRecord.Page? in
+                 guard !tab.isPrivate, !tab.isPinned, !tab.isTerminal, !tab.isInternalPage,
+-                      let url = tab.pageURL ?? tab.suspendedURL
++                      let url = tab.pendingSearchInput.flatMap({ destination(for: $0, profile: ownerSpace(for: tab).saved.id) })
++                        ?? tab.pageURL ?? tab.suspendedURL
+                         ?? (!tab.searchDraft.isEmpty
+                             ? destination(for: tab.searchDraft, profile: ownerSpace(for: tab).saved.id) : nil),
+                       ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+@@ -4781,7 +4782,9 @@
+         recentTabOrder.removeAll { $0 == tab.id }
+         recentTabOrder.insert(tab.id, at: 0)
+         tabPreview.hide()
++        if previousSelection != tab.id { activeTab?.chromiumView?.stopFinding() }
+         findBar?.isHidden = true
++        findStatus?.stringValue = ""
+         if !tab.isTerminal && (tab.suspendedURL != nil || tab.pinnedInstanceClosed) {
+             resumeTab(tab, show: true)
+         }
+@@ -4805,7 +4808,9 @@
+             previousTabID = previous.id
+             previous.lastActiveAt = Date()
+             captureTabPreview(previous)
+-            if !restoringVideoInline {
++            let remainsVisible = splitView?.isHidden == false
++                && splitTabIDs?.contains(previous.id) == true && splitTabIDs?.contains(tab.id) == true
++            if !restoringVideoInline && !remainsVisible {
+                 previous.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
+                     in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
+             }
+@@ -4844,7 +4849,7 @@
+         if let view = tab.webView { updateGlassTone(for: view) }
+         terminalMode = tab.isTerminal
+         positionSidebarToggle(forTerminal: terminalMode)
+-        hideToolbar(animated: false)
++        toolbarHideTimer?.invalidate(); toolbarHideTimer = nil
+         let showsSplit = splitTabIDs?.contains(tab.id) ?? false
+         splitView?.isHidden = !showsSplit
+         for item in tabs {
+@@ -6130,7 +6135,7 @@
+         refreshTabs()
+     }
+ 
+-    private func closeTab(id: UUID) {
++    private func closeTab(id: UUID, remember: Bool = true) {
+         if let row=tabRows[id],tab(id:id)?.isPinned != true {Motion.depart(row)}
+         if let row=horizontalRows[id],tab(id:id)?.isPinned != true {Motion.depart(row)}
+         chatGPTDrafts.removeValue(forKey:id)
+@@ -6169,7 +6174,7 @@
+             } else { refreshTabs() }
+             return
+         }
+-        if !closingTab.isPrivate && !closingTab.isInternalPage {
++        if remember && !closingTab.isPrivate && !closingTab.isInternalPage {
+             recentlyClosedTabs.append(ClosedTabRecord(
+                 title: closingTab.title,
+                 address: closingTab.pageURL?.absoluteString ?? destination(for: closingTab.searchDraft)?.absoluteString,
+@@ -6532,11 +6537,23 @@
+         wallpaper?.refreshActivity()
+     }
+ 
++    private func activateSplitPane(containing view: NSView) {
++        guard splitView?.isHidden == false, let ids = splitTabIDs else { return }
++        guard let selected = ids.compactMap({ tab(id: $0) }).first(where: {
++            guard let surface = $0.splitSurface else { return false }
++            return view === surface || view.isDescendant(of: surface)
++        }), selected.id != activeTabID else { return }
++        // Update browser commands before AppKit delivers the click to the pane.
++        // The event itself still reaches the page for selection and editing.
++        selectTab(selected)
++    }
++
+     private func installChromeMonitor() {
+         controlMotionMonitor=NSEvent.addLocalMonitorForEvents(matching:[.leftMouseDown,.leftMouseUp]){[weak self] event in
+             guard let self,let host=event.window,host === self.window || self.floatingWindows.values.contains(where:{$0 === host}) else{return event}
+             if event.type == .leftMouseUp {if let button=self.pressedMotionButton {Motion.basic(button.layer,key:"transform.scale",from:0.99,to:1,duration:0.12)};self.pressedMotionButton=nil;return event}
+             var hit=host.contentView?.hitTest(host.contentView?.convert(event.locationInWindow,from:nil) ?? .zero)
++            if host === self.window, let hit { self.activateSplitPane(containing: hit) }
+             self.commandLinkIntent=nil
+             if event.modifierFlags.contains(.command),!event.modifierFlags.contains(.option) {
+                 var node=hit
+@@ -6758,7 +6775,9 @@
+         }
+         guard let data = try? JSONSerialization.data(withJSONObject: blocked),
+               let json = String(data: data, encoding: .utf8) else { return }
++        let marker = "/* Webby site permissions */"
+         let source = """
++        \(marker)
+         (() => {
+           const blocked = (\(json)[location.hostname.toLowerCase()] || []);
+           if (blocked.includes('location') && navigator.geolocation) {
+@@ -6777,13 +6796,20 @@
+           }
+         })();
+         """
+-        configuration.userContentController.addUserScript(
++        let controller = configuration.userContentController
++        let retained = controller.userScripts.filter { !$0.source.hasPrefix(marker) }
++        controller.removeAllUserScripts()
++        retained.forEach(controller.addUserScript)
++        controller.addUserScript(
+             WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+     }
+ 
+     private func applyGlassTone(for tab: BrowserTab) {
+-        mainArea.appearance = NSAppearance(named: BrowserGlass.pageInjectionEnabled || tab.prefersDarkGlass ? .darkAqua : .aqua)
+-        if BrowserGlass.matchPageGlassSidebar { sidebarBackdrop.appearance = mainArea.appearance }
++        let tone: NSAppearance.Name = BrowserGlass.pageInjectionEnabled || tab.prefersDarkGlass ? .darkAqua : .aqua
++        if mainArea.appearance?.name != tone { mainArea.appearance = NSAppearance(named: tone) }
++        if BrowserGlass.matchPageGlassSidebar && sidebarBackdrop.appearance?.name != tone {
++            sidebarBackdrop.appearance = mainArea.appearance
++        }
+     }
+ 
+     private func updateGlassTone(for webView: WKWebView) {
+@@ -7153,7 +7179,14 @@
+         findField?.currentEditor()?.selectAll(nil)
+     }
+ 
+-    @objc private func hideFindBar() { if let findBar {Motion.depart(findBar,character:.panel)};findBar?.isHidden = true; window.makeFirstResponder(activeTab?.pageView) }
++    @objc private func hideFindBar() {
++        activeTab?.chromiumView?.stopFinding()
++        findStatus?.stringValue = ""
++        if let findBar { Motion.depart(findBar, character: .panel) }
++        findBar?.isHidden = true
++        if let page = activeTab?.chromiumView { page.focusPage() }
++        else { window.makeFirstResponder(activeTab?.pageView) }
++    }
+     @objc private func findNext() { if let ide = activeTab?.ide { ide.find(backwards: false); return }; findInPage(backwards: false) }
+     @objc private func findPrevious() { if let ide = activeTab?.ide { ide.find(backwards: true); return }; findInPage(backwards: true) }
+ 
+@@ -7211,24 +7244,44 @@
+     @objc private func sitePermissionChanged(_ sender: NSPopUpButton) {
+         guard let host = permissionEditingHost, let profile = permissionEditingProfile,
+               SitePermission.allCases.indices.contains(sender.tag) else { return }
+-        SitePermission.set(sender.indexOfSelectedItem, for: SitePermission.allCases[sender.tag],
+-                           host: host, profile: profile)
++        let kind = SitePermission.allCases[sender.tag]
++        SitePermission.set(sender.indexOfSelectedItem, for: kind, host: host, profile: profile)
++        // Native permissions are read when requested. Only the document-start
++        // location/notification/clipboard shims need a new document to take effect.
++        let scripted = [SitePermission.location, .notifications, .clipboard].contains(kind)
++        let pages = (spaces.flatMap(\.tabs) + Array(miniTabs.values)).filter {
++            ownerSpace(for: $0).saved.id == profile && $0.webView != nil
++        }
++        var updatedControllers = Set<ObjectIdentifier>()
++        for tab in pages {
++            guard let configuration = tab.webView?.configuration else { continue }
++            if updatedControllers.insert(ObjectIdentifier(configuration.userContentController)).inserted {
++                installSitePolicy(into: configuration, profile: profile)
++            }
++        }
++        guard scripted else { return }
++        let affected = pages.filter { $0.pageURL?.host?.lowercased() == host.lowercased() }
+         let splitIDs = splitTabIDs
+-        if splitIDs != nil { endSplit() }
+-        for tab in spaces.flatMap(\.tabs) where tab.ownerSpaceID == profile
+-            && tab.webView != nil && !tab.isFloating {
++        let rebuildSplit = affected.contains { splitIDs?.contains($0.id) == true }
++        if rebuildSplit { endSplit() }
++        for tab in affected {
+             guard let url = tab.pageURL else { continue }
+-            let selected = tab.id == activeTabID
++            let selected = tab.id == activeTabID || tab.isFloating
+             tab.suspendedURL = url
+             releaseWebView(for: tab)
+             resumeTab(tab, show: selected)
+-        }
+-        if let splitIDs, splitIDs.allSatisfy({ tab(id: $0)?.splitSurface != nil }) { renderSplit(splitIDs) }
++            if tab.isFloating { attachFloatingContent(for: tab) }
++        }
++        if rebuildSplit, let splitIDs, splitIDs.allSatisfy({ tab(id: $0)?.splitSurface != nil }) { renderSplit(splitIDs) }
+     }
+ 
+     private func findInPage(backwards: Bool) {
+-        if let page = activeTab?.chromiumView, let query = findField?.stringValue, !query.isEmpty {
+-            page.findText(query, backwards: backwards); findStatus?.stringValue = ""; return
++        if let page = activeTab?.chromiumView {
++            let query = findField?.stringValue ?? ""
++            findStatus?.stringValue = ""
++            if query.isEmpty { page.stopFinding() }
++            else { page.findText(query, backwards: backwards) }
++            return
+         }
+         guard let view = activeWebView, let query = findField?.stringValue, !query.isEmpty else {
+             findStatus?.stringValue = ""
+@@ -7237,8 +7290,10 @@
+         let options = WKFindConfiguration()
+         options.backwards = backwards
+         options.wraps = true
+-        view.find(query, configuration: options) { [weak self] result in
+-            self?.findStatus?.stringValue = result.matchFound ? "Found" : "No match"
++        view.find(query, configuration: options) { [weak self, weak view] result in
++            guard let self, let view, self.activeWebView === view,
++                  self.findBar?.isHidden == false, self.findField?.stringValue == query else { return }
++            self.findStatus?.stringValue = result.matchFound ? "Found" : "No match"
+         }
+     }
+ 
+@@ -8562,10 +8617,35 @@
+         homeSearchSurface?.onSwitchEngine = { [weak self] in self?.switchRenderingEngine() }
+     }
+ 
+-    @discardableResult private func openChromium(_ url: URL, in tab: BrowserTab, show: Bool) -> Bool {
+-        guard ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") else { return false }
++    private func prepareChromiumPopup(address: String, background: Bool, from source: BrowserTab) -> WBChromiumView? {
++        guard tab(id: source.id) === source,
++              source.chromiumView != nil else { return nil }
++        if let host = source.pageURL?.host,
++           SitePermission.choice(.popups, host: host, profile: ownerSpace(for: source).saved.id) == 2 { return nil }
++        let fresh = BrowserTab()
++        fresh.engine = .chromium
++        fresh.ownerSpaceID = ownerSpace(for: source).saved.id
++        fresh.inheritBrowsingMode(from: source)
++        displaySpace(for: source).tabs.append(fresh)
++        if BrowserExperiment.cyclesNewTabProfiles { fusedTabOrder.append(fresh.id) }
++        agentOwners[fresh.id] = agentOwners[source.id]
++        agentContexts[fresh.id] = agentContexts[source.id]
++        let show = !background && agentOwners[source.id] == nil
++            && tabs.contains(where: { $0.id == source.id })
++        let destination = URL(string: address.isEmpty ? "about:blank" : address) ?? URL(string: "about:blank")!
++        guard openChromium(destination, in: fresh, show: false, adoptingPopup: true), let page = fresh.chromiumView else {
++            closeTab(id: fresh.id, remember: false)
++            return nil
++        }
++        if show { selectTab(fresh) }
++        return page
++    }
++
++    @discardableResult private func openChromium(_ url: URL, in tab: BrowserTab, show: Bool, adoptingPopup: Bool = false) -> Bool {
++        guard adoptingPopup || ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") else { return false }
+         if let page = tab.chromiumView {
+             tab.loadError = nil; tab.navigationInProgress = true
++            tab.pendingSearchInput = url.absoluteString
+             page.navigate(url.absoluteString)
+             return true
+         }
+@@ -8578,6 +8658,10 @@
+         page.translatesAutoresizingMaskIntoConstraints = false
+         page.isHidden = !show
+         tab.chromiumView = page
++        page.popupHandler = { [weak self, weak tab, weak page] address, background in
++            guard let self, let tab, let page, tab.chromiumView === page else { return nil }
++            return self.prepareChromiumPopup(address: address, background: background, from: tab)
++        }
+         page.allowsDownload = { [weak self, weak tab] in
+             guard let self, let tab else { return false }
+             guard let host = tab.pageURL?.host else { return true }
+@@ -8606,6 +8690,11 @@
+                     if let url = tab.pageURL { self.rememberFavicon(image, for: tab, pageURL: url) }
+                 }
+                 self.refreshTabContent(tab)
++                return
++            case "find":
++                if tab.id == self.activeTabID, self.findBar?.isHidden == false {
++                    self.findStatus?.stringValue = value
++                }
+                 return
+             case "title": if !value.isEmpty { tab.title = value }
+             case "url": tab.searchDraft = value; self.scheduleSessionSave()
+@@ -8648,20 +8737,15 @@
+                 }
+                 return
+             case "error": tab.loadError = value; tab.navigationInProgress = false
+-            case "popup":
+-                if let host = tab.pageURL?.host,
+-                   SitePermission.choice(.popups, host: host, profile: self.ownerSpace(for: tab).saved.id) == 2 { return }
+-                guard let url = URL(string: value), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
+-                let fresh = BrowserTab(); fresh.engine = .chromium; fresh.ownerSpaceID = tab.ownerSpaceID
+-                fresh.inheritBrowsingMode(from: tab)
+-                self.displaySpace(for: tab).tabs.append(fresh)
+-                if BrowserExperiment.cyclesNewTabProfiles { self.fusedTabOrder.append(fresh.id) }
+-                self.agentOwners[fresh.id] = self.agentOwners[tab.id]
+-                self.agentContexts[fresh.id] = self.agentContexts[tab.id]
+-                if self.agentOwners[tab.id] == nil, self.tabs.contains(where: { $0.id == tab.id }) {
+-                    self.selectTab(fresh)
++            case "close", "popupAborted":
++                // CEF is still unwinding its lifecycle callback. Remove the tab
++                // on the next queue turn, retaining its original window proxy.
++                let remember = event != "popupAborted"
++                DispatchQueue.main.async { [weak self, weak tab, weak page] in
++                    guard let self, let tab, let page, self.tab(id: tab.id) === tab,
++                          tab.chromiumView === page else { return }
++                    self.closeTab(id: tab.id, remember: remember)
+                 }
+-                self.navigate(url.absoluteString, in: fresh)
+                 return
+             default: return
+             }
+@@ -8692,7 +8776,7 @@
+         let profile = chromiumRoot.appendingPathComponent(ownerSpace(for: tab).saved.id.uuidString, isDirectory: true)
+         let context = tab.privateSessionID.map { "private:" + $0.uuidString } ?? profile.path
+         page.setAudioMuted(tab.isMuted)
+-        guard page.openURL(url.absoluteString, profile: context) else {
++        guard adoptingPopup || page.openURL(url.absoluteString, profile: context) else {
+             page.closePage(); page.removeFromSuperview(); NSLayoutConstraint.deactivate(constraints)
+             tab.chromiumView = nil
+             return false
+@@ -8700,9 +8784,11 @@
+         // Keep the previous WebKit page until Chromium has actually been created.
+         releaseWebKit(for: tab)
+         tab.pageConstraints = constraints; tab.engine = .chromium
+-        tab.searchDraft = url.absoluteString; tab.title = url.host ?? url.absoluteString
++        tab.searchDraft = url.absoluteString
++        tab.title = url.absoluteString == "about:blank" ? "New Tab" : (url.host ?? url.absoluteString)
+         tab.hasUnsavedEdits = false; tab.captureMayBeActive = false
+         tab.showsSearchView = false; tab.navigationInProgress = true; tab.loadError = nil
++        tab.pendingSearchInput = url.absoluteString
+         tab.suspendedURL = nil
+         if tab.isFloating { attachFloatingContent(for: tab) }
+         else if show {
+@@ -8834,6 +8920,106 @@
+         try await waitForEngine("Password fixtures did not close") { !WBChromiumHasBrowsers() }
+         print("PASS: Chromium shares Webby's vault for automatic/manual fill; HTTPS, origin, and profile boundaries preserved; synthetic credentials only")
+     }
++    private func evaluateChromiumFixture(_ page: WBChromiumView, _ expression: String) async throws -> Any {
++        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Any, Error>) in
++            page.automation(method: "Runtime.evaluate", parameters: [
++                "expression": expression, "returnByValue": true, "awaitPromise": true, "userGesture": true
++            ]) { result, error in
++                if let error { continuation.resume(throwing: EngineUIFailure(message: error)); return }
++                if let details = result?["exceptionDetails"] {
++                    continuation.resume(throwing: EngineUIFailure(message: "Popup fixture failed: \(details)")); return
++                }
++                let value = (result?["result"] as? [String: Any])?["value"] ?? NSNull()
++                continuation.resume(returning: value)
++            }
++        }
++    }
++
++    private func verifyChromiumPopups(base: String) async throws {
++        addTab(select: true)
++        let source = activeTab!
++        source.engine = .chromium
++        navigate(base + "/popup-opener", in: source)
++        try await waitForEngine("Popup opener did not load") { !source.navigationInProgress }
++        let page = source.chromiumView!
++        let before = Set(tabs.map(\.id))
++        let opened = try await evaluateChromiumFixture(page, """
++        (() => {
++          window.webbyPopup = window.open('', 'webby-script-popup');
++          if (!webbyPopup) throw new Error('window.open returned null');
++          webbyPopup.document.open();
++          webbyPopup.document.write('<!doctype html><title>Adopted blank popup</title><p>Written through the window proxy</p>');
++          webbyPopup.document.close();
++          return webbyPopup.opener === window && webbyPopup.document.body.textContent.includes('Written through');
++        })()
++        """)
++        try engineCheck(opened as? Bool == true, "Blank popup lost opener identity or document.write")
++        try await waitForEngine("Adopted popup did not appear as a native tab") {
++            self.tabs.contains { !before.contains($0.id) && $0.title == "Adopted blank popup" }
++        }
++        let popup = tabs.first { !before.contains($0.id) }!
++        try engineCheck(popup.ownerSpaceID == source.ownerSpaceID && popup.chromiumView != nil,
++                        "Popup lost the opener profile or native page")
++        let reused = try await evaluateChromiumFixture(page, "window.open('', 'webby-script-popup') === window.webbyPopup")
++        try engineCheck(reused as? Bool == true && tabs.count == before.count + 1,
++                        "Named popup reuse created a second window proxy or native tab")
++        let pong = try await evaluateChromiumFixture(page, """
++        new Promise((resolve, reject) => {
++          const timeout = setTimeout(() => reject(new Error('postMessage timed out')), 2500);
++          const receive = event => {
++            if (event.source === webbyPopup && event.data === 'webby-pong') {
++              clearTimeout(timeout); removeEventListener('message', receive); resolve(true);
++            }
++          };
++          addEventListener('message', receive);
++          webbyPopup.eval("addEventListener('message', event => { if(event.data === 'webby-ping') event.source.postMessage('webby-pong', event.origin); })");
++          webbyPopup.postMessage('webby-ping', location.origin);
++        })
++        """)
++        try engineCheck(pong as? Bool == true, "Popup and opener could not exchange postMessage")
++        _ = try await evaluateChromiumFixture(page, "webbyPopup.close(); true")
++        try await waitForEngine("window.close left an orphan popup tab") { self.tab(id: popup.id) == nil }
++        let host = source.pageURL!.host!, profile = ownerSpace(for: source).saved.id
++        let key = "webbyPermission.\(profile.uuidString).\(host.lowercased()).popups"
++        let previous = UserDefaults.standard.object(forKey: key)
++        defer {
++            if let previous { UserDefaults.standard.set(previous, forKey: key) }
++            else { UserDefaults.standard.removeObject(forKey: key) }
++        }
++        SitePermission.set(2, for: .popups, host: host, profile: profile)
++        let blocked = try await evaluateChromiumFixture(page, "window.open('', 'webby-blocked-popup') === null")
++        try engineCheck(blocked as? Bool == true && tabs.count == before.count,
++                        "Blocked popup created a tab or exposed a live window proxy")
++        SitePermission.set(0, for: .popups, host: host, profile: profile)
++        closeTab(id: source.id)
++        newPrivateTab()
++        let privateSource = activeTab!
++        privateSource.engine = .chromium
++        navigate(base + "/private-popup-opener", in: privateSource)
++        try await waitForEngine("Private popup opener did not load") { !privateSource.navigationInProgress }
++        let privateIDs = Set(tabs.map(\.id))
++        _ = try await evaluateChromiumFixture(privateSource.chromiumView!, """
++        (() => {
++          localStorage.setItem('webbyPrivatePopup', 'private-only');
++          window.privatePopup = window.open('', 'webby-private-popup');
++          if (!privatePopup) throw new Error('Private popup was blocked');
++          privatePopup.document.title = 'Private adopted popup';
++          return true;
++        })()
++        """)
++        try await waitForEngine("Private popup was not adopted") {
++            self.tabs.contains { !privateIDs.contains($0.id) && $0.chromiumView?.pageTitle == "Private adopted popup" }
++        }
++        let privatePopup = tabs.first { !privateIDs.contains($0.id) }!
++        try engineCheck(privatePopup.privateSession === privateSource.privateSession && privatePopup.isPrivate,
++                        "Popup escaped its private browsing session")
++        let storage = try await evaluateChromiumFixture(privatePopup.chromiumView!, "localStorage.getItem('webbyPrivatePopup')")
++        try engineCheck(storage as? String == "private-only", "Private popup did not inherit the actual CEF session")
++        closeTab(id: privatePopup.id); closeTab(id: privateSource.id)
++        try await waitForEngine("Popup browsers did not finish closing") { !WBChromiumHasBrowsers() }
++        print("PASS: adopted Chromium popups preserve blank document.write, opener/window proxy, named reuse, postMessage, window.close, permissions, and private storage")
++    }
++
+     private func verifyPrivateBrowsingAndMute(base: String) async throws {
+         let original = activeTab!
+         for engine in [BrowserEngine.webKit, .chromium] {
+@@ -8971,6 +9157,21 @@
+             try engineCheck(chromium.pageView?.isHidden == false && empty.pageView?.isHidden == true && homeView.isHidden, "Mixed-engine selection failed")
+             try engineCheck(splitTabs(sourceID: empty.id, targetID: chromium.id), "Mixed-engine split failed")
+             try engineCheck(splitTabIDs?.count == 2, "Mixed-engine split did not contain both pages")
++            activateSplitPane(containing: empty.webView!)
++            try engineCheck(activeTabID == empty.id && splitTabIDs?.count == 2,
++                            "Clicking a WebKit split pane did not target browser commands to that pane")
++            activateSplitPane(containing: chromium.chromiumView!)
++            try engineCheck(activeTabID == chromium.id && splitTabIDs?.count == 2,
++                            "Clicking a Chromium split pane did not target browser commands to that pane")
++            showFindBar()
++            findField?.stringValue = "first"; findNext()
++            try await waitForEngine("Chromium find did not report a match") { self.findStatus?.stringValue == "Found" }
++            findField?.stringValue = "webby-no-matching-fixture-text"; findNext()
++            try await waitForEngine("Chromium find did not report no match") { self.findStatus?.stringValue == "No match" }
++            findField?.stringValue = ""; findNext()
++            try engineCheck(findStatus?.stringValue == "", "Clearing find left stale match status")
++            hideFindBar()
++            try engineCheck(findBar?.isHidden == true, "Closing find left its bar visible")
+             endSplit(); activeTabID = nil; selectTab(chromium)
+             // Exercise the real popover callbacks without any network beyond the fixture.
+             window.orderBack(nil)
+@@ -9037,6 +9238,7 @@
+             preferences["webbyEngineRules"] = Data("[]".utf8)
+             UserDefaults.standard.setVolatileDomain(preferences, forName: UserDefaults.argumentDomain)
+             print("PASS: engine rules route address entry and clicked links; exact URLs override site rules")
++            try await verifyChromiumPopups(base: base)
+             try await verifyPrivateBrowsingAndMute(base: base)
+             print("PASS: actual Webby UI paths: default inheritance, empty-tab switching, both engines, toolbar navigation, selection, split, confirmation/cancel, switching both ways, offload/resume, session engine, close.")
+             // Dispatch the real Quit command from inside CEF's event pump.
+@@ -10242,7 +10444,8 @@
+                         throw WebbyAutomationError.message("Downloads are blocked by this profile’s site permissions.")
+                     }
+                     if let page = tab.chromiumView {
+-                        let id = downloads.queueEngineDownload(url.lastPathComponent, isPrivate: tab.isPrivate)
++                        let id = downloads.queueEngineDownload(url.lastPathComponent, isPrivate: tab.isPrivate,
++                            onCancel: { [weak page] id in page?.cancelAutomationDownload(id.uuidString) })
+                         guard page.startAutomationDownload(url.absoluteString, identifier: id.uuidString) else {
+                             downloads.finishEngineDownload(id, status: "Could not start download")
+                             throw WebbyAutomationError.message("Chromium could not start the download.")
+--- before/BrowserDownloads.swift
++++ after/BrowserDownloads.swift
+@@ -133,6 +133,7 @@
+     private var retainedDownloads = [ObjectIdentifier: WKDownload]()
+     private var sessionDownloads = [UUID: (session: URLSession?, task: URLSessionDownloadTask?, index: Int)]()
+     private var engineDownloads: [UUID: Int] = [:]
++    private var engineCancellations: [UUID: (UUID) -> Void] = [:]
+     private let defaults: UserDefaults
+     private let destinations: DownloadDestinations
+     private let menu = NSMenu(title: "Downloads")
+@@ -221,8 +222,9 @@
+                 cleanRequest.setValue(nil, forHTTPHeaderField: "If-Range")
+                 cleanRequest.setValue(nil, forHTTPHeaderField: "If-None-Match")
+                 cleanRequest.setValue(nil, forHTTPHeaderField: "If-Modified-Since")
+-                let task = session.downloadTask(with: cleanRequest) { [weak self] temporary, response, error in
+-                    var result: Result<URL, Error>
++                let task = session.downloadTask(with: cleanRequest) { [weak self, weak session] temporary, response, error in
++                    session?.finishTasksAndInvalidate()
++                    let result: Result<URL, Error>
+                     if let error { result = .failure(error) }
+                     else if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                         result = .failure(NSError(domain:"WebbyDownload",code:http.statusCode,userInfo:[NSLocalizedDescriptionKey:"Server returned HTTP \(http.statusCode)"]))
+@@ -238,13 +240,24 @@
+                         }
+                     } else { result = .failure(NSError(domain:"WebbyDownload",code:0,userInfo:[NSLocalizedDescriptionKey:"No downloaded file was returned"])) }
+                     DispatchQueue.main.async { [weak self] in
+-                        guard let self, let transfer=self.sessionDownloads.removeValue(forKey:id), self.entries.indices.contains(transfer.index) else { return }
++                        guard let self else { return }
++                        guard let transfer=self.sessionDownloads.removeValue(forKey:id), self.entries.indices.contains(transfer.index) else {
++                            // Cancellation can win after the download callback has
++                            // moved its temporary file. Do not leave a completed
++                            // file behind for a transfer the user cancelled.
++                            if case .success(let url) = result {
++                                DispatchQueue.global(qos: .utility).async { try? FileManager.default.removeItem(at: url) }
++                            }
++                            return
++                        }
+                         transfer.session?.finishTasksAndInvalidate()
+                         self.entries[transfer.index].progress = nil
+                         switch result {
+-                        case .success(let url): self.entries[transfer.index].name=url.lastPathComponent;self.entries[transfer.index].url=url;self.entries[transfer.index].status="Finished";self.persistRecent()
++                        case .success(let url): self.entries[transfer.index].name=url.lastPathComponent;self.entries[transfer.index].url=url;self.entries[transfer.index].status="Finished"
+                         case .failure(let error): self.entries[transfer.index].status="Failed: \(error.localizedDescription)"
+                         }
++                        self.trimCompletedEntries()
++                        self.persistRecent()
+                     }
+                 }
+                 self.sessionDownloads[id] = (session,task,index)
+@@ -255,11 +268,12 @@
+         return entries[index].id
+     }
+ 
+-    func queueEngineDownload(_ name: String, isPrivate: Bool = false) -> UUID {
++    func queueEngineDownload(_ name: String, isPrivate: Bool = false, onCancel: ((UUID) -> Void)? = nil) -> UUID {
+         let index = entries.count
+         entries.append(Entry(name: Self.safeFilename(name), url: nil, progress: nil, status: "Downloading", isPrivate: isPrivate))
+         let id = entries[index].id
+         engineDownloads[id] = index
++        engineCancellations[id] = onCancel
+         button.animateIncomingFile()
+         return id
+     }
+@@ -286,9 +300,10 @@
+ 
+     func finishEngineDownload(_ id: UUID, status: String) {
+         guard let index = engineDownloads.removeValue(forKey: id) else { return }
++        engineCancellations.removeValue(forKey: id)
+         if let url = entries[index].url { destinations.release(url) }
+         entries[index].status = status
+-        if !hasActiveDownloads && entries.count > 30 { entries = Array(entries.suffix(30)) }
++        trimCompletedEntries()
+         persistRecent()
+     }
+ 
+@@ -335,7 +350,7 @@
+         entries[index].progress = nil
+         entries[index].status = status
+         // Indices remain stable while other downloads are in flight.
+-        if !hasActiveDownloads && entries.count > 30 { entries = Array(entries.suffix(30)) }
++        trimCompletedEntries()
+         persistRecent()
+     }
+ 
+@@ -353,6 +368,12 @@
+             transfer.session?.invalidateAndCancel()
+             entries[index].progress = nil
+             entries[index].status = "Cancelled"
++            trimCompletedEntries()
++            persistRecent()
++            return
++        }
++        if engineDownloads[entryID] != nil, let cancel = engineCancellations[entryID] {
++            cancel(entryID)
+             return
+         }
+         guard let id = active.first(where: { $0.value == index })?.key,
+@@ -361,6 +382,11 @@
+         download.delegate = nil
+         finish(download, status: "Cancelled")
+         download.cancel { _ in }
++    }
++
++    private func trimCompletedEntries() {
++        // Every transport shares these indices until the last transfer ends.
++        if !hasActiveDownloads && entries.count > 30 { entries = Array(entries.suffix(30)) }
+     }
+ 
+     private func persistRecent() {
+@@ -406,6 +432,7 @@
+             if entry.status == "Downloading" {
+                 let cancel = menu.addItem(withTitle: "Cancel \(entry.name)", action: #selector(cancelDownload(_:)), keyEquivalent: "")
+                 cancel.target = self; cancel.representedObject = entry.id
++                cancel.isEnabled = engineDownloads[entry.id] == nil || engineCancellations[entry.id] != nil
+             } else if entry.status != "Finished" {
+                 item.title += " — " + entry.status
+             }
+--- before/BrowserPerformance.swift
++++ after/BrowserPerformance.swift
+@@ -137,11 +137,12 @@
+ 
+ @MainActor enum BrowserChromeTone {
+     static let world=WKContentWorld.world(name:"WebbyChromeTone")
++    private static let source = Bundle.main.url(forResource: "ChromeTone", withExtension: "js")
++        .flatMap { try? String(contentsOf: $0) }
+     static func install(into configuration:WKWebViewConfiguration,handler:WKScriptMessageHandler) {
+         let marker="/* Webby top-edge color v1 */"
+         guard !configuration.userContentController.userScripts.contains(where:{$0.source.hasPrefix(marker)}),
+-              let url=Bundle.main.url(forResource:"ChromeTone",withExtension:"js"),
+-              let source=try? String(contentsOf:url) else {return}
++              let source else {return}
+         configuration.userContentController.add(handler,contentWorld:world,name:"browserChromeTone")
+         configuration.userContentController.addUserScript(WKUserScript(source:source,injectionTime:.atDocumentEnd,forMainFrameOnly:true,in:world))
+     }
+--- before/BrowserSuggestions.swift
++++ after/BrowserSuggestions.swift
+@@ -115,7 +115,9 @@
+                     guard bytes.range(of:needle) != nil else{return}
+                 } else if !record.titleKey.contains(query) && !record.urlKey.contains(query) {return}
+             }
+-            let identity=record.urlKey+(fuse ? "|"+source.id.uuidString:"")
++            // URL paths, queries and fragments can be case-sensitive. The lowercase
++            // key is for matching only; distinct destinations must stay selectable.
++            let identity=record.url+(fuse ? "|"+source.id.uuidString:"")
+             guard !seen.contains(identity) else{return}
+             let titlePrefix:Bool
+             if let bytes=record.asciiSearch,let needle=asciiQuery {titlePrefix=needle.count<=record.titleByteCount && bytes.starts(with:needle)}
+--- before/BrowserTheme.swift
++++ after/BrowserTheme.swift
+@@ -34,11 +34,11 @@
+         return try? JSONDecoder().decode(GradientCatalog.self, from: data)
+     }()
+ 
+-    static var presets: [(id: String, name: String)] {
++    static let presets: [(id: String, name: String)] = {
+         (catalog?.profileByPetID ?? [:]).map { id, profile in
+             (id: id, name: profile.displayName ?? id)
+         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+-    }
++    }()
+ 
+     static func onboardingProfile(_ id: String, colors: [String]?) -> PetGradientProfile {
+         let base = catalog?.profileByPetID[id] ?? catalog?.profileByPetID["aqua-wisp"] ?? fallbackProfile
+--- before/BrowserWallpaper.swift
++++ after/BrowserWallpaper.swift
+@@ -377,6 +377,12 @@
+         }
+         if settings.kind == "video" {
+             if player == nil { makeVideo(path) }
++            if player?.currentItem?.status == .failed {
++                dirty = false
++                updateTicker(0)
++                errorText?.stringValue = "We couldn’t decode this movie. Let’s choose another file."
++                return
++            }
+             let moving = settings.motion && Motion.enabled
+             if moving && player?.rate == 0 { player?.play() }
+             if !moving { player?.pause() }
+--- before/ChromiumBridge.h
++++ after/ChromiumBridge.h
+@@ -27,6 +27,9 @@
+ @property(nonatomic, readonly) BOOL hasActiveDownloads;
+ @property(nonatomic, copy, nullable) BOOL (^allowsDownload)(void);
+ @property(nonatomic, copy, nullable) BOOL (^routeLink)(NSString *address);
++// Return a newly configured empty native page; CEF supplies its browser and
++// preserves window.opener, named targets, and the original popup navigation.
++@property(nonatomic, copy, nullable) WBChromiumView * _Nullable (^popupHandler)(NSString *address, BOOL background);
+ - (BOOL)openURL:(NSString *)url profile:(NSString *)profile;
+ // A private profile uses a session identifier prefixed with "private:".
+ - (void)navigate:(NSString *)url;
+@@ -36,6 +39,7 @@
+ - (void)goForward;
+ - (void)reload;
+ - (void)findText:(NSString *)text backwards:(BOOL)backwards;
++- (void)stopFinding;
+ - (BOOL)runScript:(NSString *)script expectedOrigin:(NSString *)origin;
+ - (void)automationMethod:(NSString *)method parameters:(NSDictionary *)parameters
+               completion:(void (^)(NSDictionary * _Nullable result, NSString * _Nullable error))completion
+@@ -44,6 +48,7 @@
+ @property(nonatomic, copy, nullable) void (^automationDownloadFinished)(NSString *identifier, NSString *status);
+ - (BOOL)startAutomationDownload:(NSString *)address identifier:(NSString *)identifier
+     NS_SWIFT_NAME(startAutomationDownload(_:identifier:));
++- (void)cancelAutomationDownload:(NSString *)identifier NS_SWIFT_NAME(cancelAutomationDownload(_:));
+ - (void)focusPage;
+ - (void)closePage;
+ @end
+--- before/ChromiumBridge.mm
++++ after/ChromiumBridge.mm
+@@ -341,9 +341,16 @@
+     int _automationID;
+     NSMutableDictionary<NSString *, NSString *> *_requestedDownloads;
+     NSMutableDictionary<NSNumber *, NSString *> *_automationDownloads;
++    NSMutableSet<NSString *> *_canceledDownloadRequests;
++    std::map<int, cef_download_item_callback_t *> _downloadCallbacks;
++    std::set<int> _canceledDownloadItems;
+     NSMutableDictionary<NSNumber *, void (^)(NSDictionary *, NSString *)> *_automationReplies;
+-    NSString *_pageURL, *_pageTitle, *_pendingNavigation;
++    NSString *_pageURL, *_pageTitle, *_pendingNavigation, *_findQuery;
++    NSUInteger _navigationRequestGeneration;
+     BOOL _audioMuted;
++    NSMutableDictionary<NSNumber *, WBChromiumView *> *_pendingPopups;
++    __weak WBChromiumView *_popupOpener;
++    int _popupID;
+     NSUInteger _faviconGeneration;
+     BOOL _receivedFaviconCandidates;
+ }
+@@ -352,6 +359,7 @@
+ - (void)updateURL:(NSString *)url;
+ - (void)updateTitle:(NSString *)title;
+ - (void)updateActivity:(NSString *)state;
++- (void)updateFindCount:(int)count;
+ - (void)setCapturing;
+ - (void)setFullscreen:(BOOL)fullscreen;
+ - (void)resetFavicon;
+@@ -363,6 +371,13 @@
+ - (NSString *)takeRequestedDownload:(cef_download_item_t *)item;
+ - (void)registerAutomationDownload:(NSString *)identifier item:(int)itemID;
+ - (void)finishAutomationDownload:(int)item status:(NSString *)status;
++- (BOOL)consumeCanceledDownload:(NSString *)identifier;
++- (BOOL)hasAutomationDownload:(int)item;
++- (void)downloadCallback:(cef_download_item_callback_t *)callback item:(int)item active:(BOOL)active;
++- (BOOL)preparePopup:(WBChromiumView *)page identifier:(int)identifier address:(NSString *)address;
++- (void)popupCreated:(int)identifier;
++- (void)popupAborted:(int)identifier;
++- (void)abortPendingPopups;
+ 
+ @end
+ 
+@@ -379,16 +394,34 @@
+         };
+         // A tab must never send performClose: to Webby's containing NSWindow.
+         // Removing its native child view completes destruction on macOS.
+-        h->api.do_close = [](cef_life_span_handler_t *, cef_browser_t *b) -> int { Incoming incoming(b); return 1; };
+-        h->api.on_before_close = [](cef_life_span_handler_t *, cef_browser_t *b) {
++        h->api.do_close = [](cef_life_span_handler_t *s, cef_browser_t *b) -> int {
+             Incoming incoming(b);
++            WBChromiumView *page = owner(s);
++            [page emit:@"close" value:@""];
++            dispatch_async(dispatch_get_main_queue(), ^{ [page closePage]; });
++            return 1;
++        };
++        h->api.on_before_close = [](cef_life_span_handler_t *s, cef_browser_t *b) {
++            Incoming incoming(b);
++            [owner(s) abortPendingPopups];
+             auto it = browsers.find(b->get_identifier(b)); if (it != browsers.end()) { release(it->second); browsers.erase(it); }
+         };
+-        h->api.on_before_popup = [](cef_life_span_handler_t *s, cef_browser_t *b, cef_frame_t *f, int,
+-            const cef_string_t *url, const cef_string_t *, cef_window_open_disposition_t, int,
+-            const cef_popup_features_t *, cef_window_info_t *, cef_client_t **, cef_browser_settings_t *, cef_dictionary_value_t **, int *) -> int {
++        h->api.on_before_popup = [](cef_life_span_handler_t *s, cef_browser_t *b, cef_frame_t *f, int popupID,
++            const cef_string_t *url, const cef_string_t *, cef_window_open_disposition_t disposition, int,
++            const cef_popup_features_t *, cef_window_info_t *window, cef_client_t **client, cef_browser_settings_t *, cef_dictionary_value_t **, int *) -> int {
+             Incoming incomingBrowser(b); Incoming incomingFrame(f);
+-            [owner(s) emit:@"popup" value:string(url)]; return 1;
++            WBChromiumView *opener = owner(s);
++            if (!opener.popupHandler) { [opener emit:@"popup" value:string(url)]; return 1; }
++            WBChromiumView *page = opener.popupHandler(string(url), disposition == CEF_WOD_NEW_BACKGROUND_TAB);
++            if (![opener preparePopup:page identifier:popupID address:string(url)]) return 1;
++            window->parent_view = (__bridge void *)page;
++            window->bounds = {0, 0, MAX(1, (int)page.bounds.size.width), MAX(1, (int)page.bounds.size.height)};
++            window->runtime_style = CEF_RUNTIME_STYLE_ALLOY;
++            release(*client); *client = makeClient(page);
++            return 0;
++        };
++        h->api.on_before_popup_aborted = [](cef_life_span_handler_t *s, cef_browser_t *b, int popupID) {
++            Incoming incoming(b); [owner(s) popupAborted:popupID];
+         };
+         return &h->api;
+     };
+@@ -416,6 +449,16 @@
+         };
+         return &h->api;
+     };
++    client->api.get_find_handler = [](cef_client_t *s) {
++        auto *h = new Handler<cef_find_handler_t>(owner(s));
++        h->api.on_find_result = [](cef_find_handler_t *s, cef_browser_t *b, int, int count,
++                                  const cef_rect_t *, int, int finalUpdate) {
++            Incoming incoming(b);
++            WBChromiumView *page = owner(s);
++            if (finalUpdate) [page updateFindCount:count];
++        };
++        return &h->api;
++    };
+     client->api.get_load_handler = [](cef_client_t *s) {
+         auto *h = new Handler<cef_load_handler_t>(owner(s));
+         h->api.on_loading_state_change = [](cef_load_handler_t *s, cef_browser_t *b, int loading, int back, int forward) {
+@@ -424,7 +467,7 @@
+         };
+         h->api.on_load_start = [](cef_load_handler_t *s, cef_browser_t *b, cef_frame_t *f, cef_transition_type_t) {
+             Incoming incomingBrowser(b); Incoming incomingFrame(f);
+-            if (f->is_main(f)) [owner(s) resetFavicon];
++            if (f->is_main(f)) { [owner(s) resetFavicon]; [owner(s) stopFinding]; }
+             applySchoologyTheme(f);
+         };
+         h->api.on_load_end = [](cef_load_handler_t *s, cef_browser_t *b, cef_frame_t *f, int) {
+@@ -484,13 +527,16 @@
+             int itemID = item->get_id(item);
+             [page download:itemID active:YES];
+             NSString *identifier = [page takeRequestedDownload:item];
++            if ([page consumeCanceledDownload:identifier]) {
++                [page download:itemID active:NO]; return 1;
++            }
+             if (identifier && page.automationDownloadDestination) {
+                 [page registerAutomationDownload:identifier item:itemID];
+                 retain(callback);
+                 __weak WBChromiumView *weakPage = page;
+                 page.automationDownloadDestination(identifier, string(suggested), ^(NSString *path) {
+                     WBChromiumView *current = weakPage;
+-                    if (path && current) {
++                    if (path && [current hasAutomationDownload:itemID]) {
+                         Text destination(path);
+                         callback->cont(callback, &destination.value, 0);
+                     } else {
+@@ -508,6 +554,7 @@
+             WBChromiumView *page = owner(s);
+             const auto identifier = item->get_id(item);
+             BOOL active = item->is_in_progress(item);
++            [page downloadCallback:callback item:identifier active:active];
+             [page download:identifier active:active];
+             if (item->is_complete(item)) [page finishAutomationDownload:identifier status:@"Finished"];
+             else if (item->is_canceled(item)) [page finishAutomationDownload:identifier status:@"Canceled"];
+@@ -698,6 +745,7 @@
+ - (void)createdBrowser:(cef_browser_t *)browser {
+     if (getenv("WEBBY_ENGINE_DIAGNOSTICS")) fprintf(stderr, "CEF: browser created\n");
+     _creating = NO; _browser = retain(browser);
++    [_popupOpener popupCreated:_popupID]; _popupOpener = nil;
+     auto *host = _browser->get_host(_browser);
+     NSView *view = (__bridge NSView *)host->get_window_handle(host);
+     view.frame = self.bounds; view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+@@ -708,11 +756,46 @@
+     }
+     if (_pendingNavigation) {
+         NSString *url = _pendingNavigation; _pendingNavigation = nil;
++        const NSUInteger generation = _navigationRequestGeneration;
+         __weak WBChromiumView *weakSelf = self;
+-        dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf navigate:url]; });
++        dispatch_async(dispatch_get_main_queue(), ^{
++            WBChromiumView *page = weakSelf;
++            // CEF may report the original URL while opening. Only a newer
++            // explicit navigation request can supersede this queued one.
++            if (page && page->_navigationRequestGeneration == generation) [page navigate:url];
++        });
+     }
+     [self setAudioMuted:_audioMuted];
+     [self emit:@"created" value:@""];
++}
++- (BOOL)preparePopup:(WBChromiumView *)page identifier:(int)identifier address:(NSString *)address {
++    if (_closed || !page || page->_closed || page->_creating || page->_browser) return NO;
++    if (!_pendingPopups) _pendingPopups = [NSMutableDictionary new];
++    page->_creating = YES; page->_pageURL = address.length ? [address copy] : @"about:blank";
++    page->_popupOpener = self; page->_popupID = identifier;
++    _pendingPopups[@(identifier)] = page;
++    if (!pendingViews) pendingViews = [NSMutableSet new];
++    [pendingViews addObject:page];
++    // The native tab can release its opener before CEF OnBeforeClose. Keep
++    // the weak handler owner alive until every pending popup is resolved.
++    [pendingViews addObject:self];
++    return YES;
++}
++- (void)popupCreated:(int)identifier {
++    [_pendingPopups removeObjectForKey:@(identifier)];
++    if (!_pendingPopups.count) [pendingViews removeObject:self];
++}
++- (void)popupAborted:(int)identifier {
++    WBChromiumView *page = _pendingPopups[@(identifier)];
++    if (!page) return;
++    page->_creating = NO; page->_popupOpener = nil;
++    [page emit:@"popupAborted" value:@""];
++    [page closePage]; [pendingViews removeObject:page];
++    [_pendingPopups removeObjectForKey:@(identifier)];
++    if (!_pendingPopups.count) [pendingViews removeObject:self];
++}
++- (void)abortPendingPopups {
++    for (NSNumber *identifier in _pendingPopups.allKeys) [self popupAborted:identifier.intValue];
+ }
+ - (void)setAudioMuted:(BOOL)muted {
+     _audioMuted = muted;
+@@ -730,6 +813,7 @@
+ }
+ - (void)navigate:(NSString *)url {
+     if (_closed) return;
++    ++_navigationRequestGeneration;
+     _pageURL = [url copy];
+     if (!_browser) { _pendingNavigation = [url copy]; return; }
+     auto *f = _browser->get_main_frame(_browser);
+@@ -740,7 +824,20 @@
+ - (void)reload { if (_browser && !_closed) _browser->reload(_browser); }
+ - (void)findText:(NSString *)text backwards:(BOOL)backwards {
+     if (!_browser || _closed) return;
+-    auto *h = _browser->get_host(_browser); Text value(text); h->find(h, &value.value, !backwards, 0, 1); release(h);
++    if (!text.length) { [self stopFinding]; return; }
++    BOOL next = [_findQuery isEqualToString:text];
++    _findQuery = [text copy];
++    auto *h = _browser->get_host(_browser); Text value(text);
++    h->find(h, &value.value, !backwards, 0, next); release(h);
++}
++- (void)stopFinding {
++    _findQuery = nil;
++    if (!_browser || _closed) return;
++    auto *h = _browser->get_host(_browser); h->stop_finding(h, 1); release(h);
++    [self emit:@"find" value:@""];
++}
++- (void)updateFindCount:(int)count {
++    if (_findQuery.length) [self emit:@"find" value:count > 0 ? @"Found" : @"No match"];
+ }
+ - (BOOL)runScript:(NSString *)script expectedOrigin:(NSString *)origin {
+     if (!_browser || _closed || _loading) return NO;
+@@ -773,6 +870,40 @@
+     if (identifier) [_requestedDownloads removeObjectForKey:address];
+     return identifier;
+ }
++- (BOOL)hasAutomationDownload:(int)item { return !_closed && _automationDownloads[@(item)] != nil; }
++- (BOOL)consumeCanceledDownload:(NSString *)identifier {
++    if (!identifier || ![_canceledDownloadRequests containsObject:identifier]) return NO;
++    [_canceledDownloadRequests removeObject:identifier]; return YES;
++}
++- (void)downloadCallback:(cef_download_item_callback_t *)callback item:(int)item active:(BOOL)active {
++    auto found = _downloadCallbacks.find(item);
++    if (found != _downloadCallbacks.end()) { release(found->second); _downloadCallbacks.erase(found); }
++    if (_canceledDownloadItems.erase(item)) {
++        if (active && callback) callback->cancel(callback);
++        return;
++    }
++    if (active && callback) _downloadCallbacks[item] = retain(callback);
++}
++- (void)cancelAutomationDownload:(NSString *)identifier {
++    if (_closed) return;
++    for (NSString *address in _requestedDownloads.allKeys) {
++        if ([_requestedDownloads[address] isEqualToString:identifier]) {
++            if (!_canceledDownloadRequests) _canceledDownloadRequests = [NSMutableSet new];
++            [_canceledDownloadRequests addObject:identifier];
++            if (self.automationDownloadFinished) self.automationDownloadFinished(identifier, @"Canceled");
++            return;
++        }
++    }
++    for (NSNumber *item in _automationDownloads.allKeys) {
++        if (![_automationDownloads[item] isEqualToString:identifier]) continue;
++        auto found = _downloadCallbacks.find(item.intValue);
++        if (found != _downloadCallbacks.end()) found->second->cancel(found->second);
++        else _canceledDownloadItems.insert(item.intValue);
++        [self finishAutomationDownload:item.intValue status:@"Canceled"];
++        [self download:item.intValue active:NO];
++        return;
++    }
++}
+ - (void)registerAutomationDownload:(NSString *)identifier item:(int)itemID {
+     if (!_automationDownloads) _automationDownloads = [NSMutableDictionary new];
+     _automationDownloads[@(itemID)] = identifier;
+@@ -797,7 +928,8 @@
+         WBChromiumView *page = weakSelf;
+         if (!page || ![page->_requestedDownloads[address] isEqualToString:identifier]) return;
+         [page->_requestedDownloads removeObjectForKey:address];
+-        if (page.automationDownloadFinished) page.automationDownloadFinished(identifier, @"Download did not start");
++        if (![page consumeCanceledDownload:identifier] && page.automationDownloadFinished)
++            page.automationDownloadFinished(identifier, @"Download did not start");
+     });
+     return YES;
+ }
+@@ -845,12 +977,16 @@
+ }
+ - (void)closePage {
+     if (_closed) return;
+-    _closed = YES; self.eventHandler = nil;
++    _closed = YES; self.eventHandler = nil; self.popupHandler = nil;
+ 
+     if (self.automationDownloadFinished)
+         for (NSString *identifier in _requestedDownloads.allValues)
+-            self.automationDownloadFinished(identifier, @"Page closed");
++            if (![_canceledDownloadRequests containsObject:identifier])
++                self.automationDownloadFinished(identifier, @"Page closed");
+     [_requestedDownloads removeAllObjects];
++    [_canceledDownloadRequests removeAllObjects];
++    for (auto &entry : _downloadCallbacks) release(entry.second);
++    _downloadCallbacks.clear();
+     for (NSNumber *identifier in _automationDownloads.allKeys)
+         [self finishAutomationDownload:identifier.intValue status:@"Page closed"];
+     release(_automationObserver); _automationObserver = nullptr;
+--- before/WidgetFeeds.swift
++++ after/WidgetFeeds.swift
+@@ -80,11 +80,19 @@
+             URLQueryItem(name: "temperature_unit", value: "fahrenheit"),
+             URLQueryItem(name: "timezone", value: "auto")
+         ]
+-        let forecast = try await json(query.url!)
++        return try weather(place: place, forecast: await json(query.url!), fallbackCity: city)
++    }
++
++    // Provider JSON is untrusted; converting an out-of-range Double to Int traps.
++    private static func temperature(_ value: Double?) -> Int? {
++        guard let value, value.isFinite else { return nil }
++        return Int(exactly: value.rounded())
++    }
++
++    static func weather(place: [String: Any], forecast: [String: Any], fallbackCity city: String) throws -> WidgetFeed {
+         let current = forecast["current"] as? [String: Any] ?? [:]
+         let daily = forecast["daily"] as? [String: Any] ?? [:]
+-        let temperature = current["temperature_2m"] as? Double
+-        guard let currentTemperature=temperature,currentTemperature.isFinite else {throw WidgetFeedError.badResponse}
++        guard let currentTemperature = temperature(current["temperature_2m"] as? Double) else { throw WidgetFeedError.badResponse }
+         let humidity = current["relative_humidity_2m"] as? Int
+         let highs = daily["temperature_2m_max"] as? [Double] ?? []
+         let lows = daily["temperature_2m_min"] as? [Double] ?? []
+@@ -93,19 +101,21 @@
+         let times = hourly["time"] as? [String] ?? []
+         let temperatures = hourly["temperature_2m"] as? [Double] ?? []
+         let codes = hourly["weather_code"] as? [Int] ?? []
+-        let hours = (0..<min(5, times.count, temperatures.count, codes.count)).map { index in
++        let hours = (0..<min(5, times.count, temperatures.count, codes.count)).compactMap { index -> WeatherHour? in
++            guard let degrees = temperature(temperatures[index]) else { return nil }
+             let hour = Int(times[index].suffix(5).prefix(2)) ?? 0
+             let clock = hour == 0 ? "12a" : hour < 12 ? "\(hour)a" : hour == 12 ? "12p" : "\(hour - 12)p"
+             return WeatherHour(label: index == 0 ? "Now" : clock,
+-                               temperature: Int(temperatures[index].rounded()), code: codes[index])
++                               temperature: degrees, code: codes[index])
+         }
++        let high = temperature(highs.first), low = temperature(lows.first)
+         return WidgetFeed(subtitle: name,
+-                          lines: [temperature.map { "Now  \(Int($0.rounded()))°F" } ?? "Current temperature unavailable",
+-                                  highs.first.map { "Today  H: \(Int($0.rounded()))°  L: \(Int((lows.first ?? 0).rounded()))°" } ?? "",
++                          lines: ["Now  \(currentTemperature)°F",
++                                  high.flatMap { high in low.map { "Today  H: \(high)°  L: \($0)°" } } ?? "",
+                                   humidity.map { "Humidity  \($0)%" } ?? ""].filter { !$0.isEmpty },
+-                          weather: WeatherSnapshot(city: name, temperature: Int(currentTemperature.rounded()),
+-                                                   high: highs.first.map { Int($0.rounded()) },
+-                                                   low: lows.first.map { Int($0.rounded()) },
++                          weather: WeatherSnapshot(city: name, temperature: currentTemperature,
++                                                   high: high,
++                                                   low: low,
+                                                    humidity: humidity, code: current["weather_code"] as? Int ?? 0,
+                                                    isDay: (current["is_day"] as? Int ?? 1) == 1,
+                                                    hours: hours))

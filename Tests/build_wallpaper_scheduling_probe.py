@@ -51,6 +51,17 @@ extension BrowserWallpaperView {
         try await Task.sleep(nanoseconds:500_000_000)
         result["resizePreserved"]=cachedFrame?.width != oldSize
         precondition(cachedFrame?.width != oldSize,"Still wallpaper failed to resize")
+        let invalid=directory.appendingPathComponent("broken.mov")
+        try Data("not a movie".utf8).write(to:invalid)
+        settings.path=invalid.path;settings.kind="video";settings.motion=true;resetSource()
+        try await Task.sleep(nanoseconds:1_000_000_000)
+        precondition(player?.currentItem?.status == .failed,"Invalid video fixture must reach terminal failure")
+        start=probeTicks;try await Task.sleep(nanoseconds:1_000_000_000)
+        result["failedVideoTicksIn1Second"]=probeTicks-start
+        precondition(probeTicks == start,"Failed movie must not keep polling")
+        settings.path=png.path;settings.kind="image";resetSource()
+        try await Task.sleep(nanoseconds:500_000_000)
+        precondition(cachedFrame != nil,"Replacing a failed movie must recover")
         timer?.invalidate();host.orderOut(nil)
         result["optimization"]="-O"
         return result

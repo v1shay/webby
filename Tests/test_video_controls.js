@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../VideoControls.js'), 'utf8');
 class Node {
   constructor(tag='node') { this.tagName=tag.toUpperCase();this.children=[];this.events={};this.style={};this.dataset={};this.isConnected=true; }
+  remove() { if(this.parent) this.parent.children=this.parent.children.filter(child=>child!==this); }
   appendChild(child) {this.children.push(child);child.parent=this;}
   addEventListener(name,fn) {(this.events[name] ||= new Set()).add(fn);}
   removeEventListener(name,fn) {this.events[name]?.delete(fn);}
@@ -19,7 +20,7 @@ async function fixture(mode) {
   document.querySelectorAll=selector=>selector==='video' && mode!=='empty' ? [video] : [];
   const liveVideos=mode==='empty' ? []:[video];
   document.getElementsByTagName=tag=>tag==='video' ? liveVideos:[];
-  document.fullscreenEnabled=true; document.pictureInPictureEnabled=mode==='standard';
+  document.fullscreenEnabled=true; document.pictureInPictureEnabled=mode==='standard' || mode==='site-disabled';
   Object.assign(video,{paused:false,ended:false,readyState:4,videoWidth:640,videoHeight:360,
     volume:.37,muted:false,playbackRate:1.25,currentTime:123.4,webkitPresentationMode:'inline'});
   let enters=0,floatRequests=0,raf;
@@ -27,8 +28,9 @@ async function fixture(mode) {
     video.webkitSupportsPresentationMode=()=>true;
     video.webkitSetPresentationMode=value=>{enters++;video.webkitPresentationMode=value;video.fire('webkitpresentationmodechanged');};
   }
-  if(mode==='standard') video.requestPictureInPicture=()=>{enters++;document.pictureInPictureElement=video;video.fire('enterpictureinpicture');return Promise.resolve();};
-  document.exitPictureInPicture=()=>{document.pictureInPictureElement=null;return Promise.resolve();};
+  video.disablePictureInPicture=mode==='site-disabled';
+  if(mode==='standard' || mode==='site-disabled') video.requestPictureInPicture=()=>{if(video.disablePictureInPicture) throw new Error('disabled'); enters++;document.pictureInPictureElement=video;video.fire('enterpictureinpicture');return Promise.resolve();};
+  document.exitPictureInPicture=()=>{document.pictureInPictureElement=null;video.fire('leavepictureinpicture');return Promise.resolve();};
   video.requestFullscreen=()=>{document.fullscreenElement=video;document.fire('fullscreenchange');return Promise.resolve();};
   const context={document,innerWidth:1000,innerHeight:700,setTimeout,clearTimeout,
     requestAnimationFrame:fn=>{raf=fn;return 1;},ShadowRoot:class {},
@@ -52,12 +54,13 @@ async function fixture(mode) {
   else {assert.equal(enters,1);assert.equal(controls.style.display,'none');}
   context.window.__webbyReturnVideoInline();
   if(mode==='native') assert.equal(video.webkitPresentationMode,'inline','Native return did not reattach video');
-  if(mode==='standard') assert.equal(document.pictureInPictureElement,null,'Standard return did not reattach video');
+  if(mode==='standard' || mode==='site-disabled') assert.equal(document.pictureInPictureElement,null,'Standard return did not reattach video');
+  if(mode==='site-disabled') assert.equal(video.disablePictureInPicture,true,'The website hint was not restored');
   assert.deepEqual([video.volume,video.muted,video.playbackRate,video.currentTime],state,'Return changed playback state');
   await Promise.all(controls.children[1].fire('click',{preventDefault(){},stopPropagation(){}}));
   assert.equal(document.fullscreenElement,video,'Fullscreen used a different video');
   assert.deepEqual([video.volume,video.muted,video.playbackRate,video.currentTime],state);
 }
-(async()=>{for(const mode of ['native','standard','unsupported','empty']) await fixture(mode);
+(async()=>{for(const mode of ['native','standard','site-disabled','unsupported','empty']) await fixture(mode);
  console.log('PASS: native/standard PiP, true fullscreen, exact media state, truthful unsupported state, no floating fallback, no controls on non-video pages, idempotent installation');
 })().catch(error=>{console.error(error);process.exitCode=1;});

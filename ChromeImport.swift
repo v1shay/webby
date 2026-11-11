@@ -10,10 +10,11 @@ struct BrowserLink: Codable, Sendable {
 
 struct SavedBrowserSpace: Codable {
     let id: UUID
-    let name: String
+    var name: String
     let chromeDirectory: String?
     let bookmarks: [BrowserLink]
     let history: [BrowserLink]
+    var isolatesWebsiteData: Bool? = nil
 }
 
 @MainActor final class BrowserSpace {
@@ -33,7 +34,7 @@ struct SavedBrowserSpace: Codable {
         if visits.count > 10000 { visits.removeLast(visits.count - 10000) }
         saved = SavedBrowserSpace(id: saved.id, name: saved.name,
                                   chromeDirectory: saved.chromeDirectory,
-                                  bookmarks: saved.bookmarks, history: visits)
+                                  bookmarks: saved.bookmarks, history: visits, isolatesWebsiteData: saved.isolatesWebsiteData)
     }
 
     var dataStore: WKWebsiteDataStore {
@@ -41,7 +42,7 @@ struct SavedBrowserSpace: Codable {
             if let cachedDataStore { return cachedDataStore }
             let store = WKWebsiteDataStore.nonPersistent(); cachedDataStore = store; return store
         }
-        guard saved.chromeDirectory != nil else { return .default() }
+        guard saved.chromeDirectory != nil || saved.isolatesWebsiteData == true else { return .default() }
         if let cachedDataStore { return cachedDataStore }
         let store: WKWebsiteDataStore
         if #available(macOS 14, *) { store = WKWebsiteDataStore(forIdentifier: saved.id) }
@@ -93,7 +94,7 @@ enum BrowserSpaceStore {
 
 }
 
-struct ChromeProfileSource {
+struct ChromeProfileSource: Sendable {
     let directory: String
     let name: String
     let url: URL
@@ -105,15 +106,17 @@ enum ChromeProfileImporter {
             .appendingPathComponent("Library/Application Support/Google/Chrome", isDirectory: true)
     }
 
-    static func availableProfiles() -> [ChromeProfileSource] {
-        let stateURL = chromeRoot.appendingPathComponent("Local State")
+    static func availableProfiles(in root: URL = chromeRoot) -> [ChromeProfileSource] {
+        let stateURL = root.appendingPathComponent("Local State")
         guard let data = try? Data(contentsOf: stateURL),
               let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let profile = state["profile"] as? [String: Any],
               let cache = profile["info_cache"] as? [String: [String: Any]] else { return [] }
         return cache.compactMap { directory, info in
-            let folder = chromeRoot.appendingPathComponent(directory, isDirectory: true)
-            guard FileManager.default.fileExists(atPath: folder.path) else { return nil }
+            guard directory != ".", directory != "..", !directory.contains("/") else { return nil }
+            let folder = root.appendingPathComponent(directory, isDirectory: true)
+            guard folder.resolvingSymlinksInPath().deletingLastPathComponent() == root.resolvingSymlinksInPath(),
+                  FileManager.default.fileExists(atPath: folder.path) else { return nil }
             return ChromeProfileSource(directory: directory,
                                        name: info["name"] as? String ?? directory, url: folder)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -126,9 +129,15 @@ enum ChromeProfileImporter {
     }
 
     private static func readBookmarks(_ file: URL) -> [BrowserLink] {
-        guard let data = try? Data(contentsOf: file),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let roots = json["roots"] as? [String: Any] else { return [] }
+        (try? checkedBookmarks(file)) ?? []
+    }
+
+    static func checkedBookmarks(_ file: URL) throws -> [BrowserLink] {
+        let data: Data
+        do { data = try Data(contentsOf: file) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return [] }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let roots = json["roots"] as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
         var links: [BrowserLink] = []
         func visit(_ node: [String: Any]) {
             if let type = node["type"] as? String, type == "url",
@@ -146,13 +155,18 @@ enum ChromeProfileImporter {
     }
 
     private static func readHistory(_ file: URL) -> [BrowserLink] {
+        (try? checkedHistory(file)) ?? []
+    }
+
+    static func checkedHistory(_ file: URL) throws -> [BrowserLink] {
         if let links = queryHistory(file) { return links }
         let temporary = FileManager.default.temporaryDirectory
             .appendingPathComponent("ChromeHistory-\(UUID())", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: temporary) }
-        guard (try? FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)) != nil else { return [] }
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         let snapshot = temporary.appendingPathComponent("History")
-        guard (try? FileManager.default.copyItem(at: file, to: snapshot)) != nil else { return [] }
+        do { try FileManager.default.copyItem(at: file, to: snapshot) }
+        catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile { return [] }
         for suffix in ["-wal", "-shm"] {
             let sidecar = URL(fileURLWithPath: file.path + suffix)
             if FileManager.default.fileExists(atPath: sidecar.path) {
@@ -160,7 +174,8 @@ enum ChromeProfileImporter {
                                                   to: URL(fileURLWithPath: snapshot.path + suffix))
             }
         }
-        return queryHistory(snapshot) ?? []
+        guard let links = queryHistory(snapshot) else { throw CocoaError(.fileReadCorruptFile) }
+        return links
     }
 
     private static func queryHistory(_ file: URL) -> [BrowserLink]? {

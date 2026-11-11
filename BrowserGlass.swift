@@ -68,6 +68,25 @@ extension Notification.Name {
     static var backgroundTransparency: Double {
         min(1, max(0, UserDefaults.standard.double(forKey: backgroundKey)))
     }
+    static func onboardingSettings(for profile: UUID) -> OnboardingGlassSettings {
+        .init(background: backgroundTransparency, toolbar: topTransparency, sidebar: sidebarTransparency,
+              widgets: widgetOpacity(profile: profile), pages: pageInjectionEnabled)
+    }
+
+    static func applyOnboarding(_ settings: OnboardingGlassSettings, changedFrom previous: OnboardingGlassSettings,
+                                profile: UUID) {
+        let defaults = UserDefaults.standard
+        if settings.background != previous.background { defaults.set(min(1, max(0, settings.background)), forKey: backgroundKey) }
+        if settings.toolbar != previous.toolbar { defaults.set(min(0.85, max(0, settings.toolbar)), forKey: topKey) }
+        if settings.sidebar != previous.sidebar { defaults.set(min(0.85, max(0, settings.sidebar)), forKey: sidebarKey) }
+        if settings.pages != previous.pages { defaults.set(settings.pages, forKey: pageInjectionKey) }
+        if settings.background != previous.background || settings.toolbar != previous.toolbar ||
+            settings.sidebar != previous.sidebar || settings.pages != previous.pages {
+            NotificationCenter.default.post(name: .browserGlassChanged, object: nil)
+        }
+        if settings.widgets != previous.widgets { setWidgetOpacity(settings.widgets, profile: profile) }
+    }
+
     static func setBackground(_ value: Double) {
         UserDefaults.standard.set(min(1, max(0, value)), forKey: backgroundKey)
         NotificationCenter.default.post(name: .browserGlassChanged, object: nil)

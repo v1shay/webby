@@ -1,0 +1,10 @@
+{
+  "failedVideoTicksIn1Second" : 0,
+  "hiddenWallpaperTicksIn2Seconds" : 1,
+  "optimization" : "-O",
+  "pausedGIFTicksIn1Second" : 0,
+  "resizePreserved" : true,
+  "resumedGIF" : true,
+  "visibleGIFTimerTicksIn1Second" : 21,
+  "visibleStillTicksIn2Seconds" : 0
+}

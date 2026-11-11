@@ -124,6 +124,7 @@ private final class DownloadDestinations {
         var url: URL?
         var progress: Progress?
         var status: String
+        var isPrivate = false
     }
 
     let button = DownloadFolderButton(frame: .zero)
@@ -131,10 +132,12 @@ private final class DownloadDestinations {
     private var active = [ObjectIdentifier: Int]()
     private var retainedDownloads = [ObjectIdentifier: WKDownload]()
     private var sessionDownloads = [UUID: (session: URLSession?, task: URLSessionDownloadTask?, index: Int)]()
+    private var engineDownloads: [UUID: Int] = [:]
+    private var engineCancellations: [UUID: (UUID) -> Void] = [:]
     private let defaults: UserDefaults
     private let destinations: DownloadDestinations
     private let menu = NSMenu(title: "Downloads")
-    var hasActiveDownloads: Bool { !active.isEmpty || !sessionDownloads.isEmpty }
+    var hasActiveDownloads: Bool { !active.isEmpty || !sessionDownloads.isEmpty || !engineDownloads.isEmpty }
 
     convenience init(directory: URL) { self.init(destinationFolder: directory) }
 
@@ -154,6 +157,14 @@ private final class DownloadDestinations {
 
     func applyTheme(_ profile: PetGradientProfile) { button.applyTheme(profile) }
 
+    var automationEntries: [[String: Any]] {
+        entries.suffix(30).reversed().map {
+            ["id": $0.id.uuidString, "name": $0.name, "status": $0.status,
+             "path": $0.url?.path as Any? ?? NSNull(),
+             "fraction": $0.progress?.fractionCompleted as Any? ?? NSNull()]
+        }
+    }
+
     var widgetLines: [String] {
         entries.suffix(5).reversed().map { entry in
             let progress = entry.progress?.fractionCompleted ?? 0
@@ -164,13 +175,13 @@ private final class DownloadDestinations {
         }
     }
 
-    func attach(_ download: WKDownload) {
+    func attach(_ download: WKDownload, isPrivate: Bool = false) {
         let id = ObjectIdentifier(download)
         guard active[id] == nil else { return }
         retainedDownloads[id] = download
         download.delegate = self
         let index = entries.count
-        entries.append(Entry(name: "Downloading…", url: nil, progress: download.progress, status: "Downloading"))
+        entries.append(Entry(name: "Downloading…", url: nil, progress: download.progress, status: "Downloading", isPrivate: isPrivate))
         active[id] = index
         button.animateIncomingFile()
     }
@@ -178,9 +189,9 @@ private final class DownloadDestinations {
     /// Re-fetch safe GET downloads through URLSession. WKDownload's destination
     /// handoff can block WebKit's main thread in the macOS sandbox service.
     /// Cookie storage is private to this transfer and retains domain scoping.
-    func startGET(_ request: URLRequest, from store: WKHTTPCookieStore, sourceURL: URL?, suggestedFilename: String?, expectedMIMEType: String? = nil) {
+    @discardableResult func startGET(_ request: URLRequest, from store: WKHTTPCookieStore, sourceURL: URL?, suggestedFilename: String?, expectedMIMEType: String? = nil, isPrivate: Bool = false) -> UUID {
         let id = UUID(), index = entries.count
-        entries.append(Entry(name: suggestedFilename ?? request.url?.lastPathComponent ?? "Downloading…", url: nil, progress: nil, status: "Downloading"))
+        entries.append(Entry(name: suggestedFilename ?? request.url?.lastPathComponent ?? "Downloading…", url: nil, progress: nil, status: "Downloading", isPrivate: isPrivate))
         sessionDownloads[id] = (nil, nil, index)
         button.animateIncomingFile()
         let allocator = destinations
@@ -211,8 +222,9 @@ private final class DownloadDestinations {
                 cleanRequest.setValue(nil, forHTTPHeaderField: "If-Range")
                 cleanRequest.setValue(nil, forHTTPHeaderField: "If-None-Match")
                 cleanRequest.setValue(nil, forHTTPHeaderField: "If-Modified-Since")
-                let task = session.downloadTask(with: cleanRequest) { [weak self] temporary, response, error in
-                    var result: Result<URL, Error>
+                let task = session.downloadTask(with: cleanRequest) { [weak self, weak session] temporary, response, error in
+                    session?.finishTasksAndInvalidate()
+                    let result: Result<URL, Error>
                     if let error { result = .failure(error) }
                     else if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                         result = .failure(NSError(domain:"WebbyDownload",code:http.statusCode,userInfo:[NSLocalizedDescriptionKey:"Server returned HTTP \(http.statusCode)"]))
@@ -228,13 +240,24 @@ private final class DownloadDestinations {
                         }
                     } else { result = .failure(NSError(domain:"WebbyDownload",code:0,userInfo:[NSLocalizedDescriptionKey:"No downloaded file was returned"])) }
                     DispatchQueue.main.async { [weak self] in
-                        guard let self, let transfer=self.sessionDownloads.removeValue(forKey:id), self.entries.indices.contains(transfer.index) else { return }
+                        guard let self else { return }
+                        guard let transfer=self.sessionDownloads.removeValue(forKey:id), self.entries.indices.contains(transfer.index) else {
+                            // Cancellation can win after the download callback has
+                            // moved its temporary file. Do not leave a completed
+                            // file behind for a transfer the user cancelled.
+                            if case .success(let url) = result {
+                                DispatchQueue.global(qos: .utility).async { try? FileManager.default.removeItem(at: url) }
+                            }
+                            return
+                        }
                         transfer.session?.finishTasksAndInvalidate()
                         self.entries[transfer.index].progress = nil
                         switch result {
-                        case .success(let url): self.entries[transfer.index].name=url.lastPathComponent;self.entries[transfer.index].url=url;self.entries[transfer.index].status="Finished";self.persistRecent()
+                        case .success(let url): self.entries[transfer.index].name=url.lastPathComponent;self.entries[transfer.index].url=url;self.entries[transfer.index].status="Finished"
                         case .failure(let error): self.entries[transfer.index].status="Failed: \(error.localizedDescription)"
                         }
+                        self.trimCompletedEntries()
+                        self.persistRecent()
                     }
                 }
                 self.sessionDownloads[id] = (session,task,index)
@@ -242,6 +265,46 @@ private final class DownloadDestinations {
                 task.resume()
             }
         }
+        return entries[index].id
+    }
+
+    func queueEngineDownload(_ name: String, isPrivate: Bool = false, onCancel: ((UUID) -> Void)? = nil) -> UUID {
+        let index = entries.count
+        entries.append(Entry(name: Self.safeFilename(name), url: nil, progress: nil, status: "Downloading", isPrivate: isPrivate))
+        let id = entries[index].id
+        engineDownloads[id] = index
+        engineCancellations[id] = onCancel
+        button.animateIncomingFile()
+        return id
+    }
+
+    func prepareEngineDownload(_ id: UUID, name: String, completion: @escaping (URL?) -> Void) {
+        guard engineDownloads[id] != nil else { completion(nil); return }
+        let allocator = destinations
+        allocator.reserve(Self.safeFilename(name)) { [weak self] result in
+            guard let self, let index = self.engineDownloads[id] else {
+                if case .success(let url) = result { allocator.release(url) }
+                completion(nil); return
+            }
+            switch result {
+            case .success(let url):
+                self.entries[index].url = url
+                self.entries[index].name = url.lastPathComponent
+                completion(url)
+            case .failure(let error):
+                self.finishEngineDownload(id, status: "Failed: \(error.localizedDescription)")
+                completion(nil)
+            }
+        }
+    }
+
+    func finishEngineDownload(_ id: UUID, status: String) {
+        guard let index = engineDownloads.removeValue(forKey: id) else { return }
+        engineCancellations.removeValue(forKey: id)
+        if let url = entries[index].url { destinations.release(url) }
+        entries[index].status = status
+        trimCompletedEntries()
+        persistRecent()
     }
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
@@ -287,7 +350,7 @@ private final class DownloadDestinations {
         entries[index].progress = nil
         entries[index].status = status
         // Indices remain stable while other downloads are in flight.
-        if !hasActiveDownloads && entries.count > 30 { entries = Array(entries.suffix(30)) }
+        trimCompletedEntries()
         persistRecent()
     }
 
@@ -305,6 +368,12 @@ private final class DownloadDestinations {
             transfer.session?.invalidateAndCancel()
             entries[index].progress = nil
             entries[index].status = "Cancelled"
+            trimCompletedEntries()
+            persistRecent()
+            return
+        }
+        if engineDownloads[entryID] != nil, let cancel = engineCancellations[entryID] {
+            cancel(entryID)
             return
         }
         guard let id = active.first(where: { $0.value == index })?.key,
@@ -315,9 +384,14 @@ private final class DownloadDestinations {
         download.cancel { _ in }
     }
 
+    private func trimCompletedEntries() {
+        // Every transport shares these indices until the last transfer ends.
+        if !hasActiveDownloads && entries.count > 30 { entries = Array(entries.suffix(30)) }
+    }
+
     private func persistRecent() {
         defaults.set(entries.compactMap { entry -> String? in
-            guard entry.status == "Finished" else { return nil }
+            guard !entry.isPrivate, entry.status == "Finished" else { return nil }
             return entry.url?.path
         }.suffix(30).map { $0 }, forKey: "browserRecentDownloads")
     }
@@ -358,6 +432,7 @@ private final class DownloadDestinations {
             if entry.status == "Downloading" {
                 let cancel = menu.addItem(withTitle: "Cancel \(entry.name)", action: #selector(cancelDownload(_:)), keyEquivalent: "")
                 cancel.target = self; cancel.representedObject = entry.id
+                cancel.isEnabled = engineDownloads[entry.id] == nil || engineCancellations[entry.id] != nil
             } else if entry.status != "Finished" {
                 item.title += " — " + entry.status
             }

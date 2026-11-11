@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   if (window !== top || window.__webbyChromeTone) return;
-  let enabled=false, left=false, timer=0, x=0.5, base=[255,255,255], last='', lastSample=0;
+  let enabled=false, left=false, right=false, timer=0, x=0.5, base=[255,255,255], last='', lastSample=0;
   const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
   const context=canvas.getContext('2d',{willReadFrequently:true});
   const observer=new MutationObserver(()=>schedule());
@@ -21,10 +21,7 @@
     const result=[p[0],p[1],p[2],p[3]/255];
     if(colors.size>=128)colors.clear();colors.set(value,result);return result.slice();
   }
-  function sample() {
-    timer=0;
-    if (!enabled || document.hidden) return;
-    lastSample=performance.now();observer.disconnect();
+  function readColors(includeRight) {
     const observed=new Set([document.documentElement,document.body].filter(Boolean));
     const measured=new Map();
     const rootStyle=getComputedStyle(document.documentElement);
@@ -38,10 +35,12 @@
       if(!c) {const style=getComputedStyle(node);c=rgba(style.backgroundColor);c[3]*=Number(style.opacity);measured.set(node,c);}
       return c;
     }
-    function edgeColor(atLeft) {
+    function edgeColor(side) {
     const samples=[];
     for (const dx of [0,-0.025,0.025]) {
-      let node=document.elementFromPoint(atLeft ? 2 : Math.max(1,Math.min(innerWidth-2,innerWidth*(x+dx))),atLeft ? Math.max(1,Math.min(innerHeight-2,innerHeight*(0.5+dx))) : 2);
+      const sideX = side === 'left' ? 2 : Math.max(1, (document.documentElement.clientWidth || innerWidth) - 3);
+      let node=document.elementFromPoint(side === 'top' ? Math.max(1,Math.min(innerWidth-2,innerWidth*(x+dx))) : sideX,
+        side === 'top' ? 2 : Math.max(1,Math.min(innerHeight-2,innerHeight*(0.5+dx))));
       const stack=[], visited=new Set();
       let opaque=false;
       for (let depth=0;node && depth<14;depth++,node=node.parentElement) {
@@ -57,18 +56,34 @@
         if(c[3]>=0.995)break;
       }
       let rgb=canvasBase.slice();
-      for (const c of stack.reverse()) rgb=rgb.map((v,i)=>c[i]*c[3]+v*(1-c[3]));
-      samples.push(rgb.map(Math.round));
+      let coverage=0;
+      for (const c of stack.reverse()) {
+        rgb=rgb.map((v,i)=>c[i]*c[3]+v*(1-c[3]));
+        coverage=c[3]+coverage*(1-c[3]);
+      }
+      samples.push({rgb:rgb.map(Math.round), glass:coverage<0.92});
     }
     // Prefer the local majority, avoiding tiny badges or text hit targets at the edge.
-    const key=c=>c.map(v=>Math.round(v/12)).join(',');
+    const key=c=>c.rgb.map(v=>Math.round(v/12)).join(',');
     const counts=new Map();for(const c of samples)counts.set(key(c),(counts.get(key(c))||0)+1);
     samples.sort((a,b)=>counts.get(key(b))-counts.get(key(a)));
     return samples[0];
     }
-    const edge=edgeColor(left), top=left ? edgeColor(false) : edge;
-    const signature=edge.join(',')+'|'+top.join(',');
-    if(signature!==last){last=signature;window.webkit.messageHandlers.browserChromeTone.postMessage({edge,top});}
+    const top=edgeColor('top').rgb;
+    const edge=left ? edgeColor('left').rgb : top;
+    const tones={edge,top};
+    if (includeRight) tones.agent=edgeColor('right');
+    return {tones,observed};
+  }
+  // Chromium calls this on demand without installing WebKit's observers.
+  window.__webbyReadAgentEdge=()=>readColors(true).tones.agent;
+  function sample() {
+    timer=0;
+    if (!enabled || document.hidden) return;
+    lastSample=performance.now();observer.disconnect();
+    const {tones,observed}=readColors(right);
+    const signature=JSON.stringify(tones);
+    if(signature!==last){last=signature;window.webkit?.messageHandlers?.browserChromeTone?.postMessage(tones);}
     for(const node of observed)observer.observe(node,{attributes:true,attributeFilter:['class','style','data-theme','data-color-mode','data-dark-theme','data-light-theme','data-webby-glass-surface'],childList:true});
   }
   function schedule() {
@@ -80,6 +95,7 @@
   function visibility(){if(document.hidden){clearTimeout(timer);timer=0;}else schedule();}
   window.__webbyChromeTone=options=>{
     left=!!options.left;
+    right=!!options.right;
     x=Math.max(0,Math.min(1,Number(options.x)||0.5));base=options.glass?[42,47,51]:[255,255,255];
     const next=!!options.enabled;
     if(next!==enabled){

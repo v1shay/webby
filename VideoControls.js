@@ -2,7 +2,7 @@
   if (window.__webbyVideoControlsInstalled) return;
   window.__webbyVideoControlsInstalled = true;
 
-  let controls, selected, presentedVideo, hideTimer, frame = 0, opening = false;
+  let controls, selected, presentedVideo, hideTimer, errorNotice, frame = 0, opening = false;
   let pointerX = -1, pointerY = -1, pointerRoots = [];
   const inPiP = video => document.pictureInPictureElement === video ||
     video.webkitPresentationMode === 'picture-in-picture';
@@ -13,7 +13,7 @@
 
   // Presentation never replaces the element, copies its URL, changes volume, seeks,
   // or calls load(). Native controls and the website therefore share one media session.
-  function enterPiP(video) {
+  function enterPiP(video, requestedByUser = false) {
     presentedVideo = video;
     if (inPiP(video)) return Promise.resolve();
     if (supportsNativePiP(video)) {
@@ -21,7 +21,16 @@
       return Promise.resolve();
     }
     if (typeof video.requestPictureInPicture === 'function' && document.pictureInPictureEnabled !== false) {
-      return video.requestPictureInPicture();
+      if (!requestedByUser || !video.disablePictureInPicture) return video.requestPictureInPicture();
+      // Chromium honors this site hint for its own controls. A deliberate
+      // Webby control click can opt in for the duration of this presentation.
+      video.disablePictureInPicture = false;
+      const restore = () => { video.disablePictureInPicture = true; };
+      try {
+        return video.requestPictureInPicture().then(() => {
+          video.addEventListener('leavepictureinpicture', restore, { once: true });
+        }, error => { restore(); throw error; });
+      } catch (error) { restore(); throw error; }
     }
     throw new Error('Picture in Picture is unavailable for this video');
   }
@@ -116,11 +125,13 @@
         clearTimeout(hideTimer);
         button.title = 'Opening '+title+'…';
         try {
-          await waitForPresentation(video, mode, mode === 'pip' ? enterPiP : enterFullscreen);
+          await waitForPresentation(video, mode, mode === 'pip' ? v => enterPiP(v, true) : enterFullscreen);
           controls.style.display = 'none'; button.title = title;
         } catch (error) {
-          button.title = error.message || title+' is unavailable for this video';
-          // Report the failure truthfully. Never float a tab, reload, or duplicate audio.
+          const message = video.error?.code === 4 ? 'This video format is unsupported by the current browser engine.'
+            : error.message || title+' is unavailable for this video';
+          button.title = message;
+          showError(message);
         } finally { opening = false; }
       });
       controls.appendChild(button);
@@ -130,6 +141,18 @@
       if (!opening) hideTimer = setTimeout(() => { controls.style.display = 'none'; }, 600);
     });
     document.documentElement.appendChild(controls);
+  }
+
+  function showError(message) {
+    const notice = document.createElement('span');
+    notice.setAttribute('role', 'status');
+    notice.textContent = message;
+    notice.style.cssText = 'all:initial;position:absolute;right:0;top:36px;min-width:160px;max-width:240px;padding:8px 10px;border-radius:8px;background:#222;color:white;font:12px system-ui;pointer-events:none';
+    errorNotice?.remove();
+    errorNotice = notice;
+    controls.appendChild(notice);
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { notice.remove(); controls.style.display = 'none'; }, 3000);
   }
 
   // WebKit maintains this live collection as SPA videos are added or removed.

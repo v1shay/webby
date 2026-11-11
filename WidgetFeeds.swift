@@ -80,11 +80,19 @@ enum WidgetFeeds {
             URLQueryItem(name: "temperature_unit", value: "fahrenheit"),
             URLQueryItem(name: "timezone", value: "auto")
         ]
-        let forecast = try await json(query.url!)
+        return try weather(place: place, forecast: await json(query.url!), fallbackCity: city)
+    }
+
+    // Provider JSON is untrusted; converting an out-of-range Double to Int traps.
+    private static func temperature(_ value: Double?) -> Int? {
+        guard let value, value.isFinite else { return nil }
+        return Int(exactly: value.rounded())
+    }
+
+    static func weather(place: [String: Any], forecast: [String: Any], fallbackCity city: String) throws -> WidgetFeed {
         let current = forecast["current"] as? [String: Any] ?? [:]
         let daily = forecast["daily"] as? [String: Any] ?? [:]
-        let temperature = current["temperature_2m"] as? Double
-        guard let currentTemperature=temperature,currentTemperature.isFinite else {throw WidgetFeedError.badResponse}
+        guard let currentTemperature = temperature(current["temperature_2m"] as? Double) else { throw WidgetFeedError.badResponse }
         let humidity = current["relative_humidity_2m"] as? Int
         let highs = daily["temperature_2m_max"] as? [Double] ?? []
         let lows = daily["temperature_2m_min"] as? [Double] ?? []
@@ -93,19 +101,21 @@ enum WidgetFeeds {
         let times = hourly["time"] as? [String] ?? []
         let temperatures = hourly["temperature_2m"] as? [Double] ?? []
         let codes = hourly["weather_code"] as? [Int] ?? []
-        let hours = (0..<min(5, times.count, temperatures.count, codes.count)).map { index in
+        let hours = (0..<min(5, times.count, temperatures.count, codes.count)).compactMap { index -> WeatherHour? in
+            guard let degrees = temperature(temperatures[index]) else { return nil }
             let hour = Int(times[index].suffix(5).prefix(2)) ?? 0
             let clock = hour == 0 ? "12a" : hour < 12 ? "\(hour)a" : hour == 12 ? "12p" : "\(hour - 12)p"
             return WeatherHour(label: index == 0 ? "Now" : clock,
-                               temperature: Int(temperatures[index].rounded()), code: codes[index])
+                               temperature: degrees, code: codes[index])
         }
+        let high = temperature(highs.first), low = temperature(lows.first)
         return WidgetFeed(subtitle: name,
-                          lines: [temperature.map { "Now  \(Int($0.rounded()))°F" } ?? "Current temperature unavailable",
-                                  highs.first.map { "Today  H: \(Int($0.rounded()))°  L: \(Int((lows.first ?? 0).rounded()))°" } ?? "",
+                          lines: ["Now  \(currentTemperature)°F",
+                                  high.flatMap { high in low.map { "Today  H: \(high)°  L: \($0)°" } } ?? "",
                                   humidity.map { "Humidity  \($0)%" } ?? ""].filter { !$0.isEmpty },
-                          weather: WeatherSnapshot(city: name, temperature: Int(currentTemperature.rounded()),
-                                                   high: highs.first.map { Int($0.rounded()) },
-                                                   low: lows.first.map { Int($0.rounded()) },
+                          weather: WeatherSnapshot(city: name, temperature: currentTemperature,
+                                                   high: high,
+                                                   low: low,
                                                    humidity: humidity, code: current["weather_code"] as? Int ?? 0,
                                                    isDay: (current["is_day"] as? Int ?? 1) == 1,
                                                    hours: hours))

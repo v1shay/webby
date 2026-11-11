@@ -2,7 +2,7 @@
 set -eu
 export WEBBY_ENGINE_TEST_KEYCHAIN=1
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-app="$root/Webby.app"
+app="${WEBBY_BUILD_APP:-$root/Webby.app}"
 python3 - "$app" <<'PY'
 import plistlib, sys
 from pathlib import Path

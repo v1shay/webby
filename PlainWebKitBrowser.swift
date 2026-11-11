@@ -329,12 +329,9 @@ final class GradientSymbolView: NSView {
 }
 
 final class GlassButton: NSButton {
-    private var themeProfile: PetGradientProfile?
     private var hovered = false
     private var pressed = false
     private var hoverArea: NSTrackingArea?
-    private let highlight = CAGradientLayer()
-    private let glint = CAGradientLayer()
     private let symbolView: GradientSymbolView
 
     init(symbol: String, label: String, target: AnyObject, action: Selector) {
@@ -347,19 +344,6 @@ final class GlassButton: NSButton {
         toolTip = label
         isBordered = false
         wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.masksToBounds = true
-        highlight.startPoint = CGPoint(x: 0.5, y: 1)
-        highlight.endPoint = CGPoint(x: 0.5, y: 0)
-        layer?.addSublayer(highlight)
-        glint.colors = [
-            NSColor.white.withAlphaComponent(0).cgColor,
-            NSColor.white.withAlphaComponent(0.17).cgColor,
-            NSColor.white.withAlphaComponent(0).cgColor
-        ]
-        glint.startPoint = CGPoint(x: 0, y: 0.5)
-        glint.endPoint = CGPoint(x: 1, y: 0.5)
-        layer?.addSublayer(glint)
         symbolView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(symbolView)
         NSLayoutConstraint.activate([
@@ -372,13 +356,6 @@ final class GlassButton: NSButton {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func layout() {
-        super.layout()
-        highlight.frame = bounds
-        highlight.cornerRadius = 8
-        glint.frame = CGRect(x: -bounds.width, y: 0, width: bounds.width, height: bounds.height)
-    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -393,7 +370,6 @@ final class GlassButton: NSButton {
         updateGlass()
         if isEnabled {
             Motion.springScale(layer, from: 1, to: 1.02)
-            Motion.basic(glint, key: "transform.translation.x", from: 0, to: bounds.width * 2, duration: 0.28)
         }
     }
 
@@ -418,50 +394,30 @@ final class GlassButton: NSButton {
         didSet { updateGlass() }
     }
 
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        updateGlass()
-    }
-
     func applyTheme(_ profile: PetGradientProfile) {
-        themeProfile = profile
         symbolView.applyTheme(profile)
-        updateGlass()
     }
 
     private func updateGlass() {
-        guard let layer else { return }
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let strength: CGFloat = pressed ? 0.12 : (hovered ? 0.08 : 0.035)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer.backgroundColor = NSColor.white.withAlphaComponent(dark ? strength : strength + 0.025).cgColor
-        layer.borderWidth = 0.6
-        layer.borderColor = BrowserTheme.color((themeProfile ?? BrowserTheme.profile).palette.highlight,
-                                               alpha: hovered ? 0.38 : 0.17).cgColor
-        let profile = themeProfile ?? BrowserTheme.profile
-        BrowserTheme.apply(profile.gradients.ambient, to: highlight,
-                           alpha: pressed ? 0.34 : (hovered ? 0.28 : 0.16))
-        alphaValue = isEnabled ? 1 : 0.38
-        CATransaction.commit()
+        symbolView.alphaValue = !isEnabled ? 0.38 : (pressed ? 0.65 : (hovered ? 1 : 0.86))
     }
 }
 
 final class GlassAddressSurface: NSView, NSTextFieldDelegate {
-    private let engineGlow = CAGradientLayer()
     private let engineRim = CAGradientLayer()
     private let engineRimMask = CAShapeLayer()
     private var renderingEngine: BrowserEngine?
     var onSwitchEngine: (() -> Void)?
 
-    func setRenderingEngine(_ engine: BrowserEngine) {
+    func setRenderingEngine(_ engine: BrowserEngine?) {
         guard renderingEngine != engine else { return }
         renderingEngine = engine
-        if engineGlow.superlayer == nil {
-            engineGlow.startPoint = CGPoint(x: 0, y: 0.2)
-            engineGlow.endPoint = CGPoint(x: 1, y: 0.8)
-            engineGlow.cornerRadius = 16
-            glaze.addSublayer(engineGlow)
+        engineRim.isHidden = engine == nil
+        guard let engine else {
+            toolTip = nil
+            return
+        }
+        if engineRim.superlayer == nil {
             engineRim.startPoint = CGPoint(x: 0, y: 0)
             engineRim.endPoint = CGPoint(x: 1, y: 1)
             engineRim.mask = engineRimMask
@@ -471,10 +427,8 @@ final class GlassAddressSurface: NSView, NSTextFieldDelegate {
             layer?.addSublayer(engineRim)
         }
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        engineGlow.colors = engine.colors.map { $0.withAlphaComponent(0.17).cgColor }
         engineRim.colors = engine.colors.map { $0.withAlphaComponent(0.85).cgColor }
         CATransaction.commit()
-        searchIcon.contentTintColor = engine.colors[1]
         toolTip = "\(engine.name) · Click the search icon or press ⇧⌘E to switch rendering engine"
         needsLayout = true
     }
@@ -599,12 +553,9 @@ final class GlassAddressSurface: NSView, NSTextFieldDelegate {
 
     override func layout() {
         super.layout()
-        engineGlow.frame = bounds
-        engineGlow.cornerRadius = expandedCornerRadius
         engineRim.frame = bounds
         engineRimMask.frame = bounds
         let engineRadius = suggestionsAttached ? expandedCornerRadius : (layer?.cornerRadius ?? 16)
-        engineGlow.cornerRadius = engineRadius
         engineRim.opacity = suggestionsAttached ? 0 : 1
         engineRimMask.path = CGPath(roundedRect: bounds.insetBy(dx: 0.8, dy: 0.8), cornerWidth: engineRadius, cornerHeight: engineRadius, transform: nil)
         if !suggestionsAttached { addressCornerRadius = layer?.cornerRadius ?? 16 }
