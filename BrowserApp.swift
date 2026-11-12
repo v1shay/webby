@@ -4197,8 +4197,7 @@ private final class WebsiteFrameRim: NSView {
         if let motionSurface { profileMotion.prepare(motionSurface) }
         for tab in tabs where tab.id == activeTabID && !restoringVideoInline {
             captureTabPreview(tab)
-            tab.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
-                                            in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
+            followPlayingVideo(tab)
         }
         for tab in tabs {
             if !tab.isFloating {
@@ -4819,8 +4818,7 @@ private final class WebsiteFrameRim: NSView {
             let remainsVisible = splitView?.isHidden == false
                 && splitTabIDs?.contains(previous.id) == true && splitTabIDs?.contains(tab.id) == true
             if !restoringVideoInline && !remainsVisible {
-                previous.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
-                    in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
+                followPlayingVideo(previous)
             }
         }
         if let previous = activeTab, (previous.pageView == nil || previous.showsSearchView) && !previous.isTerminal {
@@ -7992,7 +7990,20 @@ private final class WebsiteFrameRim: NSView {
         pipWindowMotion.setActive(spaces.flatMap(\.tabs).contains { $0.hasPictureInPicture } || miniTabs.values.contains { $0.hasPictureInPicture })
     }
 
+    private func followPlayingVideo(_ tab: BrowserTab) {
+        if let page = tab.chromiumView {
+            page.automation(method: "Runtime.evaluate", parameters: ["expression": "window.__webbyFollowPlayingVideo?.()", "userGesture": true], completion: { _, _ in })
+        } else {
+            tab.webView?.evaluateJavaScript("window.__webbyFollowPlayingVideo?.()", in: nil,
+                in: WKContentWorld.world(name: "WebbyVideo"), completionHandler: nil)
+        }
+    }
+
     private func returnVideoInline(_ tab: BrowserTab) {
+        if tab.hasPictureInPicture, let page = tab.chromiumView {
+            page.automation(method: "Runtime.evaluate", parameters: ["expression": "window.__webbyReturnVideoInline?.()", "userGesture": true], completion: { _, _ in })
+            return
+        }
         guard tab.hasPictureInPicture, !tab.returningPictureInPicture, !restoringVideoInline,
               let view = tab.webView, view.fullscreenState == .notInFullscreen else { return }
         tab.returningPictureInPicture = true
@@ -8692,6 +8703,10 @@ extension BrowserApp {
         page.eventHandler = { [weak self, weak tab, weak page] event, value in
             guard let self, let tab, let page, tab.chromiumView === page else { return }
             switch event {
+            case "pictureInPicture":
+                tab.hasPictureInPicture = value == "1"
+                if value != "1" { tab.returningPictureInPicture = false }
+                return
             case "favicon":
                 if value.isEmpty {
                     tab.favicon = nil

@@ -190,6 +190,12 @@
         const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
         await wait(350);
         if (!v.videoWidth || v.currentTime <= 0 || v.paused) return 'MP4 did not advance';
+        // Social feeds keep another paused player under the active one.
+        const decoy = v.cloneNode();
+        decoy.removeAttribute('src');
+        decoy.style.cssText = 'position:absolute;left:8px;top:8px;width:640px;height:360px';
+        v.parentNode.insertBefore(decoy, v);
+        const before = v.currentTime;
         const bounds = v.getBoundingClientRect();
         document.dispatchEvent(new PointerEvent('pointermove', {clientX: bounds.left + 20, clientY: bounds.top + 20}));
         await new Promise(requestAnimationFrame);
@@ -198,6 +204,7 @@
         button.click();
         for (let i = 0; i < 40 && document.pictureInPictureElement !== v; i++) await wait(100);
         if (document.pictureInPictureElement !== v) return button.title;
+        if (v.currentTime < before) return 'PiP restarted the original video';
         const start = v.currentTime;
         await wait(350);
         if (v.paused || v.currentTime <= start) return 'MP4 stopped during Picture in Picture';

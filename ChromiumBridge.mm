@@ -335,7 +335,7 @@ void WBChromiumForgetPrivateSession(NSString *identifier) {
 
 @interface WBChromiumView () {
     cef_browser_t *_browser;
-    BOOL _closed, _creating, _loading, _canGoBack, _canGoForward, _protectsFromDiscard, _captureGranted, _fullscreen;
+    BOOL _closed, _creating, _loading, _canGoBack, _canGoForward, _protectsFromDiscard, _captureGranted, _fullscreen, _pictureInPicture;
     NSMutableSet<NSNumber *> *_downloads;
     cef_registration_t *_automationObserver;
     int _automationID;
@@ -359,6 +359,7 @@ void WBChromiumForgetPrivateSession(NSString *identifier) {
 - (void)updateURL:(NSString *)url;
 - (void)updateTitle:(NSString *)title;
 - (void)updateActivity:(NSString *)state;
+- (void)updatePictureInPicture:(BOOL)active;
 - (void)updateFindCount:(int)count;
 - (void)setCapturing;
 - (void)setFullscreen:(BOOL)fullscreen;
@@ -441,6 +442,7 @@ static cef_client_t *makeClient(WBChromiumView *view) {
             const cef_string_t *message, const cef_string_t *, int) -> int {
             Incoming incoming(b); NSString *text = string(message);
             if ([text hasPrefix:@"__webby_activity:"]) { [owner(s) updateActivity:[text substringFromIndex:17]]; return 1; }
+            if ([text hasPrefix:@"__webby_pip:"]) { [owner(s) updatePictureInPicture:[text hasSuffix:@"1"]]; return 1; }
             if ([text isEqualToString:@"__webby_password_field"]) { [owner(s) emit:@"passwordField" value:@""]; return 1; }
             if (isolatedTestKeychain && [text hasPrefix:@"__webby_password_check:"]) {
                 [owner(s) emit:@"passwordCheck" value:[text substringFromIndex:23]]; return 1;
@@ -598,13 +600,14 @@ static cef_client_t *makeClient(WBChromiumView *view) {
 - (BOOL)canGoBack { return _canGoBack; }
 - (BOOL)canGoForward { return _canGoForward; }
 - (BOOL)hasActiveDownloads { return _downloads.count > 0; }
-- (BOOL)protectsFromDiscard { return _protectsFromDiscard || _captureGranted || _fullscreen || self.hasActiveDownloads; }
+- (BOOL)protectsFromDiscard { return _protectsFromDiscard || _captureGranted || _fullscreen || _pictureInPicture || self.hasActiveDownloads; }
 - (void)setCapturing { _captureGranted = YES; }
 - (void)setFullscreen:(BOOL)fullscreen { _fullscreen = fullscreen; }
 - (void)download:(int)identifier active:(BOOL)active {
     if (active) [_downloads addObject:@(identifier)]; else [_downloads removeObject:@(identifier)];
 }
 - (void)emit:(NSString *)event value:(NSString *)value { if (!_closed && self.eventHandler) self.eventHandler(event, value); }
+- (void)updatePictureInPicture:(BOOL)active { _pictureInPicture = active; [self emit:@"pictureInPicture" value:active ? @"1" : @"0"]; }
 - (void)updateURL:(NSString *)url { _pageURL = [url copy]; _protectsFromDiscard = YES; [self emit:@"url" value:url]; }
 - (void)updateTitle:(NSString *)title {
     _pageTitle = [title copy];

@@ -62,5 +62,21 @@ async function fixture(mode) {
   assert.deepEqual([video.volume,video.muted,video.playbackRate,video.currentTime],state);
 }
 (async()=>{for(const mode of ['native','standard','site-disabled','unsupported','empty']) await fixture(mode);
+ {
+  const document=new Node(), stale=new Node('video'), current=new Node('video');
+  document.documentElement=new Node('html'); document.createElement=tag=>new Node(tag);
+  document.querySelectorAll=s=>s==='video'?[stale,current]:[];
+  document.getElementsByTagName=()=>[stale,current]; document.pictureInPictureEnabled=true;
+  for(const v of [stale,current]) Object.assign(v,{paused:v===stale,ended:false,readyState:4,videoWidth:640,videoHeight:360,currentTime:v===stale?0:48});
+  let chosen=null, raf;
+  for(const v of [stale,current]) v.requestPictureInPicture=()=>{chosen=v;document.pictureInPictureElement=v;v.fire('enterpictureinpicture');return Promise.resolve();};
+  const context={document,innerWidth:1000,innerHeight:700,setTimeout,clearTimeout,console,
+   requestAnimationFrame:fn=>{raf=fn;return 1},ShadowRoot:class {},window:{addEventListener(){}}};
+  vm.createContext(context);vm.runInContext(source,context);
+  document.fire('pointermove',{target:current,clientX:100,clientY:100,composedPath:()=>[current,document]});raf();
+  await Promise.all(document.documentElement.children[0].children[0].fire('click',{preventDefault(){},stopPropagation(){}}));
+  assert.equal(chosen,current,'PiP picked a paused, preloaded video instead of the playing video');
+  assert.equal(current.currentTime,48,'PiP changed the playback position');
+ }
  console.log('PASS: native/standard PiP, true fullscreen, exact media state, truthful unsupported state, no floating fallback, no controls on non-video pages, idempotent installation');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -69,14 +69,35 @@
     });
   }
 
-  // Switching tabs has no transient activation. Native PiP may allow it; failure
-  // leaves playback alone and never turns the whole tab into a floating window.
+  // Select the visible player, not the first preloaded player in a social feed.
+  // Reuse that very element: its stream, time and site session stay intact.
   window.__webbyFollowPlayingVideo = () => {
-    const video = [...document.querySelectorAll('video')].find(v =>
-      !v.paused && !v.ended && v.readyState >= 2 && v.videoWidth >= 120 && v.videoHeight >= 70);
+    const candidates = [...document.querySelectorAll('video')].filter(v => {
+      if (v.paused || v.ended || v.readyState < 2 || v.videoWidth < 120 || v.videoHeight < 70) return false;
+      const r = v.getBoundingClientRect();
+      return r.width >= 120 && r.height >= 70 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight;
+    });
+    const visibleArea = v => {
+      const r = v.getBoundingClientRect();
+      return Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0)) *
+        Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
+    };
+    const video = candidates.includes(selected) ? selected : candidates.sort((a, b) => visibleArea(b) - visibleArea(a))[0];
     if (!video || inPiP(video)) return false;
-    try { Promise.resolve(enterPiP(video)).catch(() => {}); return true; } catch (_) { return false; }
+    try {
+      Promise.resolve(enterPiP(video)).then(() => {
+        // Some feeds pause their player as the source tab becomes hidden.
+        // Only restore a player that was playing when the handoff began.
+        setTimeout(() => { if (inPiP(video) && video.paused && !video.ended) video.play().catch(() => {}); }, 250);
+      }).catch(() => {});
+      return true;
+    } catch (_) { return false; }
   };
+
+  // Chromium reports native PiP state to the host so paused PiP tabs are not
+  // discarded and returning to the source tab can restore the same player.
+  document.addEventListener('enterpictureinpicture', () => console.debug('__webby_pip:1'), true);
+  document.addEventListener('leavepictureinpicture', () => console.debug('__webby_pip:0'), true);
 
   // Called only after Webby has revealed the source tab. Each frame returns its
   // own player, so cross-origin embedded videos keep their original session too.
@@ -121,11 +142,15 @@
         event.preventDefault(); event.stopPropagation();
         const video = selected;
         if (!video?.isConnected || opening) return;
+        const wasPlaying = !video.paused && !video.ended;
         opening = true;
         clearTimeout(hideTimer);
         button.title = 'Opening '+title+'…';
         try {
           await waitForPresentation(video, mode, mode === 'pip' ? v => enterPiP(v, true) : enterFullscreen);
+          if (mode === 'pip' && wasPlaying) {
+            setTimeout(() => { if (inPiP(video) && video.paused && !video.ended) video.play().catch(() => {}); }, 250);
+          }
           controls.style.display = 'none'; button.title = title;
         } catch (error) {
           const message = video.error?.code === 4 ? 'This video format is unsupported by the current browser engine.'
@@ -159,17 +184,18 @@
   // Pointer tracking should not run a document-wide selector every frame.
   const documentVideos = document.getElementsByTagName('video');
   function candidateAt(x, y) {
-    if (selected?.isConnected) {
-      const rect = selected.getBoundingClientRect();
-      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return selected;
-    }
+    const candidates = [];
     for (const root of [document, ...pointerRoots]) {
       for (const video of root === document ? documentVideos : root.querySelectorAll('video')) {
         const rect = video.getBoundingClientRect();
-        if (rect.width >= 120 && rect.height >= 70 && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return video;
+        if (rect.width >= 120 && rect.height >= 70 && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) candidates.push(video);
       }
     }
-    return null;
+    // Feeds often stack preloaded, paused videos in exactly the same rectangle.
+    // Prefer an actively playing one; otherwise retain the hovered selection.
+    const playing = candidates.filter(v => !v.paused && !v.ended && v.readyState >= 2);
+    if (playing.includes(selected)) return selected;
+    return playing[0] || (candidates.includes(selected) ? selected : candidates[0]) || null;
   }
 
   function position() {
